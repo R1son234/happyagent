@@ -1,0 +1,18 @@
+{
+  "llm": {
+    "model": "gpt-4o-mini",
+    "api_key": "replace-with-your-api-key",
+    "base_url": ""
+  },
+  "engine": {
+    "loop_max_steps": 8,
+    "run_timeout_seconds": 60,
+    "system_prompt": "You are a local coding agent. Reply with a JSON action. Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done, or {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool."
+  },
+  "tools": {
+    "root_dir": ".",
+    "shell_enabled": true,
+    "write_enabled": true,
+    "delete_enabled": false
+  }
+}
