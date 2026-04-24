@@ -5,24 +5,29 @@ import (
 	"strings"
 
 	"happyagent/internal/llm"
+	"happyagent/internal/protocol"
 	"happyagent/internal/tools"
 )
 
 func BuildMessages(input RunInput, state LoopState) []llm.Message {
 	messages := make([]llm.Message, 0, len(state.Messages)+2)
 	messages = append(messages, llm.Message{
-		Role:    "system",
+		Role:    protocol.RoleSystem,
 		Content: buildSystemPrompt(input.SystemPrompt, input.ToolDefs),
 	})
 	messages = append(messages, llm.Message{
-		Role:    "user",
+		Role:    protocol.RoleUser,
 		Content: input.Input,
 	})
 
 	for _, message := range state.Messages {
 		messages = append(messages, llm.Message{
-			Role:    message.Role,
-			Content: message.Content,
+			Role:             message.Role,
+			Content:          message.Content,
+			ReasoningContent: message.ReasoningContent,
+			ToolCallID:       message.ToolCallID,
+			ToolName:         message.ToolName,
+			Action:           message.Action,
 		})
 	}
 

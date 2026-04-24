@@ -15,10 +15,12 @@ func main() {
 	var (
 		configPath string
 		prompt     string
+		skill      string
 	)
 
 	flag.StringVar(&configPath, "config", "", "optional path to a JSON config file; defaults to ./happyagent.local.json when present")
 	flag.StringVar(&prompt, "prompt", "", "task for the agent to run")
+	flag.StringVar(&skill, "skill", "", "optional skill name to load from the configured skills directory")
 	flag.Parse()
 
 	configPath = resolveConfigPath(configPath)
@@ -32,6 +34,11 @@ func main() {
 	if err != nil {
 		exitf("build runtime: %v", err)
 	}
+	defer func() {
+		if err := rt.Close(); err != nil {
+			fmt.Fprintf(os.Stderr, "close runtime: %v\n", err)
+		}
+	}()
 
 	if prompt == "" {
 		fmt.Fprintf(os.Stdout, "happyagent is ready. model=%s max_steps=%d\n", cfg.LLM.Model, cfg.Engine.LoopMaxSteps)
@@ -47,6 +54,7 @@ func main() {
 	result, err := rt.Run(ctx, runtime.RunRequest{
 		Input:        prompt,
 		SystemPrompt: cfg.Engine.SystemPrompt,
+		Skill:        skill,
 	})
 	if err != nil {
 		exitf("run agent: %v", err)

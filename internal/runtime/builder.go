@@ -1,11 +1,15 @@
 package runtime
 
 import (
+	"context"
 	"fmt"
+	"time"
 
 	"happyagent/internal/config"
 	"happyagent/internal/engine"
 	"happyagent/internal/llm"
+	"happyagent/internal/mcp"
+	"happyagent/internal/skills"
 	"happyagent/internal/tools"
 )
 
@@ -29,9 +33,32 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		return nil, err
 	}
 
+	var manager *mcp.Manager
+	if len(cfg.MCP.Servers) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.MCP.ConnectTimeoutSeconds)*time.Second)
+		defer cancel()
+
+		manager, err = mcp.NewManager(ctx, cfg.MCP)
+		if err != nil {
+			return nil, err
+		}
+
+		mcpDefs, err := manager.RegisterTools(registry)
+		if err != nil {
+			manager.Close()
+			return nil, err
+		}
+		defs = append(defs, mcpDefs...)
+	}
+
+	skillLoader := skills.NewLoader(cfg.Skills.Dir)
+
 	return &Runtime{
-		runner: engine.NewRunner(client, registry, cfg.Engine.LoopMaxSteps),
-		tools:  defs,
+		runner:       engine.NewRunner(client, registry, cfg.Engine.LoopMaxSteps),
+		tools:        defs,
+		mcpManager:   manager,
+		skillLoader:  skillLoader,
+		defaultSkill: cfg.Skills.Default,
 	}, nil
 }
 

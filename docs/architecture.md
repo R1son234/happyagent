@@ -13,7 +13,7 @@
 5. `internal/engine`
    - 使用单 `Runner` 驱动 loop，并在内部区分 `plan step` 和 `execute step`。
 6. `internal/runtime`
-   - 负责组装配置、LLM client、Tool registry 和 engine。
+   - 负责组装配置、LLM client、Tool registry、MCP manager、skill loader 和 engine。
 
 ## 当前执行路径
 
@@ -21,12 +21,15 @@
    - 当未显式传入 `-config` 时，默认尝试读取仓库根目录的 `happyagent.local.json`。
 2. `runtime.Builder` 创建 LLM client。
 3. `runtime.Builder` 注册本地 tools。
-4. `engine.Runner` 进入 loop。
-5. `planStep` 向模型请求结构化动作。
-6. `executeStep` 执行工具或返回最终答案。
+4. `runtime.Builder` 连接配置中的 MCP server，并把远程 tool 注册进工具表。
+5. `runtime.Run` 根据 `-skill` 或默认 skill 加载本地 skill。
+6. `runtime.Run` 通过 skill 注入 prompt、过滤工具，并按需读取 MCP resource。
+7. `engine.Runner` 进入 loop。
+8. `planStep` 向模型请求结构化动作。
+9. `executeStep` 执行工具或返回最终答案。
 
 ## 当前限制
 
-- runtime 尚未把 Tool 定义传给 engine，用于 prompt 注入的接线还需要补。
-- MCP、Skill、测试目录还未开始实现。
+- MCP 当前只支持 stdio 子进程 transport，不支持 HTTP/streamable transport。
+- skill 当前只支持本地目录加载，不支持动态脚本执行。
 - 当前配置文件只支持 JSON，YAML 会在后续阶段再加。

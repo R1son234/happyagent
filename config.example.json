@@ -14,5 +14,13 @@
     "shell_enabled": true,
     "write_enabled": true,
     "delete_enabled": false
+  },
+  "mcp": {
+    "connect_timeout_seconds": 15,
+    "servers": []
+  },
+  "skills": {
+    "dir": "skills",
+    "default": ""
   }
 }

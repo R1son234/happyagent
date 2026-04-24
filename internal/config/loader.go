@@ -44,9 +44,12 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_LLM_BASE_URL", &cfg.LLM.BaseURL)
 	overrideString("HAPPYAGENT_SYSTEM_PROMPT", &cfg.Engine.SystemPrompt)
 	overrideString("HAPPYAGENT_ROOT_DIR", &cfg.Tools.RootDir)
+	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
+	overrideString("HAPPYAGENT_DEFAULT_SKILL", &cfg.Skills.Default)
 
 	overrideInt("HAPPYAGENT_LOOP_MAX_STEPS", &cfg.Engine.LoopMaxSteps)
 	overrideInt("HAPPYAGENT_RUN_TIMEOUT_SECONDS", &cfg.Engine.RunTimeoutSeconds)
+	overrideInt("HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS", &cfg.MCP.ConnectTimeoutSeconds)
 
 	overrideBool("HAPPYAGENT_SHELL_ENABLED", &cfg.Tools.ShellEnabled)
 	overrideBool("HAPPYAGENT_WRITE_ENABLED", &cfg.Tools.WriteEnabled)
@@ -68,6 +71,20 @@ func validate(cfg Config) error {
 	}
 	if cfg.Tools.RootDir == "" {
 		return fmt.Errorf("tools.root_dir must not be empty")
+	}
+	if cfg.MCP.ConnectTimeoutSeconds <= 0 {
+		return fmt.Errorf("mcp.connect_timeout_seconds must be greater than zero")
+	}
+	for i, server := range cfg.MCP.Servers {
+		if !server.Enabled {
+			continue
+		}
+		if server.Name == "" {
+			return fmt.Errorf("mcp.servers[%d].name must not be empty", i)
+		}
+		if server.Command == "" {
+			return fmt.Errorf("mcp.servers[%d].command must not be empty", i)
+		}
 	}
 	return nil
 }

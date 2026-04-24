@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"happyagent/internal/config"
+	"happyagent/internal/protocol"
 
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -17,6 +19,7 @@ import (
 type EinoClient struct {
 	model string
 	chat  einomodel.ToolCallingChatModel
+	round uint64
 }
 
 func NewEinoClient(cfg config.LLMConfig) (Client, error) {
@@ -44,40 +47,42 @@ func NewEinoClient(cfg config.LLMConfig) (Client, error) {
 }
 
 func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, error) {
-	logLLMJSON("llm request", req)
+	round := int(atomic.AddUint64(&c.round, 1))
+	logLLMJSON(round, "llm request", req)
 
 	chatModel := c.chat
 	if len(req.Tools) > 0 {
 		toolInfos, err := toEinoToolInfos(req.Tools)
 		if err != nil {
-			logLLMError(fmt.Errorf("convert tool specs for model %q: %w", c.model, err))
+			logLLMError(round, fmt.Errorf("convert tool specs for model %q: %w", c.model, err))
 			return ChatResponse{}, fmt.Errorf("convert tool specs for model %q: %w", c.model, err)
 		}
 
 		chatModel, err = chatModel.WithTools(toolInfos)
 		if err != nil {
-			logLLMError(fmt.Errorf("bind tools for model %q: %w", c.model, err))
+			logLLMError(round, fmt.Errorf("bind tools for model %q: %w", c.model, err))
 			return ChatResponse{}, fmt.Errorf("bind tools for model %q: %w", c.model, err)
 		}
 	}
 
 	resp, err := chatModel.Generate(ctx, toEinoMessages(req.Messages))
 	if err != nil {
-		logLLMError(fmt.Errorf("generate response with model %q: %w", c.model, err))
+		logLLMError(round, fmt.Errorf("generate response with model %q: %w", c.model, err))
 		return ChatResponse{}, fmt.Errorf("generate response with model %q: %w", c.model, err)
 	}
 
-	message, err := fromEinoMessage(resp)
+	message, action, err := fromEinoMessage(resp)
 	if err != nil {
-		logLLMError(fmt.Errorf("convert model response for model %q: %w", c.model, err))
+		logLLMError(round, fmt.Errorf("convert model response for model %q: %w", c.model, err))
 		return ChatResponse{}, fmt.Errorf("convert model response for model %q: %w", c.model, err)
 	}
 
 	response := ChatResponse{
 		Message: message,
+		Action:  action,
 		Usage:   fromEinoUsage(resp),
 	}
-	logLLMJSON("llm response", response)
+	logLLMJSON(round, "llm response", response)
 
 	return response, nil
 }
@@ -85,9 +90,30 @@ func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, e
 func toEinoMessages(messages []Message) []*schema.Message {
 	out := make([]*schema.Message, 0, len(messages))
 	for _, message := range messages {
+		if message.Role == protocol.RoleAssistant && message.Action != nil && message.Action.Type == protocol.ActionToolCall {
+			out = append(out, &schema.Message{
+				Role:             schema.Assistant,
+				ReasoningContent: message.ReasoningContent,
+				ToolCalls: []schema.ToolCall{
+					{
+						ID:   message.Action.ToolCallID,
+						Type: "function",
+						Function: schema.FunctionCall{
+							Name:      message.Action.ToolName,
+							Arguments: string(message.Action.Arguments),
+						},
+					},
+				},
+			})
+			continue
+		}
+
 		out = append(out, &schema.Message{
-			Role:    toEinoRole(message.Role),
-			Content: message.Content,
+			Role:             toEinoRole(message.Role),
+			Content:          message.Content,
+			ReasoningContent: message.ReasoningContent,
+			ToolCallID:       message.ToolCallID,
+			ToolName:         message.ToolName,
 		})
 	}
 	return out
@@ -95,51 +121,47 @@ func toEinoMessages(messages []Message) []*schema.Message {
 
 func toEinoRole(role string) schema.RoleType {
 	switch role {
-	case "system":
+	case protocol.RoleSystem:
 		return schema.System
-	case "assistant":
+	case protocol.RoleAssistant:
 		return schema.Assistant
-	case "tool":
+	case protocol.RoleTool:
 		return schema.Tool
 	default:
 		return schema.User
 	}
 }
 
-func fromEinoMessage(message *schema.Message) (Message, error) {
+func fromEinoMessage(message *schema.Message) (Message, *protocol.Action, error) {
 	if message == nil {
-		return Message{}, fmt.Errorf("response message is nil")
+		return Message{}, nil, fmt.Errorf("response message is nil")
 	}
 
 	if len(message.ToolCalls) > 1 {
-		return Message{}, fmt.Errorf("multiple tool calls are not supported yet")
+		return Message{}, nil, fmt.Errorf("multiple tool calls are not supported yet")
 	}
 
 	if len(message.ToolCalls) == 1 {
 		call := message.ToolCalls[0]
-		action, err := json.Marshal(struct {
-			Type      string          `json:"type"`
-			ToolName  string          `json:"tool_name"`
-			Arguments json.RawMessage `json:"arguments"`
-		}{
-			Type:      "tool_call",
-			ToolName:  call.Function.Name,
-			Arguments: json.RawMessage(call.Function.Arguments),
-		})
-		if err != nil {
-			return Message{}, fmt.Errorf("marshal tool call action: %w", err)
+		action := &protocol.Action{
+			Type:       protocol.ActionToolCall,
+			ToolCallID: call.ID,
+			ToolName:   call.Function.Name,
+			Arguments:  []byte(call.Function.Arguments),
 		}
 
 		return Message{
-			Role:    "assistant",
-			Content: string(action),
-		}, nil
+			Role:             protocol.RoleAssistant,
+			ReasoningContent: message.ReasoningContent,
+			Action:           action,
+		}, action, nil
 	}
 
 	return Message{
-		Role:    string(message.Role),
-		Content: message.Content,
-	}, nil
+		Role:             string(message.Role),
+		Content:          message.Content,
+		ReasoningContent: message.ReasoningContent,
+	}, nil, nil
 }
 
 func fromEinoUsage(message *schema.Message) TokenUsage {
@@ -154,16 +176,16 @@ func fromEinoUsage(message *schema.Message) TokenUsage {
 	}
 }
 
-func logLLMJSON(label string, value any) {
+func logLLMJSON(round int, label string, value any) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "%s: marshal error: %v\n", label, err)
+		fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\n%s: marshal error: %v\n", round, label, err)
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "%s:\n%s\n", label, data)
+	fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\n%s:\n%s\n", round, label, data)
 }
 
-func logLLMError(err error) {
-	fmt.Fprintf(os.Stderr, "llm error: %v\n", err)
+func logLLMError(round int, err error) {
+	fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\nllm error: %v\n", round, err)
 }

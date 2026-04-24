@@ -4,6 +4,8 @@ type Config struct {
 	LLM    LLMConfig    `json:"llm"`
 	Engine EngineConfig `json:"engine"`
 	Tools  ToolsConfig  `json:"tools"`
+	MCP    MCPConfig    `json:"mcp"`
+	Skills SkillsConfig `json:"skills"`
 }
 
 type LLMConfig struct {
@@ -25,6 +27,24 @@ type ToolsConfig struct {
 	DeleteEnabled bool   `json:"delete_enabled"`
 }
 
+type MCPConfig struct {
+	ConnectTimeoutSeconds int               `json:"connect_timeout_seconds"`
+	Servers               []MCPServerConfig `json:"servers"`
+}
+
+type MCPServerConfig struct {
+	Name    string            `json:"name"`
+	Command string            `json:"command"`
+	Args    []string          `json:"args"`
+	Env     map[string]string `json:"env"`
+	Enabled bool              `json:"enabled"`
+}
+
+type SkillsConfig struct {
+	Dir     string `json:"dir"`
+	Default string `json:"default"`
+}
+
 func Default() Config {
 	return Config{
 		LLM: LLMConfig{
@@ -42,6 +62,14 @@ func Default() Config {
 			ShellEnabled:  true,
 			WriteEnabled:  true,
 			DeleteEnabled: false,
+		},
+		MCP: MCPConfig{
+			ConnectTimeoutSeconds: 15,
+			Servers:               nil,
+		},
+		Skills: SkillsConfig{
+			Dir:     "skills",
+			Default: "",
 		},
 	}
 }

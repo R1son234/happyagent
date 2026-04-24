@@ -14,6 +14,15 @@
   - `file_write`
   - `file_delete`
   - `shell`
+- MCP client
+  - 当前支持通过子进程 stdio 连接 MCP server
+  - 自动注册远程 tool
+  - 支持按 URI 读取 resource 并注入 skill
+- Skill
+  - 本地目录扫描
+  - `skill.yaml` + `prompt.md`
+  - 工具白名单过滤
+  - MCP resource 注入
 - 单 `Runner` + 内部 `plan step` / `execute step` 分层
 
 ## 运行
@@ -26,27 +35,70 @@ cp config.example.json happyagent.local.json
 
 然后把 `happyagent.local.json` 里的 `model` 和 `api_key` 改成你自己的配置。这个文件已经加入 `.gitignore`，不会被提交。
 
-直接检查初始化：
+默认推荐先编译再运行，避免每次 `go run` 都重复走一次编译流程：
 
 ```bash
-go run ./cmd/happyagent
+make build
+./bin/happyagent
 ```
 
 运行一个真实请求：
 
 ```bash
-go run ./cmd/happyagent -prompt "say hello in one sentence"
+./bin/happyagent -prompt "say hello in one sentence"
 ```
 
 使用配置文件：
 
 ```bash
-go run ./cmd/happyagent -config happyagent.local.json -prompt "list files"
+./bin/happyagent -config happyagent.local.json -prompt "list files"
+```
+
+指定 skill：
+
+```bash
+./bin/happyagent -skill file-inspector -prompt "列出当前目录下的所有文件"
+```
+
+使用仓库内置的 demo MCP server：
+
+1. 先构建主程序和 demo server：
+
+```bash
+make build
+go build -o ./bin/mcpdemo ./cmd/mcpdemo
+```
+
+2. 在 `happyagent.local.json` 里加入一个 MCP server 配置：
+
+```json
+{
+  "mcp": {
+    "connect_timeout_seconds": 15,
+    "servers": [
+      {
+        "name": "demo",
+        "command": "./bin/mcpdemo",
+        "args": [],
+        "env": {},
+        "enabled": true
+      }
+    ]
+  }
+}
+```
+
+3. 运行时就可以使用 `demo__repeat` 这个 MCP tool，或者在 skill 里引用 `demo://project-summary` 这个 resource。
+
+如果你只是偶尔临时跑一次，也可以继续用：
+
+```bash
+go run ./cmd/happyagent -prompt "say hello in one sentence"
 ```
 
 ## 配置
 
-当前最小实现支持 JSON 配置文件，模板见 [config.example.json](/Users/r1son/Desktop/projects/happyagent/config.example.json:1)，字段如下：
+当前最小实现支持 JSON 配置文件，模板见 [config.example.json]，字段如下：
 
 ```json
 {
@@ -65,6 +117,14 @@ go run ./cmd/happyagent -config happyagent.local.json -prompt "list files"
     "shell_enabled": true,
     "write_enabled": true,
     "delete_enabled": false
+  },
+  "mcp": {
+    "connect_timeout_seconds": 15,
+    "servers": []
+  },
+  "skills": {
+    "dir": "skills",
+    "default": ""
   }
 }
 ```
@@ -81,9 +141,61 @@ go run ./cmd/happyagent -config happyagent.local.json -prompt "list files"
 - `HAPPYAGENT_SHELL_ENABLED`
 - `HAPPYAGENT_WRITE_ENABLED`
 - `HAPPYAGENT_DELETE_ENABLED`
+- `HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS`
+- `HAPPYAGENT_SKILLS_DIR`
+- `HAPPYAGENT_DEFAULT_SKILL`
+
+## Skill
+
+本地 skill 目录默认是 `skills/`。每个 skill 目录至少包含：
+
+```text
+skills/<skill-name>/
+├── skill.yaml
+└── prompt.md
+```
+
+`skill.yaml` 当前支持：
+
+```yaml
+name: file-inspector
+description: Inspect local files with the built-in file tools.
+tools:
+  - file_list
+  - file_read
+resources: []
+prompt_file: prompt.md
+```
+
+仓库里已经放了一个 demo skill，见 [skills/file-inspector/skill.yaml](/Users/r1son/Desktop/projects/happyagent/skills/file-inspector/skill.yaml:1)。
+
+## MCP
+
+当前 MCP 支持的配置方式是 stdio 子进程：
+
+```json
+{
+  "mcp": {
+    "connect_timeout_seconds": 15,
+    "servers": [
+      {
+        "name": "demo",
+        "command": "/path/to/mcp-server",
+        "args": ["serve"],
+        "env": {
+          "TOKEN": "value"
+        },
+        "enabled": true
+      }
+    ]
+  }
+}
+```
+
+注册后，远程 tool 会以 `<serverName>__<toolName>` 的名字进入 agent 可用工具集合。skill 如果要引用 MCP tool，也需要使用这个完整名字。
+仓库内置的 demo server 位于 [cmd/mcpdemo/main.go](/Users/r1son/Desktop/projects/happyagent/cmd/mcpdemo/main.go:1)。
 
 ## 下一步
 
-- 让 engine 从 prompt JSON action 平滑演进到原生 tool-calling loop
-- 增加 MCP 和 Skill 模块
+- 补 MCP 和 skill 的集成测试
 - 补单元测试和集成测试

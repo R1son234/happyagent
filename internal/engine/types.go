@@ -1,6 +1,9 @@
 package engine
 
-import "happyagent/internal/tools"
+import (
+	"happyagent/internal/protocol"
+	"happyagent/internal/tools"
+)
 
 type RunInput struct {
 	Input        string
@@ -19,12 +22,7 @@ type StepRecord struct {
 	Observation string
 }
 
-type Action struct {
-	Type      string `json:"type"`
-	ToolName  string `json:"tool_name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	Content   string `json:"content,omitempty"`
-}
+type Action = protocol.Action
 
 type LoopState struct {
 	Messages []MessageEnvelope
@@ -38,6 +36,10 @@ type StepResult struct {
 }
 
 type MessageEnvelope struct {
-	Role    string
-	Content string
+	Role             string
+	Content          string
+	ReasoningContent string
+	ToolCallID       string
+	ToolName         string
+	Action           *Action
 }
