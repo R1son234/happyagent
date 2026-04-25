@@ -14,17 +14,17 @@ type ActivateSkillProvider interface {
 const activateSkillInputSchema = `{"type":"object","properties":{"skill_names":{"type":"array","items":{"type":"string"},"description":"Skill names to activate."}},"required":["skill_names"]}`
 
 type ActivateSkillTool struct {
-	resolver func() ActivateSkillProvider
+	resolver func(ctx context.Context) ActivateSkillProvider
 }
 
-func NewActivateSkillTool(resolver func() ActivateSkillProvider) *ActivateSkillTool {
+func NewActivateSkillTool(resolver func(ctx context.Context) ActivateSkillProvider) *ActivateSkillTool {
 	return &ActivateSkillTool{
 		resolver: resolver,
 	}
 }
 
 func (t *ActivateSkillTool) Definition() Definition {
-	provider := t.resolver()
+	provider := ActivateSkillProviderFromContext(context.Background())
 	if provider == nil {
 		return Definition{
 			Name:        "activate_skill",
@@ -36,7 +36,7 @@ func (t *ActivateSkillTool) Definition() Definition {
 }
 
 func (t *ActivateSkillTool) Execute(ctx context.Context, call Call) (Result, error) {
-	provider := t.resolver()
+	provider := t.resolver(ctx)
 	if provider == nil {
 		return Result{}, fmt.Errorf("activate_skill is unavailable outside an active runtime session")
 	}
@@ -53,4 +53,18 @@ func (t *ActivateSkillTool) Execute(ctx context.Context, call Call) (Result, err
 		return Result{}, err
 	}
 	return Result{Output: output}, nil
+}
+
+type activateSkillProviderContextKey struct{}
+
+func WithActivateSkillProvider(ctx context.Context, provider ActivateSkillProvider) context.Context {
+	return context.WithValue(ctx, activateSkillProviderContextKey{}, provider)
+}
+
+func ActivateSkillProviderFromContext(ctx context.Context) ActivateSkillProvider {
+	if ctx == nil {
+		return nil
+	}
+	provider, _ := ctx.Value(activateSkillProviderContextKey{}).(ActivateSkillProvider)
+	return provider
 }

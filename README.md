@@ -23,7 +23,7 @@
   - `SKILL.md`
   - 通过 `activate_skill` 按需激活
   - 通过 `list_capabilities` 查看当前 skills 和 MCP resources
-  - 激活后把 skill 正文注入后续轮次的 system prompt
+- 激活结果会作为 tool observation 返回给模型
 - 单 `Runner` + 内部 `plan step` / `execute step` 分层
 
 ## 运行
@@ -49,7 +49,7 @@ make build
 ./bin/happyagent "say hello in one sentence"
 ```
 
-程序会固定读取仓库根目录的 `happyagent.local.json`。
+程序会固定读取当前工作目录下的 `happyagent.local.json`。
 
 使用仓库内置的 demo MCP server：
 
@@ -157,7 +157,7 @@ description: Inspect local files with the built-in file tools.
 ```
 
 仓库里已经放了一个 demo skill，见 [skills/file-inspector/SKILL.md](/Users/r1son/Desktop/projects/happyagent/skills/file-inspector/SKILL.md:1)。
-运行时默认会把 `activate_skill` 和 `list_capabilities` 暴露给模型。未激活前，system prompt 保持简洁；激活后，skill 正文会注入后续轮次的 system prompt。
+运行时默认会把 `activate_skill` 和 `list_capabilities` 暴露给模型。未激活前，system prompt 保持简洁；激活后，skill 内容会通过 tool observation 返回给模型，而不是直接改写 system prompt。
 
 ## MCP
 
