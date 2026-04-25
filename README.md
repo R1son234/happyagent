@@ -17,12 +17,13 @@
 - MCP client
   - 当前支持通过子进程 stdio 连接 MCP server
   - 自动注册远程 tool
-  - 支持按 URI 读取 resource 并注入 skill
+  - 支持按 URI 读取 resource
 - Skill
-  - 本地目录扫描
-  - `skill.yaml` + `prompt.md`
-  - 工具白名单过滤
-  - MCP resource 注入
+  - 本地目录扫描与 catalog 暴露
+  - `SKILL.md`
+  - 通过 `activate_skill` 按需激活
+  - 通过 `list_capabilities` 查看当前 skills 和 MCP resources
+  - 激活后把 skill 正文注入后续轮次的 system prompt
 - 单 `Runner` + 内部 `plan step` / `execute step` 分层
 
 ## 运行
@@ -45,20 +46,10 @@ make build
 运行一个真实请求：
 
 ```bash
-./bin/happyagent -prompt "say hello in one sentence"
+./bin/happyagent "say hello in one sentence"
 ```
 
-使用配置文件：
-
-```bash
-./bin/happyagent -config happyagent.local.json -prompt "list files"
-```
-
-指定 skill：
-
-```bash
-./bin/happyagent -skill file-inspector -prompt "列出当前目录下的所有文件"
-```
+程序会固定读取仓库根目录的 `happyagent.local.json`。
 
 使用仓库内置的 demo MCP server：
 
@@ -88,12 +79,12 @@ go build -o ./bin/mcpdemo ./cmd/mcpdemo
 }
 ```
 
-3. 运行时就可以使用 `demo__repeat` 这个 MCP tool，或者在 skill 里引用 `demo://project-summary` 这个 resource。
+3. 运行时就可以使用 `demo__repeat` 这个 MCP tool。MCP resource 读取能力已经在 runtime 里接好，但当前不再通过 skill frontmatter 自动注入。
 
 如果你只是偶尔临时跑一次，也可以继续用：
 
 ```bash
-go run ./cmd/happyagent -prompt "say hello in one sentence"
+go run ./cmd/happyagent "say hello in one sentence"
 ```
 
 ## 配置
@@ -123,8 +114,7 @@ go run ./cmd/happyagent -prompt "say hello in one sentence"
     "servers": []
   },
   "skills": {
-    "dir": "skills",
-    "default": ""
+    "dir": "skills"
   }
 }
 ```
@@ -143,31 +133,31 @@ go run ./cmd/happyagent -prompt "say hello in one sentence"
 - `HAPPYAGENT_DELETE_ENABLED`
 - `HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS`
 - `HAPPYAGENT_SKILLS_DIR`
-- `HAPPYAGENT_DEFAULT_SKILL`
 
 ## Skill
 
-本地 skill 目录默认是 `skills/`。每个 skill 目录至少包含：
+本地 skill 目录默认是 `skills/`。运行时不会再把 skill catalog、MCP resources 或 tool 列表塞进 system prompt；模型如果需要这些运行时能力信息，应调用 `list_capabilities`。需要某个 skill 时，再调用 `activate_skill` 加载它的详细说明。skill 目录使用通用的 `SKILL.md` 格式。
+
+推荐格式：
 
 ```text
 skills/<skill-name>/
-├── skill.yaml
-└── prompt.md
+└── SKILL.md
 ```
 
-`skill.yaml` 当前支持：
+`SKILL.md` 示例：
 
-```yaml
+```md
+---
 name: file-inspector
 description: Inspect local files with the built-in file tools.
-tools:
-  - file_list
-  - file_read
-resources: []
-prompt_file: prompt.md
+---
+
+你当前扮演一个文件检查助手。
 ```
 
-仓库里已经放了一个 demo skill，见 [skills/file-inspector/skill.yaml](/Users/r1son/Desktop/projects/happyagent/skills/file-inspector/skill.yaml:1)。
+仓库里已经放了一个 demo skill，见 [skills/file-inspector/SKILL.md](/Users/r1son/Desktop/projects/happyagent/skills/file-inspector/SKILL.md:1)。
+运行时默认会把 `activate_skill` 和 `list_capabilities` 暴露给模型。未激活前，system prompt 保持简洁；激活后，skill 正文会注入后续轮次的 system prompt。
 
 ## MCP
 
@@ -192,7 +182,7 @@ prompt_file: prompt.md
 }
 ```
 
-注册后，远程 tool 会以 `<serverName>__<toolName>` 的名字进入 agent 可用工具集合。skill 如果要引用 MCP tool，也需要使用这个完整名字。
+注册后，远程 tool 会以 `<serverName>__<toolName>` 的名字进入 agent 可用工具集合。
 仓库内置的 demo server 位于 [cmd/mcpdemo/main.go](/Users/r1son/Desktop/projects/happyagent/cmd/mcpdemo/main.go:1)。
 
 ## 下一步

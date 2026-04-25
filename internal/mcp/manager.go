@@ -9,10 +9,10 @@ import (
 )
 
 type ResourceInfo struct {
-	ServerName  string
-	URI         string
-	Name        string
-	Description string
+	ServerName  string `json:"server_name"`
+	URI         string `json:"uri"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 type Manager struct {

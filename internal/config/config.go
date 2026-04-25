@@ -41,8 +41,7 @@ type MCPServerConfig struct {
 }
 
 type SkillsConfig struct {
-	Dir     string `json:"dir"`
-	Default string `json:"default"`
+	Dir string `json:"dir"`
 }
 
 func Default() Config {
@@ -53,9 +52,10 @@ func Default() Config {
 		Engine: EngineConfig{
 			LoopMaxSteps:      8,
 			RunTimeoutSeconds: 60,
-			SystemPrompt: "You are a local coding agent. Reply with a JSON action. " +
-				"Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done, " +
-				"or {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool.",
+			SystemPrompt: "You are a local coding agent. Reply with exactly one JSON action object and no extra text. " +
+				"When you need to act, respond with " +
+				"{\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} " +
+				"using only tool names that appear in the provided tool list.",
 		},
 		Tools: ToolsConfig{
 			RootDir:       ".",
@@ -68,8 +68,7 @@ func Default() Config {
 			Servers:               nil,
 		},
 		Skills: SkillsConfig{
-			Dir:     "skills",
-			Default: "",
+			Dir: "skills",
 		},
 	}
 }

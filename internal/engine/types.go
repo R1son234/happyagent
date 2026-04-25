@@ -1,14 +1,17 @@
 package engine
 
 import (
+	"context"
+
 	"happyagent/internal/protocol"
 	"happyagent/internal/tools"
 )
 
 type RunInput struct {
-	Input        string
-	SystemPrompt string
-	ToolDefs     []tools.Definition
+	Input         string
+	SystemPrompt  string
+	ToolDefs      []tools.Definition
+	AfterToolCall func(ctx context.Context, toolName string, callErr error, input *RunInput) error
 }
 
 type RunResult struct {
@@ -18,7 +21,7 @@ type RunResult struct {
 
 type StepRecord struct {
 	Index       int
-	Action      Action
+	Actions     []Action
 	Observation string
 }
 
@@ -41,5 +44,5 @@ type MessageEnvelope struct {
 	ReasoningContent string
 	ToolCallID       string
 	ToolName         string
-	Action           *Action
+	Actions          []Action
 }

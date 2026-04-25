@@ -16,7 +16,7 @@ type Client struct {
 }
 
 func NewClient(ctx context.Context, cfg config.MCPServerConfig) (*Client, error) {
-	command := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
+	command := exec.Command(cfg.Command, cfg.Args...)
 	if len(cfg.Env) > 0 {
 		env := command.Environ()
 		for key, value := range cfg.Env {

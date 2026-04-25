@@ -1,3 +1,8 @@
+---
+name: file-inspector
+description: Inspect local files with the built-in file tools.
+---
+
 你当前扮演一个文件检查助手。
 
 工作要求：

@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"sync/atomic"
 	"time"
 
 	"happyagent/internal/config"
 	"happyagent/internal/protocol"
+	"happyagent/internal/runlog"
 
 	einoopenai "github.com/cloudwego/eino-ext/components/model/openai"
 	einomodel "github.com/cloudwego/eino/components/model"
@@ -71,7 +71,7 @@ func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, e
 		return ChatResponse{}, fmt.Errorf("generate response with model %q: %w", c.model, err)
 	}
 
-	message, action, err := fromEinoMessage(resp)
+	message, actions, err := fromEinoMessage(resp)
 	if err != nil {
 		logLLMError(round, fmt.Errorf("convert model response for model %q: %w", c.model, err))
 		return ChatResponse{}, fmt.Errorf("convert model response for model %q: %w", c.model, err)
@@ -79,7 +79,7 @@ func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, e
 
 	response := ChatResponse{
 		Message: message,
-		Action:  action,
+		Actions: actions,
 		Usage:   fromEinoUsage(resp),
 	}
 	logLLMJSON(round, "llm response", response)
@@ -90,22 +90,29 @@ func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, e
 func toEinoMessages(messages []Message) []*schema.Message {
 	out := make([]*schema.Message, 0, len(messages))
 	for _, message := range messages {
-		if message.Role == protocol.RoleAssistant && message.Action != nil && message.Action.Type == protocol.ActionToolCall {
-			out = append(out, &schema.Message{
-				Role:             schema.Assistant,
-				ReasoningContent: message.ReasoningContent,
-				ToolCalls: []schema.ToolCall{
-					{
-						ID:   message.Action.ToolCallID,
-						Type: "function",
-						Function: schema.FunctionCall{
-							Name:      message.Action.ToolName,
-							Arguments: string(message.Action.Arguments),
-						},
+		if message.Role == protocol.RoleAssistant && len(message.Actions) > 0 {
+			toolCalls := make([]schema.ToolCall, 0, len(message.Actions))
+			for _, action := range message.Actions {
+				if action.Type != protocol.ActionToolCall {
+					continue
+				}
+				toolCalls = append(toolCalls, schema.ToolCall{
+					ID:   action.ToolCallID,
+					Type: "function",
+					Function: schema.FunctionCall{
+						Name:      action.ToolName,
+						Arguments: string(action.Arguments),
 					},
-				},
-			})
-			continue
+				})
+			}
+			if len(toolCalls) > 0 {
+				out = append(out, &schema.Message{
+					Role:             schema.Assistant,
+					ReasoningContent: message.ReasoningContent,
+					ToolCalls:        toolCalls,
+				})
+				continue
+			}
 		}
 
 		out = append(out, &schema.Message{
@@ -132,29 +139,27 @@ func toEinoRole(role string) schema.RoleType {
 	}
 }
 
-func fromEinoMessage(message *schema.Message) (Message, *protocol.Action, error) {
+func fromEinoMessage(message *schema.Message) (Message, []protocol.Action, error) {
 	if message == nil {
 		return Message{}, nil, fmt.Errorf("response message is nil")
 	}
 
-	if len(message.ToolCalls) > 1 {
-		return Message{}, nil, fmt.Errorf("multiple tool calls are not supported yet")
-	}
-
-	if len(message.ToolCalls) == 1 {
-		call := message.ToolCalls[0]
-		action := &protocol.Action{
-			Type:       protocol.ActionToolCall,
-			ToolCallID: call.ID,
-			ToolName:   call.Function.Name,
-			Arguments:  []byte(call.Function.Arguments),
+	if len(message.ToolCalls) > 0 {
+		actions := make([]protocol.Action, 0, len(message.ToolCalls))
+		for _, call := range message.ToolCalls {
+			actions = append(actions, protocol.Action{
+				Type:       protocol.ActionToolCall,
+				ToolCallID: call.ID,
+				ToolName:   call.Function.Name,
+				Arguments:  []byte(call.Function.Arguments),
+			})
 		}
 
 		return Message{
 			Role:             protocol.RoleAssistant,
 			ReasoningContent: message.ReasoningContent,
-			Action:           action,
-		}, action, nil
+			Actions:          actions,
+		}, actions, nil
 	}
 
 	return Message{
@@ -179,13 +184,13 @@ func fromEinoUsage(message *schema.Message) TokenUsage {
 func logLLMJSON(round int, label string, value any) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\n%s: marshal error: %v\n", round, label, err)
+		runlog.Section(fmt.Sprintf("LLM Round %d %s", round, label), "marshal error: "+err.Error())
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\n%s:\n%s\n", round, label, data)
+	runlog.CodeBlock(fmt.Sprintf("LLM Round %d %s", round, label), "json", string(data))
 }
 
 func logLLMError(round int, err error) {
-	fmt.Fprintf(os.Stderr, "===== LLM Round %d =====\nllm error: %v\n", round, err)
+	runlog.Section(fmt.Sprintf("LLM Round %d error", round), err.Error())
 }

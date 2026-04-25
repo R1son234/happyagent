@@ -18,15 +18,16 @@
 ## 当前执行路径
 
 1. `main.go` 读取配置。
-   - 当未显式传入 `-config` 时，默认尝试读取仓库根目录的 `happyagent.local.json`。
+   - 通过 `config.Load()` 固定读取仓库根目录的 `happyagent.local.json`。
 2. `runtime.Builder` 创建 LLM client。
 3. `runtime.Builder` 注册本地 tools。
 4. `runtime.Builder` 连接配置中的 MCP server，并把远程 tool 注册进工具表。
-5. `runtime.Run` 根据 `-skill` 或默认 skill 加载本地 skill。
-6. `runtime.Run` 通过 skill 注入 prompt、过滤工具，并按需读取 MCP resource。
-7. `engine.Runner` 进入 loop。
-8. `planStep` 向模型请求结构化动作。
-9. `executeStep` 执行工具或返回最终答案。
+5. `runtime.Run` 读取本地 skill catalog，并创建当前请求的 skill session。
+6. 初始 prompt 保持简洁；模型如果需要当前 skill catalog 或 MCP resources，可调用 `list_capabilities`。
+7. 模型按需调用 `activate_skill` 后，runtime 再加载该 skill 的正文并注入后续轮次的 system prompt。
+8. `engine.Runner` 进入 loop。
+9. `planStep` 向模型请求结构化动作。
+10. `executeStep` 执行工具或返回最终答案。
 
 ## 当前限制
 

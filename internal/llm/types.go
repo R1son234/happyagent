@@ -8,7 +8,7 @@ type Message struct {
 	ReasoningContent string           `json:"reasoning_content,omitempty"`
 	ToolCallID       string           `json:"tool_call_id,omitempty"`
 	ToolName         string           `json:"tool_name,omitempty"`
-	Action           *protocol.Action `json:"action,omitempty"`
+	Actions          []protocol.Action `json:"actions,omitempty"`
 }
 
 type ToolSpec struct {
@@ -24,7 +24,7 @@ type ChatRequest struct {
 
 type ChatResponse struct {
 	Message Message          `json:"message"`
-	Action  *protocol.Action `json:"action,omitempty"`
+	Actions []protocol.Action `json:"actions,omitempty"`
 	Usage   TokenUsage       `json:"usage,omitempty"`
 }
 

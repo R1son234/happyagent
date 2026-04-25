@@ -2,30 +2,32 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"happyagent/internal/config"
+	"happyagent/internal/runlog"
 	"happyagent/internal/runtime"
 )
 
+const (
+	readyMessageFormat  = "happyagent is ready. model=%s max_steps=%d\n"
+	startMessageFormat  = "starting run: model=%s timeout=%ds config=%s\n"
+	modelAPICallMessage = "calling model API..."
+)
+
 func main() {
-	var (
-		configPath string
-		prompt     string
-		skill      string
-	)
+	logSession := initRunLog()
+	if logSession != nil {
+		defer logSession.Close()
+		logSession.Enable()
+		defer runlog.Disable()
+	}
 
-	flag.StringVar(&configPath, "config", "", "optional path to a JSON config file; defaults to ./happyagent.local.json when present")
-	flag.StringVar(&prompt, "prompt", "", "task for the agent to run")
-	flag.StringVar(&skill, "skill", "", "optional skill name to load from the configured skills directory")
-	flag.Parse()
-
-	configPath = resolveConfigPath(configPath)
-
-	cfg, err := config.Load(configPath)
+	cfg, err := config.Load()
 	if err != nil {
 		exitf("load config: %v", err)
 	}
@@ -40,13 +42,24 @@ func main() {
 		}
 	}()
 
+	prompt := strings.TrimSpace(strings.Join(os.Args[1:], " "))
 	if prompt == "" {
-		fmt.Fprintf(os.Stdout, "happyagent is ready. model=%s max_steps=%d\n", cfg.LLM.Model, cfg.Engine.LoopMaxSteps)
+		fmt.Fprintf(os.Stdout, readyMessageFormat, cfg.LLM.Model, cfg.Engine.LoopMaxSteps)
+		if logSession != nil {
+			fmt.Fprintf(os.Stdout, "run log: %s\n", logSession.Path())
+		}
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "starting run: model=%s timeout=%ds config=%s\n", cfg.LLM.Model, cfg.Engine.RunTimeoutSeconds, displayConfigPath(configPath))
-	fmt.Fprintln(os.Stderr, "calling model API...")
+	fmt.Fprintf(os.Stderr, startMessageFormat, cfg.LLM.Model, cfg.Engine.RunTimeoutSeconds, config.ConfigPath())
+	if logSession != nil {
+		fmt.Fprintf(os.Stderr, "run log: %s\n", logSession.Path())
+	}
+	runlog.Section("Run Input", prompt)
+	runlog.Linef("Model: `%s`", cfg.LLM.Model)
+	runlog.Linef("Timeout: `%ds`", cfg.Engine.RunTimeoutSeconds)
+	runlog.Linef("")
+	fmt.Fprintln(os.Stderr, modelAPICallMessage)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
 	defer cancel()
@@ -54,36 +67,35 @@ func main() {
 	result, err := rt.Run(ctx, runtime.RunRequest{
 		Input:        prompt,
 		SystemPrompt: cfg.Engine.SystemPrompt,
-		Skill:        skill,
 	})
 	if err != nil {
 		exitf("run agent: %v", err)
 	}
 
+	runlog.Section("Final Output", result.Output)
 	fmt.Fprintln(os.Stdout, result.Output)
 }
 
 func exitf(format string, args ...any) {
+	runlog.Section("Error", fmt.Sprintf(format, args...))
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
 }
 
-func resolveConfigPath(flagValue string) string {
-	if flagValue != "" {
-		return flagValue
+func initRunLog() *runlog.Session {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return nil
 	}
 
-	const defaultConfigPath = "happyagent.local.json"
-	if _, err := os.Stat(defaultConfigPath); err == nil {
-		return defaultConfigPath
+	session, err := runlog.NewSession(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "init run log: %v\n", err)
+		return nil
 	}
 
-	return ""
-}
-
-func displayConfigPath(path string) string {
-	if path == "" {
-		return "(env/defaults only)"
+	if abs, err := filepath.Abs(session.Path()); err == nil {
+		runlog.Section("Log File", abs)
 	}
-	return path
+	return session
 }

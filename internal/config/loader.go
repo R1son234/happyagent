@@ -7,13 +7,13 @@ import (
 	"strconv"
 )
 
-func Load(path string) (Config, error) {
+const configPath = "happyagent.local.json"
+
+func Load() (Config, error) {
 	cfg := Default()
 
-	if path != "" {
-		if err := loadFromFile(path, &cfg); err != nil {
-			return Config{}, err
-		}
+	if err := loadFromFile(configPath, &cfg); err != nil {
+		return Config{}, err
 	}
 
 	applyEnv(&cfg)
@@ -23,6 +23,10 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func ConfigPath() string {
+	return configPath
 }
 
 func loadFromFile(path string, cfg *Config) error {
@@ -45,7 +49,6 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_SYSTEM_PROMPT", &cfg.Engine.SystemPrompt)
 	overrideString("HAPPYAGENT_ROOT_DIR", &cfg.Tools.RootDir)
 	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
-	overrideString("HAPPYAGENT_DEFAULT_SKILL", &cfg.Skills.Default)
 
 	overrideInt("HAPPYAGENT_LOOP_MAX_STEPS", &cfg.Engine.LoopMaxSteps)
 	overrideInt("HAPPYAGENT_RUN_TIMEOUT_SECONDS", &cfg.Engine.RunTimeoutSeconds)

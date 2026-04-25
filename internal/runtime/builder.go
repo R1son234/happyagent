@@ -52,18 +52,34 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	}
 
 	skillLoader := skills.NewLoader(cfg.Skills.Dir)
+	rt := &Runtime{
+		tools:       defs,
+		mcpManager:  manager,
+		skillLoader: skillLoader,
+	}
+	registry.MustRegister(tools.NewActivateSkillTool(func() tools.ActivateSkillProvider {
+		if rt.currentSkillSession == nil {
+			return nil
+		}
+		return rt.currentSkillSession
+	}))
+	registry.MustRegister(tools.NewListCapabilitiesTool(func() tools.CapabilityProvider {
+		if rt.currentCapabilitySession == nil {
+			return nil
+		}
+		return rt.currentCapabilitySession
+	}))
 
-	return &Runtime{
-		runner:       engine.NewRunner(client, registry, cfg.Engine.LoopMaxSteps),
-		tools:        defs,
-		mcpManager:   manager,
-		skillLoader:  skillLoader,
-		defaultSkill: cfg.Skills.Default,
-	}, nil
+	rt.runner = engine.NewRunner(client, registry, cfg.Engine.LoopMaxSteps)
+	return rt, nil
 }
 
 func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]tools.Definition, error) {
 	var registered []tools.Definition
+
+	finalAnswer := tools.NewFinalAnswerTool()
+	registry.MustRegister(finalAnswer)
+	registered = append(registered, finalAnswer.Definition())
 
 	fileRead, err := tools.NewFileReadTool(cfg.RootDir)
 	if err != nil {

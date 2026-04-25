@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"happyagent/internal/llm"
+	"happyagent/internal/runlog"
 	"happyagent/internal/tools"
 )
 
@@ -28,23 +29,25 @@ func NewRunner(client llm.Client, registry *tools.Registry, maxSteps int) Runner
 
 func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 	state := LoopState{}
+	currentInput := input
 
 	for step := 0; step < r.loop.maxSteps; step++ {
-		action, err := r.loop.planStep(ctx, input, &state)
+		actions, err := r.loop.planStep(ctx, currentInput, &state)
 		if err != nil {
 			return RunResult{}, err
 		}
 
-		result, err := r.loop.executeStep(ctx, &state, action)
+		result, err := r.loop.executeStep(ctx, &state, &currentInput, actions)
 		if err != nil {
 			return RunResult{}, err
 		}
 
 		state.Steps = append(state.Steps, StepRecord{
 			Index:       step + 1,
-			Action:      action,
+			Actions:     append([]Action(nil), actions...),
 			Observation: result.Observation,
 		})
+		runlog.Step(step+1, actions, result.Observation)
 
 		if result.Done {
 			return RunResult{

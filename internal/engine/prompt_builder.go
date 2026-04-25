@@ -1,9 +1,6 @@
 package engine
 
 import (
-	"fmt"
-	"strings"
-
 	"happyagent/internal/llm"
 	"happyagent/internal/protocol"
 	"happyagent/internal/tools"
@@ -13,7 +10,7 @@ func BuildMessages(input RunInput, state LoopState) []llm.Message {
 	messages := make([]llm.Message, 0, len(state.Messages)+2)
 	messages = append(messages, llm.Message{
 		Role:    protocol.RoleSystem,
-		Content: buildSystemPrompt(input.SystemPrompt, input.ToolDefs),
+		Content: input.SystemPrompt,
 	})
 	messages = append(messages, llm.Message{
 		Role:    protocol.RoleUser,
@@ -27,7 +24,7 @@ func BuildMessages(input RunInput, state LoopState) []llm.Message {
 			ReasoningContent: message.ReasoningContent,
 			ToolCallID:       message.ToolCallID,
 			ToolName:         message.ToolName,
-			Action:           message.Action,
+			Actions:          append([]protocol.Action(nil), message.Actions...),
 		})
 	}
 
@@ -44,18 +41,4 @@ func BuildToolSpecs(defs []tools.Definition) []llm.ToolSpec {
 		})
 	}
 	return specs
-}
-
-func buildSystemPrompt(base string, defs []tools.Definition) string {
-	if len(defs) == 0 {
-		return base
-	}
-
-	var builder strings.Builder
-	builder.WriteString(base)
-	builder.WriteString("\n\nAvailable tools:\n")
-	for _, def := range defs {
-		builder.WriteString(fmt.Sprintf("- %s: %s\n", def.Name, def.Description))
-	}
-	return builder.String()
 }

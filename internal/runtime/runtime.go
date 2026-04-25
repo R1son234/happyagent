@@ -13,7 +13,6 @@ import (
 type RunRequest struct {
 	Input        string
 	SystemPrompt string
-	Skill        string
 }
 
 type RunResult struct {
@@ -22,33 +21,35 @@ type RunResult struct {
 }
 
 type Runtime struct {
-	runner       engine.Runner
-	tools        []tools.Definition
-	mcpManager   *mcp.Manager
-	skillLoader  *skills.Loader
-	defaultSkill string
+	runner                   engine.Runner
+	tools                    []tools.Definition
+	mcpManager               *mcp.Manager
+	skillLoader              *skills.Loader
+	currentSkillSession      *SkillSession
+	currentCapabilitySession *CapabilitySession
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
-	selectedSkill := req.Skill
-	if selectedSkill == "" {
-		selectedSkill = r.defaultSkill
-	}
-
-	skill, err := r.skillLoader.Load(selectedSkill)
+	skillSession, err := NewSkillSession(r.skillLoader, req.SystemPrompt, r.tools)
 	if err != nil {
 		return RunResult{}, err
 	}
+	r.currentSkillSession = skillSession
+	r.currentCapabilitySession = NewCapabilitySession(skillSession, r.mcpManager)
+	defer func() {
+		r.currentSkillSession = nil
+		r.currentCapabilitySession = nil
+	}()
 
-	injection, err := skills.Inject(ctx, req.SystemPrompt, skill, r.tools, r.mcpManager)
+	toolDefs, err := skillSession.ToolDefs()
 	if err != nil {
 		return RunResult{}, err
 	}
 
 	result, err := r.runner.Run(ctx, engine.RunInput{
 		Input:        req.Input,
-		SystemPrompt: injection.SystemPrompt,
-		ToolDefs:     injection.ToolDefs,
+		SystemPrompt: skillSession.SystemPrompt(),
+		ToolDefs:     toolDefs,
 	})
 	if err != nil {
 		return RunResult{}, err

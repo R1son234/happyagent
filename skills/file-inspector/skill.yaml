@@ -1,6 +1,0 @@
-name: file-inspector
-description: Inspect local files with the built-in file tools.
-tools:
-  - file_list
-  - file_read
-prompt_file: prompt.md
