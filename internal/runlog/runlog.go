@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,19 @@ type Session struct {
 var (
 	mu     sync.Mutex
 	writer io.Writer = io.Discard
+
+	jsonSecretPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)("api_key"\s*:\s*")([^"]*)(")`),
+		regexp.MustCompile(`(?i)("authorization"\s*:\s*")([^"]*)(")`),
+		regexp.MustCompile(`(?i)("token"\s*:\s*")([^"]*)(")`),
+		regexp.MustCompile(`(?i)("secret"\s*:\s*")([^"]*)(")`),
+	}
+	textSecretPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?i)(api[_-]?key\s*[:=]\s*)(\S+)`),
+		regexp.MustCompile(`(?i)(authorization\s*[:=]\s*)([^\r\n]+)`),
+		regexp.MustCompile(`(?i)(bearer\s+)(\S+)`),
+		regexp.MustCompile(`\bsk-[A-Za-z0-9._\-]+\b`),
+	}
 )
 
 func NewSession(root string) (*Session, error) {
@@ -119,6 +133,7 @@ func Step(index int, actions []protocol.Action, observation string) {
 }
 
 func write(content string) {
+	content = sanitize(content)
 	mu.Lock()
 	defer mu.Unlock()
 	if writer == nil {
@@ -131,5 +146,21 @@ func (s *Session) write(content string) {
 	if s == nil || s.file == nil {
 		return
 	}
+	content = sanitize(content)
 	_, _ = io.WriteString(s.file, content)
+}
+
+func sanitize(content string) string {
+	for _, pattern := range jsonSecretPatterns {
+		content = pattern.ReplaceAllString(content, `${1}[REDACTED]${3}`)
+	}
+	for _, pattern := range textSecretPatterns {
+		switch pattern.String() {
+		case `\bsk-[A-Za-z0-9._\-]+\b`:
+			content = pattern.ReplaceAllString(content, "[REDACTED]")
+		default:
+			content = pattern.ReplaceAllString(content, `${1}[REDACTED]`)
+		}
+	}
+	return content
 }

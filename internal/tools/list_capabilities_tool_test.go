@@ -14,11 +14,12 @@ func (p stubCapabilityProvider) CapabilitiesJSON() (string, error) {
 }
 
 func TestListCapabilitiesTool(t *testing.T) {
-	tool := NewListCapabilitiesTool(func() CapabilityProvider {
-		return stubCapabilityProvider{output: `{"skills":[],"active_skills":[],"mcp_resources":[]}`}
+	tool := NewListCapabilitiesTool(func(ctx context.Context) CapabilityProvider {
+		return CapabilityProviderFromContext(ctx)
 	})
 
-	result, err := tool.Execute(context.Background(), Call{})
+	ctx := WithCapabilityProvider(context.Background(), stubCapabilityProvider{output: `{"skills":[],"active_skills":[],"mcp_resources":[]}`})
+	result, err := tool.Execute(ctx, Call{})
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

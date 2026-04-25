@@ -21,12 +21,10 @@ type RunResult struct {
 }
 
 type Runtime struct {
-	runner                   engine.Runner
-	tools                    []tools.Definition
-	mcpManager               *mcp.Manager
-	skillLoader              *skills.Loader
-	currentSkillSession      *SkillSession
-	currentCapabilitySession *CapabilitySession
+	runner      engine.Runner
+	tools       []tools.Definition
+	mcpManager  *mcp.Manager
+	skillLoader *skills.Loader
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
@@ -34,12 +32,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
-	r.currentSkillSession = skillSession
-	r.currentCapabilitySession = NewCapabilitySession(skillSession, r.mcpManager)
-	defer func() {
-		r.currentSkillSession = nil
-		r.currentCapabilitySession = nil
-	}()
+	capabilitySession := NewCapabilitySession(skillSession, r.mcpManager)
+	ctx = tools.WithActivateSkillProvider(ctx, skillSession)
+	ctx = tools.WithCapabilityProvider(ctx, capabilitySession)
 
 	toolDefs, err := skillSession.ToolDefs()
 	if err != nil {

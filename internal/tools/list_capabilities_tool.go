@@ -10,10 +10,10 @@ type CapabilityProvider interface {
 }
 
 type ListCapabilitiesTool struct {
-	resolver func() CapabilityProvider
+	resolver func(ctx context.Context) CapabilityProvider
 }
 
-func NewListCapabilitiesTool(resolver func() CapabilityProvider) *ListCapabilitiesTool {
+func NewListCapabilitiesTool(resolver func(ctx context.Context) CapabilityProvider) *ListCapabilitiesTool {
 	return &ListCapabilitiesTool{resolver: resolver}
 }
 
@@ -29,7 +29,7 @@ func (t *ListCapabilitiesTool) Execute(ctx context.Context, call Call) (Result, 
 	_ = ctx
 	_ = call
 
-	provider := t.resolver()
+	provider := t.resolver(ctx)
 	if provider == nil {
 		return Result{}, fmt.Errorf("list_capabilities is unavailable outside an active runtime session")
 	}
@@ -39,4 +39,18 @@ func (t *ListCapabilitiesTool) Execute(ctx context.Context, call Call) (Result, 
 		return Result{}, err
 	}
 	return Result{Output: output}, nil
+}
+
+type capabilityProviderContextKey struct{}
+
+func WithCapabilityProvider(ctx context.Context, provider CapabilityProvider) context.Context {
+	return context.WithValue(ctx, capabilityProviderContextKey{}, provider)
+}
+
+func CapabilityProviderFromContext(ctx context.Context) CapabilityProvider {
+	if ctx == nil {
+		return nil
+	}
+	provider, _ := ctx.Value(capabilityProviderContextKey{}).(CapabilityProvider)
+	return provider
 }

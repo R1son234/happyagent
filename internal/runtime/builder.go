@@ -57,17 +57,11 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		mcpManager:  manager,
 		skillLoader: skillLoader,
 	}
-	registry.MustRegister(tools.NewActivateSkillTool(func() tools.ActivateSkillProvider {
-		if rt.currentSkillSession == nil {
-			return nil
-		}
-		return rt.currentSkillSession
+	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
+		return tools.ActivateSkillProviderFromContext(ctx)
 	}))
-	registry.MustRegister(tools.NewListCapabilitiesTool(func() tools.CapabilityProvider {
-		if rt.currentCapabilitySession == nil {
-			return nil
-		}
-		return rt.currentCapabilitySession
+	registry.MustRegister(tools.NewListCapabilitiesTool(func(ctx context.Context) tools.CapabilityProvider {
+		return tools.CapabilityProviderFromContext(ctx)
 	}))
 
 	rt.runner = engine.NewRunner(client, registry, cfg.Engine.LoopMaxSteps)
