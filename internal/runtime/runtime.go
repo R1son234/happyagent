@@ -22,10 +22,11 @@ type RunResult struct {
 }
 
 type Runtime struct {
-	runner      engine.Runner
-	tools       []tools.Definition
-	mcpManager  *mcp.Manager
-	skillLoader *skills.Loader
+	runner              engine.Runner
+	tools               []tools.Definition
+	maxObservationBytes int
+	mcpManager          *mcp.Manager
+	skillLoader         *skills.Loader
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
