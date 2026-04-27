@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 const configPath = "happyagent.local.json"
@@ -51,17 +52,27 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
 
 	overrideInt("HAPPYAGENT_LOOP_MAX_STEPS", &cfg.Engine.LoopMaxSteps)
+	overrideInt("HAPPYAGENT_MAX_OBSERVATION_BYTES", &cfg.Engine.MaxObservationBytes)
 	overrideInt("HAPPYAGENT_RUN_TIMEOUT_SECONDS", &cfg.Engine.RunTimeoutSeconds)
 	overrideInt("HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS", &cfg.MCP.ConnectTimeoutSeconds)
+	overrideInt("HAPPYAGENT_MCP_MAX_LISTED_RESOURCES", &cfg.MCP.MaxListedResources)
+	overrideInt("HAPPYAGENT_MCP_MAX_RESOURCE_BYTES", &cfg.MCP.MaxResourceBytes)
+	overrideInt("HAPPYAGENT_WRITE_MAX_BYTES", &cfg.Tools.WriteMaxBytes)
 
 	overrideBool("HAPPYAGENT_SHELL_ENABLED", &cfg.Tools.ShellEnabled)
 	overrideBool("HAPPYAGENT_WRITE_ENABLED", &cfg.Tools.WriteEnabled)
+	overrideBool("HAPPYAGENT_WRITE_REQUIRE_OVERWRITE", &cfg.Tools.WriteRequireOverwrite)
 	overrideBool("HAPPYAGENT_DELETE_ENABLED", &cfg.Tools.DeleteEnabled)
+	overrideBool("HAPPYAGENT_DELETE_REQUIRE_CONFIRMATION", &cfg.Tools.DeleteRequireConfirmation)
+	overrideCSV("HAPPYAGENT_SHELL_ALLOWED_COMMANDS", &cfg.Tools.ShellAllowedCommands)
 }
 
 func validate(cfg Config) error {
 	if cfg.Engine.LoopMaxSteps <= 0 {
 		return fmt.Errorf("engine.loop_max_steps must be greater than zero")
+	}
+	if cfg.Engine.MaxObservationBytes <= 0 {
+		return fmt.Errorf("engine.max_observation_bytes must be greater than zero")
 	}
 	if cfg.Engine.RunTimeoutSeconds <= 0 {
 		return fmt.Errorf("engine.run_timeout_seconds must be greater than zero")
@@ -75,8 +86,20 @@ func validate(cfg Config) error {
 	if cfg.Tools.RootDir == "" {
 		return fmt.Errorf("tools.root_dir must not be empty")
 	}
+	if cfg.Tools.WriteEnabled && cfg.Tools.WriteMaxBytes <= 0 {
+		return fmt.Errorf("tools.write_max_bytes must be greater than zero")
+	}
+	if cfg.Tools.ShellEnabled && len(cfg.Tools.ShellAllowedCommands) == 0 {
+		return fmt.Errorf("tools.shell_allowed_commands must not be empty when shell is enabled")
+	}
 	if cfg.MCP.ConnectTimeoutSeconds <= 0 {
 		return fmt.Errorf("mcp.connect_timeout_seconds must be greater than zero")
+	}
+	if cfg.MCP.MaxListedResources <= 0 {
+		return fmt.Errorf("mcp.max_listed_resources must be greater than zero")
+	}
+	if cfg.MCP.MaxResourceBytes <= 0 {
+		return fmt.Errorf("mcp.max_resource_bytes must be greater than zero")
 	}
 	for i, server := range cfg.MCP.Servers {
 		if !server.Enabled {
@@ -120,4 +143,22 @@ func overrideBool(key string, dest *bool) {
 	if err == nil {
 		*dest = parsed
 	}
+}
+
+func overrideCSV(key string, dest *[]string) {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return
+	}
+
+	parts := strings.Split(value, ",")
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		values = append(values, part)
+	}
+	*dest = values
 }

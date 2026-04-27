@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"happyagent/internal/config"
+	"happyagent/internal/report"
 	"happyagent/internal/runlog"
 	"happyagent/internal/runtime"
 )
@@ -20,6 +22,10 @@ const (
 )
 
 func main() {
+	var traceJSONPath string
+	flag.StringVar(&traceJSONPath, "trace-json", "", "optional path for a structured trace json report")
+	flag.Parse()
+
 	logSession := initRunLog()
 	if logSession != nil {
 		defer logSession.Close()
@@ -42,7 +48,7 @@ func main() {
 		}
 	}()
 
-	prompt := strings.TrimSpace(strings.Join(os.Args[1:], " "))
+	prompt := strings.TrimSpace(strings.Join(flag.Args(), " "))
 	if prompt == "" {
 		fmt.Fprintf(os.Stdout, readyMessageFormat, cfg.LLM.Model, cfg.Engine.LoopMaxSteps)
 		if logSession != nil {
@@ -73,6 +79,20 @@ func main() {
 	}
 
 	runlog.Section("Final Output", result.Output)
+	if traceJSONPath != "" {
+		traceReport := report.RunReport{
+			Model:        cfg.LLM.Model,
+			Input:        prompt,
+			Output:       result.Output,
+			Trace:        result.Trace,
+			Steps:        result.Steps,
+			SystemPrompt: cfg.Engine.SystemPrompt,
+		}
+		if err := report.WriteJSON(traceJSONPath, traceReport); err != nil {
+			exitf("write trace json: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "trace json: %s\n", traceJSONPath)
+	}
 	fmt.Fprintln(os.Stdout, result.Output)
 }
 

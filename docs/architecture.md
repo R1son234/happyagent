@@ -24,7 +24,7 @@
 4. `runtime.Builder` 连接配置中的 MCP server，并把远程 tool 注册进工具表。
 5. `runtime.Run` 读取本地 skill catalog，并创建当前请求的 skill session。
 6. 初始 prompt 保持简洁；模型如果需要当前 skill catalog 或 MCP resources，可调用 `list_capabilities`。
-7. 模型按需调用 `activate_skill` 后，runtime 再加载该 skill 的正文并注入后续轮次的 system prompt。
+7. 模型按需调用 `activate_skill` 后，runtime 加载该 skill 的正文，并通过 tool observation 返回给模型；全局 system prompt 保持不变。
 8. `engine.Runner` 进入 loop。
 9. `planStep` 向模型请求结构化动作。
 10. `executeStep` 执行工具或返回最终答案。

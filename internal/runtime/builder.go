@@ -49,13 +49,18 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 			return nil, err
 		}
 		defs = append(defs, mcpDefs...)
+
+		readResourceTool := tools.NewMCPReadResourceTool(manager)
+		registry.MustRegister(readResourceTool)
+		defs = append(defs, readResourceTool.Definition())
 	}
 
 	skillLoader := skills.NewLoader(cfg.Skills.Dir)
 	rt := &Runtime{
-		tools:       defs,
-		mcpManager:  manager,
-		skillLoader: skillLoader,
+		tools:               defs,
+		maxObservationBytes: cfg.Engine.MaxObservationBytes,
+		mcpManager:          manager,
+		skillLoader:         skillLoader,
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)
@@ -82,6 +87,13 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	registry.MustRegister(fileRead)
 	registered = append(registered, fileRead.Definition())
 
+	fileSearch, err := tools.NewFileSearchTool(cfg.RootDir)
+	if err != nil {
+		return nil, err
+	}
+	registry.MustRegister(fileSearch)
+	registered = append(registered, fileSearch.Definition())
+
 	fileList, err := tools.NewFileListTool(cfg.RootDir)
 	if err != nil {
 		return nil, err
@@ -90,7 +102,14 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	registered = append(registered, fileList.Definition())
 
 	if cfg.WriteEnabled {
-		fileWrite, err := tools.NewFileWriteTool(cfg.RootDir)
+		filePatch, err := tools.NewFilePatchTool(cfg.RootDir)
+		if err != nil {
+			return nil, err
+		}
+		registry.MustRegister(filePatch)
+		registered = append(registered, filePatch.Definition())
+
+		fileWrite, err := tools.NewFileWriteTool(cfg.RootDir, cfg.WriteMaxBytes, cfg.WriteRequireOverwrite)
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +118,7 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	}
 
 	if cfg.DeleteEnabled {
-		fileDelete, err := tools.NewFileDeleteTool(cfg.RootDir)
+		fileDelete, err := tools.NewFileDeleteTool(cfg.RootDir, cfg.DeleteRequireConfirmation)
 		if err != nil {
 			return nil, err
 		}
@@ -108,7 +127,7 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	}
 
 	if cfg.ShellEnabled {
-		shell, err := tools.NewShellTool(cfg.RootDir)
+		shell, err := tools.NewShellTool(cfg.RootDir, cfg.ShellAllowedCommands)
 		if err != nil {
 			return nil, err
 		}

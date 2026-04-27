@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"happyagent/internal/llm"
@@ -13,9 +14,11 @@ import (
 type stubClient struct {
 	responses []llm.ChatResponse
 	index     int
+	requests  []llm.ChatRequest
 }
 
 func (c *stubClient) Chat(ctx context.Context, req llm.ChatRequest) (llm.ChatResponse, error) {
+	c.requests = append(c.requests, req)
 	if c.index >= len(c.responses) {
 		return llm.ChatResponse{}, nil
 	}
@@ -109,12 +112,7 @@ func TestRunnerExecutesMultipleToolCallsInSingleModelTurn(t *testing.T) {
 		SystemPrompt: "base prompt",
 		ToolDefs: []tools.Definition{
 			{Name: "activate_skill"},
-		},
-		AfterToolCall: func(ctx context.Context, toolName string, callErr error, input *RunInput) error {
-			if toolName == "activate_skill" {
-				input.ToolDefs = append(input.ToolDefs, tools.Definition{Name: "file_list"})
-			}
-			return nil
+			{Name: "file_list"},
 		},
 	}
 
@@ -136,5 +134,75 @@ func TestRunnerExecutesMultipleToolCallsInSingleModelTurn(t *testing.T) {
 	}
 	if result.Steps[0].Observation != "Activated skill file-inspector.\n\nREADME.md\ninternal/\nskills/" {
 		t.Fatalf("unexpected first step observation: %q", result.Steps[0].Observation)
+	}
+}
+
+func TestRunnerCarriesActivateSkillObservationIntoNextModelTurn(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "activate_skill"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: "Activated skill demo.\nPrompt:\nfocus on listing files"}, nil
+		},
+	})
+
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_activate",
+							ToolName:   "activate_skill",
+							Arguments:  json.RawMessage(`{"skill_names":["demo"]}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_activate",
+						ToolName:   "activate_skill",
+						Arguments:  json.RawMessage(`{"skill_names":["demo"]}`),
+					},
+				},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"done"}`,
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, registry, 4)
+	_, err := runner.Run(context.Background(), RunInput{
+		Input:        "inspect repo",
+		SystemPrompt: "base prompt",
+		ToolDefs: []tools.Definition{
+			{Name: "activate_skill"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("unexpected request count: %d", len(client.requests))
+	}
+
+	secondMessages := client.requests[1].Messages
+	if len(secondMessages) < 4 {
+		t.Fatalf("unexpected second request messages: %+v", secondMessages)
+	}
+
+	toolMessage := secondMessages[len(secondMessages)-1]
+	if toolMessage.Role != protocol.RoleTool {
+		t.Fatalf("expected tool message, got %+v", toolMessage)
+	}
+	if !strings.Contains(toolMessage.Content, "Activated skill demo.") || !strings.Contains(toolMessage.Content, "focus on listing files") {
+		t.Fatalf("unexpected tool observation: %+v", toolMessage)
 	}
 }

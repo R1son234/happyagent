@@ -10,7 +10,9 @@
 - 基于 `eino-ext` OpenAI ChatModel 的真实模型调用
 - 本地工具
   - `file_read`
+  - `file_search`
   - `file_list`
+  - `file_patch`
   - `file_write`
   - `file_delete`
   - `shell`
@@ -81,10 +83,22 @@ go build -o ./bin/mcpdemo ./cmd/mcpdemo
 
 3. 运行时就可以使用 `demo__repeat` 这个 MCP tool。MCP resource 读取能力已经在 runtime 里接好，但当前不再通过 skill frontmatter 自动注入。
 
-如果你只是偶尔临时跑一次，也可以继续用：
+也可以直接运行：
 
 ```bash
 go run ./cmd/happyagent "say hello in one sentence"
+```
+
+导出单次运行的结构化 trace：
+
+```bash
+./bin/happyagent --trace-json logs/demo/run-trace.json "say hello in one sentence"
+```
+
+运行仓库内置 smoke eval：
+
+```bash
+make eval-smoke
 ```
 
 ## 配置
@@ -100,17 +114,24 @@ go run ./cmd/happyagent "say hello in one sentence"
   },
   "engine": {
     "loop_max_steps": 8,
+    "max_observation_bytes": 8192,
     "run_timeout_seconds": 60,
     "system_prompt": "You are a local coding agent."
   },
   "tools": {
     "root_dir": ".",
     "shell_enabled": true,
+    "shell_allowed_commands": ["cat", "echo", "find", "git", "go", "grep", "head", "ls", "make", "pwd", "printf", "rg", "sed", "tail", "wc"],
     "write_enabled": true,
-    "delete_enabled": false
+    "write_max_bytes": 32768,
+    "write_require_overwrite": true,
+    "delete_enabled": false,
+    "delete_require_confirmation": true
   },
   "mcp": {
     "connect_timeout_seconds": 15,
+    "max_listed_resources": 100,
+    "max_resource_bytes": 8192,
     "servers": []
   },
   "skills": {
@@ -126,12 +147,19 @@ go run ./cmd/happyagent "say hello in one sentence"
 - `HAPPYAGENT_LLM_BASE_URL`
 - `HAPPYAGENT_SYSTEM_PROMPT`
 - `HAPPYAGENT_LOOP_MAX_STEPS`
+- `HAPPYAGENT_MAX_OBSERVATION_BYTES`
 - `HAPPYAGENT_RUN_TIMEOUT_SECONDS`
 - `HAPPYAGENT_ROOT_DIR`
 - `HAPPYAGENT_SHELL_ENABLED`
+- `HAPPYAGENT_SHELL_ALLOWED_COMMANDS`
 - `HAPPYAGENT_WRITE_ENABLED`
+- `HAPPYAGENT_WRITE_MAX_BYTES`
+- `HAPPYAGENT_WRITE_REQUIRE_OVERWRITE`
 - `HAPPYAGENT_DELETE_ENABLED`
+- `HAPPYAGENT_DELETE_REQUIRE_CONFIRMATION`
 - `HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS`
+- `HAPPYAGENT_MCP_MAX_LISTED_RESOURCES`
+- `HAPPYAGENT_MCP_MAX_RESOURCE_BYTES`
 - `HAPPYAGENT_SKILLS_DIR`
 
 ## Skill
@@ -188,4 +216,4 @@ description: Inspect local files with the built-in file tools.
 ## 下一步
 
 - 补 MCP 和 skill 的集成测试
-- 补单元测试和集成测试
+- 补受控审批流和更细粒度审计

@@ -6,17 +6,24 @@
   },
   "engine": {
     "loop_max_steps": 8,
+    "max_observation_bytes": 8192,
     "run_timeout_seconds": 60,
     "system_prompt": "You are a local coding agent. Reply with a JSON action. Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done, or {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool."
   },
   "tools": {
     "root_dir": ".",
     "shell_enabled": true,
+    "shell_allowed_commands": ["cat", "echo", "find", "git", "go", "grep", "head", "ls", "make", "pwd", "printf", "rg", "sed", "tail", "wc"],
     "write_enabled": true,
-    "delete_enabled": false
+    "write_max_bytes": 32768,
+    "write_require_overwrite": true,
+    "delete_enabled": false,
+    "delete_require_confirmation": true
   },
   "mcp": {
     "connect_timeout_seconds": 15,
+    "max_listed_resources": 100,
+    "max_resource_bytes": 8192,
     "servers": []
   },
   "skills": {

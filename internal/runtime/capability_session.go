@@ -22,13 +22,14 @@ func NewCapabilitySession(skillSession *SkillSession, mcpManager *mcp.Manager) *
 
 func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 	payload := struct {
-		Skills       []skills.Metadata  `json:"skills"`
-		ActiveSkills []string           `json:"active_skills"`
-		MCPResources []mcp.ResourceInfo `json:"mcp_resources"`
+		Skills                []skills.Metadata  `json:"skills"`
+		ActiveSkills          []string           `json:"active_skills"`
+		MCPResources          []mcp.ResourceInfo `json:"mcp_resources"`
+		MCPResourcesTotal     int                `json:"mcp_resources_total"`
+		MCPResourcesTruncated bool               `json:"mcp_resources_truncated"`
 	}{
 		Skills:       []skills.Metadata{},
 		ActiveSkills: []string{},
-		MCPResources: append([]mcp.ResourceInfo{}, s.listMCPResources()...),
 	}
 	if s.skillSession != nil {
 		payload.Skills = append([]skills.Metadata{}, s.skillSession.Catalog()...)
@@ -36,6 +37,10 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 			payload.ActiveSkills = append(payload.ActiveSkills, skill.Name)
 		}
 	}
+	resources, total, truncated := s.listMCPResources()
+	payload.MCPResources = append([]mcp.ResourceInfo{}, resources...)
+	payload.MCPResourcesTotal = total
+	payload.MCPResourcesTruncated = truncated
 
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
@@ -44,16 +49,16 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 	return string(data), nil
 }
 
-func (s *CapabilitySession) listMCPResources() []mcp.ResourceInfo {
+func (s *CapabilitySession) listMCPResources() ([]mcp.ResourceInfo, int, bool) {
 	if s.mcpManager == nil {
-		return nil
+		return nil, 0, false
 	}
-	resources := s.mcpManager.ListResources()
+	resources, total, truncated := s.mcpManager.ListResourcesPreview()
 	sort.Slice(resources, func(i, j int) bool {
 		if resources[i].ServerName == resources[j].ServerName {
 			return resources[i].URI < resources[j].URI
 		}
 		return resources[i].ServerName < resources[j].ServerName
 	})
-	return resources
+	return resources, total, truncated
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 )
 
+const defaultFileListMaxEntries = 200
+
 type FileListTool struct {
 	resolver *RootedPathResolver
 }
@@ -24,8 +26,8 @@ func NewFileListTool(root string) (*FileListTool, error) {
 func (t *FileListTool) Definition() Definition {
 	return Definition{
 		Name:        "file_list",
-		Description: "List direct entries in a directory under the configured root directory.",
-		InputSchema: `{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}`,
+		Description: "List direct entries in a directory under the configured root directory. Supports pagination to avoid oversized directory observations.",
+		InputSchema: `{"type":"object","properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0,"description":"Optional zero-based start offset."},"max_entries":{"type":"integer","minimum":1,"description":"Optional maximum number of entries to return. Defaults to 200."}},"required":["path"]}`,
 	}
 }
 
@@ -33,10 +35,15 @@ func (t *FileListTool) Execute(ctx context.Context, call Call) (Result, error) {
 	_ = ctx
 
 	var input struct {
-		Path string `json:"path"`
+		Path       string `json:"path"`
+		Offset     int    `json:"offset"`
+		MaxEntries int    `json:"max_entries"`
 	}
 	if err := json.Unmarshal(call.Arguments, &input); err != nil {
 		return Result{}, fmt.Errorf("decode file_list arguments: %w", err)
+	}
+	if input.Offset < 0 {
+		return Result{}, fmt.Errorf("file_list offset must be greater than or equal to zero")
 	}
 
 	if input.Path == "" {
@@ -63,5 +70,24 @@ func (t *FileListTool) Execute(ctx context.Context, call Call) (Result, error) {
 	}
 	sort.Strings(names)
 
-	return Result{Output: strings.Join(names, "\n")}, nil
+	maxEntries := input.MaxEntries
+	if maxEntries <= 0 {
+		maxEntries = defaultFileListMaxEntries
+	}
+	if input.Offset >= len(names) {
+		return Result{Output: "(no entries)"}, nil
+	}
+
+	end := input.Offset + maxEntries
+	if end > len(names) {
+		end = len(names)
+	}
+
+	selected := names[input.Offset:end]
+	output := strings.Join(selected, "\n")
+	if end < len(names) {
+		output += fmt.Sprintf("\n[file_list truncated: showing entries %d-%d of %d, use offset to continue]", input.Offset+1, end, len(names))
+	}
+
+	return Result{Output: output}, nil
 }

@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"happyagent/internal/config"
 	"happyagent/internal/tools"
@@ -16,15 +17,19 @@ type ResourceInfo struct {
 }
 
 type Manager struct {
-	clients   map[string]*Client
-	resources map[string]ResourceInfo
-	tools     []tools.Tool
+	clients            map[string]*Client
+	maxListedResources int
+	resources          map[string]ResourceInfo
+	tools              []tools.Tool
+	maxResourceBytes   int
 }
 
 func NewManager(ctx context.Context, cfg config.MCPConfig) (*Manager, error) {
 	manager := &Manager{
-		clients:   make(map[string]*Client),
-		resources: make(map[string]ResourceInfo),
+		clients:            make(map[string]*Client),
+		maxListedResources: cfg.MaxListedResources,
+		resources:          make(map[string]ResourceInfo),
+		maxResourceBytes:   cfg.MaxResourceBytes,
 	}
 
 	for _, server := range cfg.Servers {
@@ -100,6 +105,10 @@ func (m *Manager) RegisterTools(registry *tools.Registry) ([]tools.Definition, e
 }
 
 func (m *Manager) ReadResource(ctx context.Context, uri string) (string, error) {
+	return m.ReadResourcePreview(ctx, uri, 0, 0)
+}
+
+func (m *Manager) ReadResourcePreview(ctx context.Context, uri string, offsetBytes int, maxBytes int) (string, error) {
 	resource, ok := m.resources[uri]
 	if !ok {
 		return "", fmt.Errorf("mcp resource %q is not registered", uri)
@@ -108,7 +117,11 @@ func (m *Manager) ReadResource(ctx context.Context, uri string) (string, error) 
 	if !ok {
 		return "", fmt.Errorf("mcp server %q for resource %q is not connected", resource.ServerName, uri)
 	}
-	return ReadResourceText(ctx, client, uri)
+	content, err := ReadResourceText(ctx, client, uri)
+	if err != nil {
+		return "", err
+	}
+	return previewResourceText(content, offsetBytes, maxBytes, m.maxResourceBytes), nil
 }
 
 func (m *Manager) ListResources() []ResourceInfo {
@@ -117,6 +130,21 @@ func (m *Manager) ListResources() []ResourceInfo {
 		out = append(out, resource)
 	}
 	return out
+}
+
+func (m *Manager) ListResourcesPreview() ([]ResourceInfo, int, bool) {
+	resources := m.ListResources()
+	sort.Slice(resources, func(i, j int) bool {
+		if resources[i].ServerName == resources[j].ServerName {
+			return resources[i].URI < resources[j].URI
+		}
+		return resources[i].ServerName < resources[j].ServerName
+	})
+	total := len(resources)
+	if m.maxListedResources <= 0 || total <= m.maxListedResources {
+		return resources, total, false
+	}
+	return append([]ResourceInfo(nil), resources[:m.maxListedResources]...), total, true
 }
 
 func (m *Manager) HasResource(uri string) bool {

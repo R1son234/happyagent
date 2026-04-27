@@ -18,6 +18,7 @@ type RunRequest struct {
 type RunResult struct {
 	Output string
 	Steps  []engine.StepRecord
+	Trace  engine.RunTrace
 }
 
 type Runtime struct {
@@ -42,9 +43,10 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	result, err := r.runner.Run(ctx, engine.RunInput{
-		Input:        req.Input,
-		SystemPrompt: skillSession.SystemPrompt(),
-		ToolDefs:     toolDefs,
+		Input:               req.Input,
+		SystemPrompt:        skillSession.SystemPrompt(),
+		ToolDefs:            toolDefs,
+		MaxObservationBytes: r.maxObservationBytes,
 	})
 	if err != nil {
 		return RunResult{}, err
@@ -53,6 +55,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	return RunResult{
 		Output: result.Output,
 		Steps:  result.Steps,
+		Trace:  result.Trace,
 	}, nil
 }
 

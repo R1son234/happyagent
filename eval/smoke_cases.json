@@ -1,0 +1,30 @@
+{
+  "name": "smoke",
+  "description": "Baseline local coding-agent smoke suite for resume demos and regression checks.",
+  "cases": [
+    {
+      "name": "skill-summary",
+      "prompt": "First call list_capabilities, then activate the file-inspector skill, then summarize what the skill is for in Chinese and mention 文件.",
+      "timeout_seconds": 60,
+      "expected_output_contains": ["文件"],
+      "required_tools": ["list_capabilities", "activate_skill"],
+      "max_steps": 4
+    },
+    {
+      "name": "search-read-readme",
+      "prompt": "Search README.md for the shell tool notes, read the matching lines, then answer with one Chinese sentence that includes argv.",
+      "timeout_seconds": 60,
+      "expected_output_contains": ["argv"],
+      "required_tools": ["file_search", "file_read"],
+      "max_steps": 4
+    },
+    {
+      "name": "repo-list-summary",
+      "prompt": "Call file_list on the repository root before answering, then summarize this repository in Chinese and mention happyagent.",
+      "timeout_seconds": 60,
+      "expected_output_contains": ["happyagent"],
+      "required_tools": ["file_list"],
+      "max_steps": 4
+    }
+  ]
+}

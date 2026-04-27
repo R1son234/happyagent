@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"happyagent/internal/llm"
 	"happyagent/internal/protocol"
@@ -18,14 +19,16 @@ type loopRunner struct {
 
 const actionInvalidResponse = "invalid_response"
 const invalidResponseMessage = "format error: return exactly one JSON action object or native tool call response; do not answer with plain text, markdown, or explanations"
+const defaultMaxObservationBytes = 8 * 1024
 
-func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopState) ([]Action, error) {
+func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopState) (PlanStepResult, error) {
+	startedAt := time.Now()
 	resp, err := r.client.Chat(ctx, llm.ChatRequest{
 		Messages: BuildMessages(input, *state),
 		Tools:    BuildToolSpecs(input.ToolDefs),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("chat with model: %w", err)
+		return PlanStepResult{}, fmt.Errorf("chat with model: %w", err)
 	}
 
 	var actions []Action
@@ -50,7 +53,11 @@ func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopSt
 		Actions:          append([]Action(nil), actions...),
 	})
 
-	return actions, nil
+	return PlanStepResult{
+		Actions:  actions,
+		Usage:    resp.Usage,
+		Duration: time.Since(startedAt),
+	}, nil
 }
 
 func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *RunInput, actions []Action) (StepResult, error) {
@@ -68,11 +75,12 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		}, nil
 	}
 	if len(actions) == 1 && actions[0].Type == actionInvalidResponse {
+		observation := truncateObservation(actions[0].Content, input.MaxObservationBytes)
 		state.Messages = append(state.Messages, MessageEnvelope{
 			Role:    protocol.RoleUser,
-			Content: actions[0].Content,
+			Content: observation,
 		})
-		return StepResult{Observation: actions[0].Content}, nil
+		return StepResult{Observation: observation}, nil
 	}
 
 	observations := make([]string, 0, len(actions))
@@ -94,7 +102,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		observations = append(observations, observation)
 	}
 
-	return StepResult{Observation: strings.Join(observations, "\n\n")}, nil
+	return StepResult{Observation: truncateObservation(strings.Join(observations, "\n\n"), input.MaxObservationBytes)}, nil
 }
 
 func validateStepActions(actions []Action) error {
@@ -115,7 +123,7 @@ func validateStepActions(actions []Action) error {
 
 func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action) (string, error) {
 	if !toolAllowed(input.ToolDefs, action.ToolName) {
-		observation := "tool error: tool " + action.ToolName + " is not available in the current context"
+		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		return observation, nil
 	}
@@ -125,7 +133,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		Arguments: action.Arguments,
 	})
 	if err != nil {
-		observation := "tool error: " + err.Error()
+		observation := truncateObservation("tool error: "+err.Error(), input.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		return observation, nil
 	}
@@ -134,9 +142,9 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			return "", err
 		}
 	}
-
-	appendToolObservation(state, action, result.Output)
-	return result.Output, nil
+	observation := truncateObservation(result.Output, input.MaxObservationBytes)
+	appendToolObservation(state, action, observation)
+	return observation, nil
 }
 
 func appendToolObservation(state *LoopState, action Action, observation string) {
@@ -155,4 +163,17 @@ func toolAllowed(defs []tools.Definition, name string) bool {
 		}
 	}
 	return false
+}
+
+func truncateObservation(observation string, maxBytes int) string {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxObservationBytes
+	}
+	if len(observation) <= maxBytes {
+		return observation
+	}
+	if maxBytes <= len("\n...[observation truncated]") {
+		return observation[:maxBytes]
+	}
+	return observation[:maxBytes-len("\n...[observation truncated]")] + "\n...[observation truncated]"
 }
