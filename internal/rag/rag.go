@@ -9,7 +9,8 @@ import (
 )
 
 type Indexer struct {
-	root string
+	root  string
+	paths []string
 }
 
 type BuildResult struct {
@@ -24,9 +25,31 @@ func NewIndexer(root string) *Indexer {
 	return &Indexer{root: root}
 }
 
+func NewScopedIndexer(root string, paths []string) *Indexer {
+	if strings.TrimSpace(root) == "" {
+		return nil
+	}
+	cleaned := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		cleaned = append(cleaned, filepath.Clean(path))
+	}
+	return &Indexer{root: root, paths: cleaned}
+}
+
 func (i *Indexer) Search(query string) (BuildResult, error) {
+	return i.SearchWithLimit(query, 3)
+}
+
+func (i *Indexer) SearchWithLimit(query string, maxResults int) (BuildResult, error) {
 	if i == nil || strings.TrimSpace(query) == "" {
 		return BuildResult{}, nil
+	}
+	if maxResults <= 0 {
+		maxResults = 3
 	}
 
 	terms := tokenize(query)
@@ -35,42 +58,51 @@ func (i *Indexer) Search(query string) (BuildResult, error) {
 	}
 
 	var matches []string
-	err := filepath.WalkDir(i.root, func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			name := d.Name()
-			if name == ".git" || name == "bin" || name == "logs" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !isSupportedFile(path) {
-			return nil
-		}
-		data, err := os.ReadFile(path)
+	searchPaths := i.paths
+	if len(searchPaths) == 0 {
+		searchPaths = []string{"."}
+	}
+	for _, searchPath := range searchPaths {
+		resolved, err := resolveSearchPath(i.root, searchPath)
 		if err != nil {
-			return nil
+			return BuildResult{}, err
 		}
-		content := string(data)
-		score := matchScore(content, terms)
-		if score == 0 {
-			return nil
+		info, err := os.Stat(resolved)
+		if os.IsNotExist(err) {
+			continue
 		}
-		rel, _ := filepath.Rel(i.root, path)
-		matches = append(matches, fmt.Sprintf("%03d|%s|%s", score, rel, extractSnippet(content, terms)))
-		return nil
-	})
-	if err != nil {
-		return BuildResult{}, err
+		if err != nil {
+			return BuildResult{}, err
+		}
+		if !info.IsDir() {
+			if err := collectFileMatch(i.root, resolved, terms, &matches); err != nil {
+				return BuildResult{}, err
+			}
+			continue
+		}
+		err = filepath.WalkDir(resolved, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() {
+				name := d.Name()
+				if name == ".git" || name == "bin" || name == "logs" {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			return collectFileMatch(i.root, path, terms, &matches)
+		})
+		if err != nil {
+			return BuildResult{}, err
+		}
 	}
 	if len(matches) == 0 {
 		return BuildResult{}, nil
 	}
 	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
 
-	limit := 3
+	limit := maxResults
 	if len(matches) < limit {
 		limit = len(matches)
 	}
@@ -93,6 +125,40 @@ func (i *Indexer) Search(query string) (BuildResult, error) {
 		Text:      strings.TrimSpace(builder.String()),
 		Citations: citations,
 	}, nil
+}
+
+func resolveSearchPath(root string, path string) (string, error) {
+	target := path
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	clean := filepath.Clean(target)
+	rel, err := filepath.Rel(root, clean)
+	if err != nil {
+		return "", fmt.Errorf("calculate relative path for %q: %w", clean, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("path %q escapes root %q", path, root)
+	}
+	return clean, nil
+}
+
+func collectFileMatch(root string, path string, terms []string, matches *[]string) error {
+	if !isSupportedFile(path) {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	content := string(data)
+	score := matchScore(content, terms)
+	if score == 0 {
+		return nil
+	}
+	rel, _ := filepath.Rel(root, path)
+	*matches = append(*matches, fmt.Sprintf("%03d|%s|%s", score, rel, extractSnippet(content, terms)))
+	return nil
 }
 
 func tokenize(query string) []string {

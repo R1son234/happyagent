@@ -12,7 +12,6 @@ import (
 	"happyagent/internal/observe"
 	"happyagent/internal/policy"
 	"happyagent/internal/profile"
-	"happyagent/internal/rag"
 	"happyagent/internal/skills"
 	"happyagent/internal/tools"
 	"happyagent/internal/validator"
@@ -43,7 +42,6 @@ type Runtime struct {
 	mcpManager          *mcp.Manager
 	skillLoader         *skills.Loader
 	profileDir          string
-	ragIndexer          *rag.Indexer
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
@@ -73,6 +71,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	result, err := r.runner.Run(ctx, engine.RunInput{
 		Input:               req.Input,
 		SystemPrompt:        skillSession.SystemPrompt(),
+		RuntimeContext:      prepared.runtimeContext,
 		ToolDefs:            toolDefs,
 		MaxObservationBytes: r.maxObservationBytes,
 		BeforeToolCall:      prepared.beforeToolCall(recorder),
@@ -127,12 +126,13 @@ func validateSkillDir(dir string) error {
 }
 
 type preparedRun struct {
-	systemPrompt string
-	profileName  string
-	toolDefs     []tools.Definition
-	skillLoader  *skills.Loader
-	outputSchema string
-	policy       *policy.Engine
+	systemPrompt   string
+	runtimeContext string
+	profileName    string
+	toolDefs       []tools.Definition
+	skillLoader    *skills.Loader
+	outputSchema   string
+	policy         *policy.Engine
 }
 
 func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
@@ -144,7 +144,7 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		policy:       policy.New(req.ApprovedTools, nil),
 	}
 	if req.ProfileName == "" {
-		prepared.systemPrompt = assemblePrompt(prepared.systemPrompt, memory.Build(req.History, memory.Strategy{}), rag.BuildResult{})
+		prepared.runtimeContext = assembleRuntimeContext(memory.Build(req.History, memory.Strategy{}))
 		return prepared, nil
 	}
 
@@ -164,11 +164,7 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		}
 	}
 	memoryResult := memory.Build(req.History, parseMemoryStrategy(resolved.MemoryStrategy))
-	ragResult := rag.BuildResult{}
-	if r.ragIndexer != nil {
-		ragResult, _ = r.ragIndexer.Search(req.Input)
-	}
-	prepared.systemPrompt = assemblePrompt(prepared.systemPrompt, memoryResult, ragResult)
+	prepared.runtimeContext = assembleRuntimeContext(memoryResult)
 	return prepared, nil
 }
 
@@ -231,13 +227,10 @@ func parseMemoryStrategy(raw json.RawMessage) memory.Strategy {
 	return strategy
 }
 
-func assemblePrompt(base string, memoryResult memory.BuildResult, ragResult rag.BuildResult) string {
-	parts := []string{strings.TrimSpace(base)}
+func assembleRuntimeContext(memoryResult memory.BuildResult) string {
+	parts := make([]string, 0, 1)
 	if strings.TrimSpace(memoryResult.Text) != "" {
 		parts = append(parts, memoryResult.Text)
-	}
-	if strings.TrimSpace(ragResult.Text) != "" {
-		parts = append(parts, ragResult.Text)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }

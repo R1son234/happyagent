@@ -134,7 +134,7 @@ func TestRunReturnsResolvedProfileMetadata(t *testing.T) {
 	}
 }
 
-func TestPrepareRunInjectsMemoryIntoPrompt(t *testing.T) {
+func TestPrepareRunAddsMemoryToRuntimeContext(t *testing.T) {
 	root := t.TempDir()
 	profilesDir := filepath.Join(root, "profiles")
 	writeTestProfile(t, profilesDir, "general-assistant", `{
@@ -166,8 +166,45 @@ func TestPrepareRunInjectsMemoryIntoPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("prepareRun() error = %v", err)
 	}
-	if !strings.Contains(prepared.systemPrompt, "Recent session memory") {
-		t.Fatalf("expected memory in prompt: %q", prepared.systemPrompt)
+	if prepared.systemPrompt != "general prompt" {
+		t.Fatalf("unexpected system prompt: %q", prepared.systemPrompt)
+	}
+	if !strings.Contains(prepared.runtimeContext, "Recent session memory") {
+		t.Fatalf("expected memory in runtime context: %q", prepared.runtimeContext)
+	}
+}
+
+func TestPrepareRunDoesNotInjectRAGIntoPrompt(t *testing.T) {
+	root := t.TempDir()
+	profilesDir := filepath.Join(root, "profiles")
+	writeTestProfile(t, profilesDir, "general-assistant", `{
+  "name": "general-assistant",
+  "system_prompt": "general prompt",
+  "enabled_tools": ["final_answer", "search_docs"],
+  "enabled_skills": []
+}`)
+
+	rt := &Runtime{
+		tools: []tools.Definition{
+			{Name: tools.FinalAnswerToolName},
+			{Name: tools.SearchDocsToolName},
+		},
+		skillLoader: skills.NewLoader(filepath.Join(root, "skills")),
+		profileDir:  profilesDir,
+	}
+
+	prepared, err := rt.prepareRun(RunRequest{
+		Input:       "architecture references",
+		ProfileName: "general-assistant",
+	})
+	if err != nil {
+		t.Fatalf("prepareRun() error = %v", err)
+	}
+	if strings.Contains(prepared.systemPrompt, "Relevant local references") {
+		t.Fatalf("expected RAG content to stay out of system prompt: %q", prepared.systemPrompt)
+	}
+	if len(prepared.toolDefs) != 2 || prepared.toolDefs[1].Name != tools.SearchDocsToolName {
+		t.Fatalf("expected search_docs to remain available as a tool: %+v", prepared.toolDefs)
 	}
 }
 

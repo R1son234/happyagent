@@ -9,7 +9,6 @@ import (
 	"happyagent/internal/engine"
 	"happyagent/internal/llm"
 	"happyagent/internal/mcp"
-	"happyagent/internal/rag"
 	"happyagent/internal/skills"
 	"happyagent/internal/tools"
 )
@@ -72,7 +71,6 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		mcpManager:          manager,
 		skillLoader:         skillLoader,
 		profileDir:          b.profileDir,
-		ragIndexer:          rag.NewIndexer(cfg.Tools.RootDir),
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)
@@ -105,6 +103,13 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	}
 	registry.MustRegister(fileSearch)
 	registered = append(registered, fileSearch.Definition())
+
+	searchDocs, err := tools.NewSearchDocsTool(cfg.RootDir)
+	if err != nil {
+		return nil, err
+	}
+	registry.MustRegister(searchDocs)
+	registered = append(registered, searchDocs.Definition())
 
 	fileList, err := tools.NewFileListTool(cfg.RootDir)
 	if err != nil {

@@ -6,6 +6,7 @@
     "final_answer",
     "file_read",
     "file_search",
+    "search_docs",
     "file_list",
     "file_patch",
     "file_write",

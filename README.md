@@ -11,6 +11,7 @@
 - 本地工具
   - `file_read`
   - `file_search`
+  - `search_docs`
   - `file_list`
   - `file_patch`
   - `file_write`
@@ -34,8 +35,8 @@
   - 基础 metrics 汇总
   - 危险工具审批控制
 - Memory / RAG / Validation
-  - profile 驱动的短期 session memory
-  - 轻量本地文档检索注入
+  - profile 驱动的短期 session memory，作为 runtime context 传入，不拼进 system prompt
+  - 通过 `search_docs` 按需检索本地文档，不预注入 system prompt
   - profile 输出 schema 校验
 - 激活结果会作为 tool observation 返回给模型
 - 单 `Runner` + 内部 `plan step` / `execute step` 分层

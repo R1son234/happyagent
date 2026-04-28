@@ -12,6 +12,7 @@ import (
 type RunInput struct {
 	Input               string
 	SystemPrompt        string
+	RuntimeContext      string
 	ToolDefs            []tools.Definition
 	MaxObservationBytes int
 	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
