@@ -2,3 +2,4 @@ happyagent.local.json
 .DS_Store
 bin/
 logs/
+.happyagent/
