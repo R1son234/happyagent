@@ -24,6 +24,7 @@ func TestRunSuiteMarksSuccessfulCase(t *testing.T) {
 			{
 				Name:                   "list-files",
 				Prompt:                 "list files",
+				Profile:                "general-assistant",
 				ExpectedOutputContains: []string{"happyagent"},
 				RequiredTools:          []string{"file_list"},
 				MaxSteps:               3,
@@ -33,7 +34,8 @@ func TestRunSuiteMarksSuccessfulCase(t *testing.T) {
 
 	result, err := RunSuite(context.Background(), stubRunner{
 		result: RunResult{
-			Output: "happyagent repo summary",
+			Output:      "happyagent repo summary",
+			ProfileName: "general-assistant",
 			Steps: []engine.StepRecord{
 				{
 					Index: 1,
@@ -68,6 +70,7 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 			{
 				Name:                   "search-read",
 				Prompt:                 "search read",
+				Profile:                "career-copilot",
 				ExpectedOutputContains: []string{"argv"},
 				RequiredTools:          []string{"file_search", "file_read"},
 			},
@@ -76,7 +79,8 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 
 	result, err := RunSuite(context.Background(), stubRunner{
 		result: RunResult{
-			Output: "summary without keyword",
+			Output:      "summary without keyword",
+			ProfileName: "career-copilot",
 			Steps: []engine.StepRecord{
 				{
 					Index: 1,
@@ -107,5 +111,8 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 	}
 	if len(caseResult.MissingTools) != 1 || caseResult.MissingTools[0] != "file_read" {
 		t.Fatalf("unexpected missing tools: %+v", caseResult)
+	}
+	if caseResult.Profile != "career-copilot" {
+		t.Fatalf("unexpected profile: %+v", caseResult)
 	}
 }

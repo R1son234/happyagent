@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"happyagent/internal/engine"
+	"happyagent/internal/observe"
 	"happyagent/internal/protocol"
 	"happyagent/internal/report"
 )
@@ -22,6 +23,7 @@ type Suite struct {
 type Case struct {
 	Name                   string   `json:"name"`
 	Prompt                 string   `json:"prompt"`
+	Profile                string   `json:"profile,omitempty"`
 	SystemPrompt           string   `json:"system_prompt,omitempty"`
 	TimeoutSeconds         int      `json:"timeout_seconds,omitempty"`
 	ExpectedOutputContains []string `json:"expected_output_contains,omitempty"`
@@ -36,12 +38,14 @@ type Runner interface {
 type RunRequest struct {
 	Input        string
 	SystemPrompt string
+	ProfileName  string
 }
 
 type RunResult struct {
-	Output string
-	Steps  []engine.StepRecord
-	Trace  engine.RunTrace
+	Output      string
+	Steps       []engine.StepRecord
+	Trace       engine.RunTrace
+	ProfileName string
 }
 
 type SuiteResult struct {
@@ -59,13 +63,16 @@ type SuiteResult struct {
 	CompletionTokens  int            `json:"completion_tokens"`
 	TotalTokens       int            `json:"total_tokens"`
 	ToolCallsByName   map[string]int `json:"tool_calls_by_name"`
+	ErrorCategories   map[string]int `json:"error_categories"`
 	Results           []CaseResult   `json:"results"`
 }
 
 type CaseResult struct {
 	Name           string              `json:"name"`
+	Profile        string              `json:"profile,omitempty"`
 	Success        bool                `json:"success"`
 	Error          string              `json:"error,omitempty"`
+	ErrorCategory  string              `json:"error_category,omitempty"`
 	FailureReasons []string            `json:"failure_reasons,omitempty"`
 	MissingOutput  []string            `json:"missing_output,omitempty"`
 	MissingTools   []string            `json:"missing_tools,omitempty"`
@@ -100,6 +107,7 @@ func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemProm
 		Description:     suite.Description,
 		CaseCount:       len(suite.Cases),
 		ToolCallsByName: map[string]int{},
+		ErrorCategories: map[string]int{},
 	}
 
 	var totalSteps int
@@ -113,6 +121,9 @@ func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemProm
 			summary.PassedCount++
 		} else {
 			summary.FailedCount++
+			if result.ErrorCategory != "" {
+				summary.ErrorCategories[result.ErrorCategory]++
+			}
 		}
 
 		totalSteps += result.Trace.StepCount
@@ -144,12 +155,15 @@ func BuildCaseReport(model string, testCase Case, defaultSystemPrompt string, re
 		systemPrompt = testCase.SystemPrompt
 	}
 	return report.RunReport{
-		Model:        model,
-		Input:        testCase.Prompt,
-		Output:       result.Output,
-		Trace:        result.Trace,
-		Steps:        result.Steps,
-		SystemPrompt: systemPrompt,
+		Profile:       result.Profile,
+		Model:         model,
+		Input:         testCase.Prompt,
+		Output:        result.Output,
+		Status:        map[bool]string{true: "completed", false: "failed"}[result.Success],
+		ErrorCategory: result.ErrorCategory,
+		Trace:         result.Trace,
+		Steps:         result.Steps,
+		SystemPrompt:  systemPrompt,
 	}
 }
 
@@ -191,12 +205,16 @@ func runCase(ctx context.Context, runner Runner, testCase Case, defaultSystemPro
 	runResult, err := runner.Run(caseCtx, RunRequest{
 		Input:        testCase.Prompt,
 		SystemPrompt: systemPrompt,
+		ProfileName:  testCase.Profile,
 	})
 	if err != nil {
+		errorCategory := observe.ClassifyError(err)
 		return CaseResult{
 			Name:           testCase.Name,
+			Profile:        testCase.Profile,
 			Success:        false,
 			Error:          err.Error(),
+			ErrorCategory:  errorCategory,
 			FailureReasons: []string{"run_error"},
 			DurationMillis: time.Since(startedAt).Milliseconds(),
 		}
@@ -204,6 +222,7 @@ func runCase(ctx context.Context, runner Runner, testCase Case, defaultSystemPro
 
 	caseResult := CaseResult{
 		Name:           testCase.Name,
+		Profile:        runResult.ProfileName,
 		Success:        true,
 		Output:         runResult.Output,
 		Trace:          runResult.Trace,

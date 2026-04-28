@@ -1,7 +1,7 @@
 BINARY := bin/happyagent
 EVAL_BINARY := bin/happyagent-eval
 
-.PHONY: build build-eval run check test eval-smoke
+.PHONY: build build-eval run check test eval-smoke eval-profiles
 
 build:
 	mkdir -p bin
@@ -22,3 +22,6 @@ test:
 
 eval-smoke: build-eval
 	./$(EVAL_BINARY) -cases eval/smoke_cases.json -output logs/eval/smoke-report.json -trace-dir logs/eval/smoke-traces
+
+eval-profiles: build-eval
+	./$(EVAL_BINARY) -cases eval/profile_cases.json -output logs/eval/profile-report.json -trace-dir logs/eval/profile-traces

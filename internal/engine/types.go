@@ -14,7 +14,9 @@ type RunInput struct {
 	SystemPrompt        string
 	ToolDefs            []tools.Definition
 	MaxObservationBytes int
+	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
 	AfterToolCall       func(ctx context.Context, toolName string, callErr error, input *RunInput) error
+	ValidateFinalAnswer func(content string) error
 }
 
 type RunResult struct {
@@ -52,15 +54,17 @@ type PlanStepResult struct {
 }
 
 type RunTrace struct {
-	StartedAt        time.Time      `json:"started_at"`
-	FinishedAt       time.Time      `json:"finished_at"`
-	DurationMillis   int64          `json:"duration_millis"`
-	StepCount        int            `json:"step_count"`
-	ToolCallCount    int            `json:"tool_call_count"`
-	ToolCallsByName  map[string]int `json:"tool_calls_by_name"`
-	PromptTokens     int            `json:"prompt_tokens"`
-	CompletionTokens int            `json:"completion_tokens"`
-	TotalTokens      int            `json:"total_tokens"`
+	StartedAt         time.Time      `json:"started_at"`
+	FinishedAt        time.Time      `json:"finished_at"`
+	DurationMillis    int64          `json:"duration_millis"`
+	TerminationReason string         `json:"termination_reason,omitempty"`
+	ErrorCategory     string         `json:"error_category,omitempty"`
+	StepCount         int            `json:"step_count"`
+	ToolCallCount     int            `json:"tool_call_count"`
+	ToolCallsByName   map[string]int `json:"tool_calls_by_name"`
+	PromptTokens      int            `json:"prompt_tokens"`
+	CompletionTokens  int            `json:"completion_tokens"`
+	TotalTokens       int            `json:"total_tokens"`
 }
 
 type MessageEnvelope struct {

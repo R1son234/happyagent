@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"happyagent/internal/config"
 	"happyagent/internal/eval"
@@ -48,10 +47,7 @@ func main() {
 	}()
 
 	runner := runtimeEvalAdapter{runtime: rt}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
-	defer cancel()
-
-	result, err := eval.RunSuite(ctx, runner, suite, cfg.Engine.SystemPrompt)
+	result, err := eval.RunSuite(context.Background(), runner, suite, cfg.Engine.SystemPrompt)
 	if err != nil {
 		exitf("run eval suite: %v", err)
 	}
@@ -87,14 +83,16 @@ func (a runtimeEvalAdapter) Run(ctx context.Context, req eval.RunRequest) (eval.
 	result, err := a.runtime.Run(ctx, runtime.RunRequest{
 		Input:        req.Input,
 		SystemPrompt: req.SystemPrompt,
+		ProfileName:  req.ProfileName,
 	})
 	if err != nil {
 		return eval.RunResult{}, err
 	}
 	return eval.RunResult{
-		Output: result.Output,
-		Steps:  result.Steps,
-		Trace:  result.Trace,
+		Output:      result.Output,
+		Steps:       result.Steps,
+		Trace:       result.Trace,
+		ProfileName: result.ProfileName,
 	}, nil
 }
 

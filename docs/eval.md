@@ -18,6 +18,7 @@
 每个 case 都包含：
 
 - 固定 prompt
+- 可选 profile
 - 超时时间
 - 期望输出关键字
 - 必须经过的工具
@@ -47,6 +48,12 @@ make build-eval
 make eval-smoke
 ```
 
+运行 profile-aware suite：
+
+```bash
+make eval-profiles
+```
+
 ## Outputs
 
 评测会产生两类结果：
@@ -59,8 +66,10 @@ make eval-smoke
    - `average_tool_calls`
    - `average_duration_millis`
    - token 汇总
+   - `error_categories`
 
 2. case 级 trace
+   - profile
    - 输入 prompt
    - 最终输出
    - 每一步 actions
@@ -68,6 +77,7 @@ make eval-smoke
    - 单步 planning / execution 耗时
    - token usage
    - tool call 统计
+   - 错误分类
 
 ## Single Run Trace
 

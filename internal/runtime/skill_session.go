@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"sort"
 
 	"happyagent/internal/skills"
 	"happyagent/internal/tools"
@@ -95,4 +96,17 @@ func (s *SkillSession) ActiveSkills() []skills.ActivatedSkill {
 		active = append(active, s.activeByName[name])
 	}
 	return active
+}
+
+func (s *SkillSession) AvailableToolNames() ([]string, error) {
+	defs, err := s.ToolDefs()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		names = append(names, def.Name)
+	}
+	sort.Strings(names)
+	return names, nil
 }

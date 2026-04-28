@@ -100,6 +100,7 @@ func TestCapabilitySessionJSON(t *testing.T) {
 
 	session, err := NewSkillSession(newTestLoader(dir), "base prompt", []tools.Definition{
 		{Name: "file_list"},
+		{Name: "mcp_read_resource"},
 	})
 	if err != nil {
 		t.Fatalf("NewSkillSession() error = %v", err)
@@ -110,6 +111,9 @@ func TestCapabilitySessionJSON(t *testing.T) {
 		t.Fatalf("CapabilitiesJSON() error = %v", err)
 	}
 	if !strings.Contains(output, `"name": "demo"`) || !strings.Contains(output, `"active_skills": []`) || !strings.Contains(output, `"mcp_resources_total": 0`) {
+		t.Fatalf("unexpected capabilities json: %q", output)
+	}
+	if !strings.Contains(output, `"available_tools": [`) || !strings.Contains(output, `"mcp_read_resource"`) || !strings.Contains(output, `"mcp_resource_read_supported": true`) {
 		t.Fatalf("unexpected capabilities json: %q", output)
 	}
 }
@@ -130,6 +134,9 @@ func TestCapabilitySessionWithoutMCPMarksListAsNotTruncated(t *testing.T) {
 		t.Fatalf("CapabilitiesJSON() error = %v", err)
 	}
 	if !strings.Contains(output, `"mcp_resources_truncated": false`) {
+		t.Fatalf("unexpected capabilities json: %q", output)
+	}
+	if !strings.Contains(output, `"mcp_resource_read_supported": false`) {
 		t.Fatalf("unexpected capabilities json: %q", output)
 	}
 }

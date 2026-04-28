@@ -1,0 +1,23 @@
+{
+  "name": "general-assistant",
+  "description": "General repository and local file assistant profile.",
+  "system_prompt": "You are a local coding agent. Reply with exactly one JSON action object and no extra text. When you need to act, respond with {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} using only tool names that appear in the provided tool list.",
+  "enabled_tools": [
+    "final_answer",
+    "file_read",
+    "file_search",
+    "file_list",
+    "file_patch",
+    "file_write",
+    "shell",
+    "mcp_read_resource"
+  ],
+  "enabled_skills": [
+    "file-inspector"
+  ],
+  "memory_strategy": {
+    "enabled": true,
+    "max_turns": 6,
+    "max_chars": 2000
+  }
+}

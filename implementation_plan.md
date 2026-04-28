@@ -1141,3 +1141,641 @@ MCP 和 Skill 文件建议在本地主链路稳定后再创建，避免空壳代
 - 至少一组固定任务集可重复执行并给出统计结果。
 
 只有达到这组标准，`happyagent` 才能从“有潜力的 Agent Runtime 原型”升级到“适合写进简历、并能经得起面试追问的 AI 工程项目”。
+
+## 19. 面向求职的后续迭代方案
+
+本节不再讨论首版最小闭环，而是聚焦如何把 `happyagent` 从“可运行原型”补成“适合写进 AI 岗简历的工程项目”。
+
+目标不是堆砌功能，而是围绕岗位高频要求补齐三类能力：
+
+1. 工程化硬度
+2. AI 核心能力闭环
+3. 量化评测与效果证明
+
+后续迭代应始终围绕以下项目定位展开：
+
+- 项目定位：自研 Go Agent Runtime
+- 核心标签：Tool Use / MCP / Skill / Memory / RAG / Eval / Observability / Safety
+- 展示重点：可扩展架构、稳定性控制、可观测性和量化结果
+
+### 19.1 迭代原则
+
+- 优先补“能在简历中形成强表述”的能力，而不是泛功能。
+- 优先补“工程化闭环”，而不是只补单点 AI 机制。
+- 每一阶段都必须产出可演示、可度量、可写入 README 和简历的结果。
+- 所有新增能力都要尽量复用现有 `runtime / engine / tools / mcp / eval` 分层，不推翻现有结构。
+
+### 19.2 第一优先级：补工程化硬度
+
+这一阶段的目标是把当前 CLI 原型补成一个具备基础 session 宿主、审计和可观测能力的 Agent Runtime。
+
+#### 阶段目标
+
+- 从“本地命令行玩具”升级为“可运行、可追踪、可调试的小型后端系统”
+- 从“单次执行入口”升级为“可持续多轮对话的 session 模式 Agent”
+- 为后续 Memory、RAG、Approval、Eval 扩展提供稳定宿主
+- 为简历沉淀 `agent session / trace / observability / reliability` 关键词
+
+#### 建议实现项
+
+1. Session 应用层
+   - 新增 `internal/app`，统一承接 session、run、trace 的应用层逻辑
+   - 先定义最小接口：
+   - `CreateSession`
+   - `AppendUserTurn`
+   - `GetSession`
+   - `GetRun`
+   - `GetTrace`
+   - `ReplayRun`
+   - 保留 CLI，但 CLI 内部改为复用 application 层逻辑
+   - HTTP API 不是第一优先级，只作为后续可选适配层
+
+2. Session / 运行记录持久化
+   - 为每个会话生成稳定 `session_id`
+   - 为每次 run 生成稳定 `run_id`
+   - 持久化以下信息：
+   - session 元数据
+   - 用户输入
+   - system prompt 摘要
+   - step 列表
+   - tool 调用参数与结果摘要
+   - token usage
+   - run 状态
+   - 错误原因
+   - 第一版可以先落本地 JSON / BoltDB / SQLite，不必一开始接 MySQL
+
+3. 可观测性
+   - 增加结构化日志，覆盖：
+   - session 创建
+   - run 创建
+   - step 开始与结束
+   - tool 调用
+   - MCP 连接
+   - skill 激活
+   - error 分类
+   - 增加 Prometheus 指标，至少包括：
+   - `happyagent_runs_total`
+   - `happyagent_run_success_total`
+   - `happyagent_run_duration_ms`
+   - `happyagent_steps_total`
+   - `happyagent_tool_calls_total`
+   - `happyagent_tool_failures_total`
+   - `happyagent_tokens_total`
+
+4. 稳定性控制
+   - 细化超时控制：
+   - run timeout
+   - model timeout
+   - tool timeout
+   - MCP connect timeout
+   - 补重试策略：
+   - 模型瞬时失败重试
+   - MCP 瞬时失败重试
+   - 可重试工具错误重试
+   - 补保护策略：
+   - 最大步数
+   - 最大工具调用数
+   - 最大 observation 大小
+   - 并发 run 数限制
+
+5. 错误分类与审计
+   - 统一错误类型：
+   - model error
+   - tool validation error
+   - tool execution error
+   - timeout error
+   - policy denial
+   - MCP transport error
+   - run trace 中明确记录错误分类和最终终止原因
+
+#### 模块改造建议
+
+- `cmd/happyagent`
+  - 保留 CLI 入口，并改为 session 驱动
+- 新增 `internal/app`
+  - 承接 session、run、trace 等应用层逻辑
+- 新增 `internal/store`
+  - 封装 session / run 持久化
+- 新增 `internal/observe`
+  - 封装 metrics 和结构化日志
+- `internal/engine`
+  - 暴露更完整的 trace 和错误分类
+- `internal/runtime`
+  - 支持 session 模式和 CLI 模式共用装配逻辑
+- 可选新增 `cmd/happyagentd`
+  - 当需要 Web / IDE / 外部客户端接入时，再提供 HTTP 适配入口
+
+#### 阶段产出
+
+- 一个可持续多轮对话的 Agent Runtime session 宿主
+- 一套 run trace 查询和 replay 能力
+- 一组可截图展示的 metrics
+- README 中新增 session 模式使用说明和观测示意图
+
+#### 验收标准
+
+- CLI 可进入持续 session 并完成至少一轮多轮对话
+- 每次 turn 均生成稳定 `run_id`
+- 可按 `session_id` / `run_id` 查询完整执行记录
+- 运行结果可 replay
+- 至少一类 tool error 和一类 timeout error 能被正确记录
+- `make check` 持续通过
+
+### 19.3 第二优先级：补 AI 核心能力闭环
+
+这一阶段的目标是让项目从“有 tool 的 runtime”升级为“具备典型 AI Agent 工程能力的 runtime”。
+
+#### 阶段目标
+
+- 补齐岗位高频出现的 `memory / RAG / safety / result validation`
+- 提升复杂任务下的执行稳定性和上下文利用效率
+- 让项目具备更强的 AI 工程属性，而不只是通用工具编排
+
+#### 建议实现项
+
+1. Memory
+   - 短期记忆
+   - 保存最近若干轮消息、tool observation 和中间结论
+   - 长期记忆
+   - 对历史 run 做摘要，沉淀为可复用记忆片段
+   - 上下文压缩
+   - 当 token 接近阈值时自动压缩历史
+   - Memory 注入策略
+   - 只向模型注入当前任务强相关的记忆片段
+
+2. RAG
+   - 支持本地文档目录索引
+   - 支持 chunk 切分和基础 metadata
+   - 支持 query -> retrieve -> inject 流程
+   - 检索结果必须保留来源信息，便于回答时引用
+   - 第一版可先用轻量实现，不要求一开始就接大型向量库
+
+3. 审批流和安全策略
+   - 对危险工具加审批门槛
+   - 比如：
+   - `shell`
+   - `file_write`
+   - `file_patch`
+   - `file_delete`
+   - 高风险 MCP tool
+   - 增加 policy engine：
+   - allow
+   - deny
+   - require_approval
+   - 在 trace 中记录审批决策和原因
+
+4. 结果校验与恢复
+   - 对 final answer 增加约束校验
+   - 对结构化输出增加 schema 校验
+   - 对关键任务增加“必经工具”校验
+   - 校验失败时可自动触发一次纠正重试
+
+5. Prompt 与上下文治理
+   - 将 system prompt、skill prompt、memory、RAG context、tool schema 的拼装逻辑显式化
+   - 控制上下文大小和优先级
+   - 记录每次注入上下文的来源与长度
+
+#### 模块改造建议
+
+- 新增 `internal/memory`
+  - session memory、summary memory、compression
+- 新增 `internal/rag`
+  - indexer、retriever、citation formatter
+- 新增 `internal/policy`
+  - tool 风险分级、审批决策
+- 新增 `internal/validator`
+  - final answer / structured output 校验
+- `internal/engine`
+  - 增加 validation failure -> retry 流程
+- `internal/tools`
+  - 工具定义支持 risk level
+
+#### 阶段产出
+
+- 一个支持记忆和检索增强的 runtime
+- 一套危险工具审批机制
+- 一套回答结果校验和自动纠错机制
+- README 中新增 Memory / RAG / Approval 的设计说明
+
+#### 验收标准
+
+- 长上下文任务下，历史上下文能被压缩并保留关键信息
+- 至少一个文档问答场景可通过 RAG 正确引用来源
+- 危险工具在未授权时不能直接执行
+- 结果校验失败时系统能给出明确重试或失败原因
+
+### 19.4 第三优先级：补量化评测与效果证明
+
+这一阶段的目标是让项目具备“可展示结果”的说服力，避免停留在功能堆砌。
+
+#### 阶段目标
+
+- 建立一套可以反复运行的评测基线
+- 形成成功率、步数、时延、token 成本等核心指标
+- 为简历和面试准备可量化的数据支撑
+
+#### 建议实现项
+
+1. 扩展 eval case
+   - 将当前 smoke cases 扩展到 20 到 30 个
+   - 至少覆盖：
+   - 文件检索与阅读
+   - 多步 tool chaining
+   - MCP tool 调用
+   - skill 激活
+   - Memory 命中
+   - RAG 问答
+   - 审批拒绝
+   - 工具失败恢复
+   - 长上下文压缩
+
+2. 评测指标体系
+   - 成功率
+   - 平均步数
+   - 平均 tool 调用次数
+   - 平均总耗时
+   - 平均 planning / execution 耗时
+   - token 使用量
+   - 失败原因分布
+   - 各工具成功率
+
+3. 对比实验
+   - 对比不同 prompt 版本
+   - 对比是否开启 Memory
+   - 对比是否开启 RAG
+   - 对比不同工具策略或上下文压缩策略
+   - 将结果输出为统一 report，便于写进文档
+
+4. 演示材料
+   - 提供固定 demo case
+   - 保留结构化 trace
+   - 生成适合面试展示的 report 样例
+   - README 中增加 benchmark / eval 小节
+
+#### 模块改造建议
+
+- `internal/eval`
+  - 支持更多 case 类型
+  - 支持批量指标汇总
+  - 支持维度对比
+- `internal/report`
+  - 生成更适合阅读的 JSON / Markdown report
+- `docs/eval.md`
+  - 增加评测口径、指标定义和对比实验说明
+
+#### 阶段产出
+
+- 一套稳定可复现的 eval 套件
+- 一份带核心指标的评测报告
+- 一组可直接放到简历和面试材料中的量化结论
+
+#### 验收标准
+
+- 同一套 case 可重复运行并输出统一格式报告
+- 可以看出不同策略的效果差异
+- 至少沉淀一组可写进简历的数据，例如成功率、平均时延或工具调用效果
+
+### 19.5 推荐落地顺序
+
+如果按 6 到 8 周节奏推进，推荐如下顺序：
+
+1. 第 1 到 2 周
+   - session 应用层
+   - run 持久化
+   - 结构化 trace 查询
+2. 第 3 周
+   - 指标监控
+   - 错误分类
+   - replay
+3. 第 4 到 5 周
+   - approval / policy
+   - result validation
+4. 第 5 到 6 周
+   - Memory
+   - 上下文压缩
+5. 第 6 到 7 周
+   - RAG
+   - 引用返回
+6. 第 7 到 8 周
+   - 扩 eval
+   - 做对比实验
+   - 补 README 和演示材料
+
+### 19.6 简历导向的最终项目表述目标
+
+后续迭代完成后，项目应能支撑如下表述方向：
+
+- 自研基于 Go 的 Agent Runtime，支持本地 Tool、MCP Tool/Resource、Skill 按需激活和多步任务执行闭环
+- 设计并实现运行时 trace、可观测和评测体系，沉淀任务成功率、时延、步数、token 消耗等核心指标
+- 增加 Memory、RAG、审批流和结果校验能力，提升复杂任务场景下的稳定性、安全性和可扩展性
+
+### 19.7 当前建议
+
+当前项目最适合优先落地第一优先级中的以下三项：
+
+1. `session_id + run_id + trace` 持久化
+2. `internal/app` session 应用层
+3. 基础 metrics 和错误分类
+
+原因很简单：
+
+- 这三项最贴近你的后端优势
+- 改造成本相对可控
+- 最容易快速形成“不是 demo，而是工程系统”的项目感知
+
+## 20. 通用 Runtime 与 Career Copilot 的分层设计
+
+本节用于回答一个关键设计问题：
+
+`happyagent` 应该展示为通用 Agent，还是展示为 Career Copilot Agent？
+
+答案不是二选一，而是明确做分层：
+
+1. 底层是通用 Agent Runtime
+2. 上层是基于 Runtime 构建的 Agent Profile
+3. `Career Copilot` 是其中一个重点展示的垂直 Profile
+
+这样既保留项目的工程通用性，也能让项目有清晰、可演示的业务落点。
+
+### 20.1 设计目标
+
+- 让 `happyagent` 保持通用运行时定位，不被单一场景绑死
+- 让 Career Copilot 成为可演示、可评测、可写进简历的核心业务场景
+- 避免“只有一个 system prompt，无法同时兼顾通用和垂直”的设计局限
+- 为未来扩展其他垂直场景预留统一入口
+
+### 20.2 三层结构
+
+建议将系统拆成以下三层：
+
+1. Runtime 层
+   - 提供通用执行能力
+   - 负责 loop、tool orchestration、MCP、memory、policy、eval、trace、observability
+   - 不绑定任何求职场景语义
+
+2. Profile 层
+   - 定义某一类 Agent 的场景配置
+   - 负责 system prompt、可用工具范围、skills、memory 策略、output schema、eval case 绑定
+   - Profile 是“一个 Agent 的配置与行为模板”，不是 Runtime 本身
+
+3. Task 层
+   - 表示某次具体输入任务
+   - 例如：
+   - “分析这份简历与某个 JD 的匹配度”
+   - “将项目描述改写为更适合 AI Agent 岗的版本”
+   - “总结当前仓库架构”
+
+简化理解如下：
+
+- `Runtime` 解决“怎么跑”
+- `Profile` 解决“以什么身份、使用哪些能力来跑”
+- `Task` 解决“这一次具体做什么”
+
+### 20.3 Runtime 层职责
+
+`happyagent` 作为 Runtime，应继续承载以下通用能力：
+
+- 模型调用抽象
+- 多步执行 loop
+- 本地 tools 与 MCP tools 编排
+- skill 激活与能力发现
+- memory 与上下文治理
+- policy / approval
+- trace、logging、metrics
+- eval 执行框架
+
+这一层对外暴露的是通用运行能力，不应该写死：
+
+- 简历优化 prompt
+- JD 解析逻辑
+- 固定输出模板
+- 单一业务工具集
+
+否则 Runtime 会退化成一个场景化脚本，而不是可复用底座。
+
+### 20.4 Profile 层职责
+
+Profile 层用于把通用 Runtime 约束成一个具体 Agent。
+
+每个 Profile 至少包含：
+
+- `name`
+- `description`
+- `system_prompt`
+- `enabled_tools`
+- `enabled_mcp_servers` 或 `enabled_mcp_tools`
+- `enabled_skills`
+- `memory_strategy`
+- `output_schema`
+- `eval_suite`
+
+其中：
+
+- `system_prompt`
+  - 定义角色边界和总体行为方式
+- `enabled_tools`
+  - 控制该 Agent 允许使用哪些工具，而不是默认开放全部工具
+- `enabled_skills`
+  - 控制该 Agent 可以激活哪些技能
+- `memory_strategy`
+  - 决定该 Profile 使用何种短期/长期记忆策略
+- `output_schema`
+  - 控制回答结果是否需要结构化
+- `eval_suite`
+  - 绑定适合该场景的评测集
+
+这样一来，系统并不只有一个 system prompt，而是：
+
+- Runtime 有一个很薄的基础 prompt
+- 不同 Profile 在运行时叠加各自的 domain prompt
+
+### 20.5 Career Copilot Profile 设计
+
+`Career Copilot` 应该被定义为 `happyagent` 的一个重点 Profile，而不是整个项目本身。
+
+#### Profile 目标
+
+- 面向求职优化场景
+- 能够结合简历、岗位描述和项目仓库信息给出分析与改写建议
+- 展示多步规划、文档理解、结构化输出和结果校验能力
+
+#### 典型任务范围
+
+- 解析 JD 并抽取核心能力要求
+- 分析简历与 JD 的匹配度
+- 识别经历中的优势项与缺失项
+- 改写项目描述和工作经历描述
+- 生成多版本简历要点
+- 输出项目后续优化建议
+
+#### 建议能力组成
+
+1. Prompt
+   - 身份设定为职业规划与简历优化助手
+   - 强调基于证据分析，不允许无依据夸大
+   - 输出优先采用结构化格式
+
+2. Tools
+   - `file_read`
+   - `file_search`
+   - `file_list`
+   - 必要时的 `shell`
+   - 后续可增加专用业务工具，例如：
+   - `resume_parse`
+   - `jd_extract`
+   - `resume_diff`
+   - `bullet_rewrite`
+
+3. Skills
+   - `resume-optimizer`
+   - `jd-analyzer`
+   - `project-reframer`
+
+4. Memory
+   - 保存候选人的基础背景画像
+   - 保存已分析过的目标岗位偏好
+   - 保存已生成的简历版本与改写理由
+
+5. Output Schema
+   - `match_report`
+   - `resume_rewrite_plan`
+   - `project_optimization_advice`
+
+#### 非目标
+
+Career Copilot 不应承担：
+
+- 任意代码库通用 coding agent 的全部职责
+- 超出求职场景的大规模知识问答
+- 缺乏依据的自动包装和夸张润色
+
+### 20.6 推荐的 Profile 配置形式
+
+建议引入独立的 Profile 配置目录，例如：
+
+```text
+profiles/
+├── general-assistant/
+│   └── profile.json
+└── career-copilot/
+    └── profile.json
+```
+
+`profile.json` 可先设计为：
+
+```json
+{
+  "name": "career-copilot",
+  "description": "Analyze resumes, job descriptions, and project evidence for AI job applications.",
+  "system_prompt": "You are a career copilot focused on evidence-based resume optimization.",
+  "enabled_tools": ["file_read", "file_search", "file_list"],
+  "enabled_skills": ["resume-optimizer", "jd-analyzer", "project-reframer"],
+  "memory_strategy": {
+    "mode": "session_plus_summary"
+  },
+  "output_schema": "career_report",
+  "eval_suite": "eval/career_copilot_cases.json"
+}
+```
+
+### 20.7 运行时选择方式
+
+Runtime 启动时应该支持选择 Profile，而不是把身份写死在主程序里。
+
+建议至少支持以下方式：
+
+1. CLI 参数
+
+```bash
+./bin/happyagent --profile general-assistant "summarize this repo"
+./bin/happyagent --profile career-copilot "analyze my resume against this JD"
+```
+
+2. Session 模式
+
+```bash
+./bin/happyagent --profile general-assistant --session
+./bin/happyagent --profile career-copilot --session
+```
+
+3. 可选 HTTP API 参数
+
+```json
+{
+  "profile": "career-copilot",
+  "session_id": "sess_123",
+  "input": "Analyze my resume against this JD."
+}
+```
+
+4. 配置默认值
+   - 当未显式传入时，默认使用 `general-assistant`
+
+### 20.8 对现有模块的改造建议
+
+为支持 Profile 层，建议新增或调整以下模块：
+
+- 新增 `internal/profile`
+  - 负责 Profile 定义、加载、校验和运行时装配
+- `internal/runtime`
+  - 支持按 Profile 构造执行上下文
+- `internal/tools`
+  - 支持工具级白名单过滤
+- `internal/skills`
+  - 支持按 Profile 控制可激活 skill 范围
+- `internal/memory`
+  - 支持按 Profile 切换记忆策略
+- `internal/eval`
+  - 支持按 Profile 绑定不同 case 集
+
+建议的数据流如下：
+
+1. 用户选择 Profile
+2. Runtime 加载对应 Profile 配置
+3. Runtime 基于 Profile 过滤 tools / skills / memory / output schema
+4. Engine 在该受限上下文中执行任务
+5. Trace 和 Eval 记录本次 Profile 信息
+
+### 20.9 展示与简历表述策略
+
+这个设计的核心价值，在于把“项目本体”和“演示场景”分开。
+
+对外展示时，建议固定采用两段式表达：
+
+1. 项目本体
+   - `happyagent` 是一个自研的 Go Agent Runtime，支持 Tool Use、MCP、Skill、Memory、Eval 和可观测能力
+
+2. 核心场景
+   - 基于该 Runtime 实现了 `Career Copilot` Profile，面向简历优化、JD 匹配和项目重构建议场景，支持岗位解析、经历抽取、改写建议和结构化评估
+
+这样写的好处是：
+
+- 不会显得只有 prompt 包装
+- 不会失去 Runtime 的通用价值
+- 不会被单一业务场景限制住 JD 覆盖面
+
+### 20.10 推荐实现顺序
+
+如果决定引入 Career Copilot，建议按以下顺序推进：
+
+1. 先实现 `Profile` 抽象和加载能力
+2. 先做 `general-assistant` 和 `career-copilot` 两个最小 profile
+3. 再补 Career Copilot 的专用 output schema
+4. 再补 Career Copilot 的 eval cases
+5. 最后视情况增加专用业务 tools 和 memory 策略
+
+原因是：
+
+- 先把“通用底座 + 场景配置”关系建对
+- 再做场景增强，避免未来结构返工
+
+### 20.11 当前建议
+
+当前最值得先落的一步不是写 Career Copilot prompt，而是先做：
+
+1. `internal/profile` 抽象
+2. `profiles/general-assistant/profile.json`
+3. `profiles/career-copilot/profile.json`
+4. CLI `--profile` 参数
+
+只有把这一层搭起来，后面的 Career Copilot 才是真正建立在通用 Runtime 之上的，而不是重新写了一个场景化 agent 分叉。

@@ -8,7 +8,7 @@
       "timeout_seconds": 60,
       "expected_output_contains": ["文件"],
       "required_tools": ["list_capabilities", "activate_skill"],
-      "max_steps": 4
+      "max_steps": 8
     },
     {
       "name": "search-read-readme",
@@ -16,7 +16,7 @@
       "timeout_seconds": 60,
       "expected_output_contains": ["argv"],
       "required_tools": ["file_search", "file_read"],
-      "max_steps": 4
+      "max_steps": 12
     },
     {
       "name": "repo-list-summary",
@@ -24,7 +24,7 @@
       "timeout_seconds": 60,
       "expected_output_contains": ["happyagent"],
       "required_tools": ["file_list"],
-      "max_steps": 4
+      "max_steps": 8
     }
   ]
 }

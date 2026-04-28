@@ -9,19 +9,29 @@ import (
 	"happyagent/internal/engine"
 	"happyagent/internal/llm"
 	"happyagent/internal/mcp"
+	"happyagent/internal/rag"
 	"happyagent/internal/skills"
 	"happyagent/internal/tools"
 )
 
-type Builder struct{}
+const defaultProfileDir = "profiles"
+
+type Builder struct {
+	profileDir string
+}
 
 func NewBuilder() *Builder {
-	return &Builder{}
+	return &Builder{
+		profileDir: defaultProfileDir,
+	}
+}
+
+func (b *Builder) WithProfileDir(dir string) *Builder {
+	b.profileDir = dir
+	return b
 }
 
 func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
-	_ = b
-
 	client, err := llm.NewClient(cfg.LLM)
 	if err != nil {
 		return nil, err
@@ -61,6 +71,8 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		maxObservationBytes: cfg.Engine.MaxObservationBytes,
 		mcpManager:          manager,
 		skillLoader:         skillLoader,
+		profileDir:          b.profileDir,
+		ragIndexer:          rag.NewIndexer(cfg.Tools.RootDir),
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)

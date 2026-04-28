@@ -36,7 +36,7 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 				TotalTokens:      12,
 			},
 		},
-	})
+	}, "completed")
 
 	if trace.DurationMillis != 2500 {
 		t.Fatalf("unexpected duration: %+v", trace)
@@ -49,5 +49,8 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 	}
 	if trace.PromptTokens != 18 || trace.CompletionTokens != 9 || trace.TotalTokens != 27 {
 		t.Fatalf("unexpected token usage: %+v", trace)
+	}
+	if trace.TerminationReason != "completed" {
+		t.Fatalf("unexpected termination reason: %+v", trace)
 	}
 }

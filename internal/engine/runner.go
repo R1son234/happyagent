@@ -62,7 +62,7 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 			return RunResult{
 				Output: result.Output,
 				Steps:  state.Steps,
-				Trace:  buildRunTrace(startedAt, finishedAt, state.Steps),
+				Trace:  buildRunTrace(startedAt, finishedAt, state.Steps, "completed"),
 			}, nil
 		}
 	}
@@ -70,13 +70,14 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 	return RunResult{}, fmt.Errorf("loop stopped after reaching max steps (%d)", r.loop.maxSteps)
 }
 
-func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord) RunTrace {
+func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord, terminationReason string) RunTrace {
 	trace := RunTrace{
-		StartedAt:       startedAt,
-		FinishedAt:      finishedAt,
-		DurationMillis:  finishedAt.Sub(startedAt).Milliseconds(),
-		StepCount:       len(steps),
-		ToolCallsByName: map[string]int{},
+		StartedAt:         startedAt,
+		FinishedAt:        finishedAt,
+		DurationMillis:    finishedAt.Sub(startedAt).Milliseconds(),
+		TerminationReason: terminationReason,
+		StepCount:         len(steps),
+		ToolCallsByName:   map[string]int{},
 	}
 
 	for _, step := range steps {

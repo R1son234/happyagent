@@ -69,6 +69,16 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	if len(actions) == 1 && actions[0].Type == protocol.ActionFinalAnswer {
+		if input.ValidateFinalAnswer != nil {
+			if err := input.ValidateFinalAnswer(actions[0].Content); err != nil {
+				observation := truncateObservation(err.Error(), input.MaxObservationBytes)
+				state.Messages = append(state.Messages, MessageEnvelope{
+					Role:    protocol.RoleUser,
+					Content: observation,
+				})
+				return StepResult{Observation: observation}, nil
+			}
+		}
 		return StepResult{
 			Done:   true,
 			Output: actions[0].Content,
@@ -127,6 +137,17 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		appendToolObservation(state, action, observation)
 		return observation, nil
 	}
+	if input.BeforeToolCall != nil {
+		observation, handled, err := input.BeforeToolCall(ctx, action, input)
+		if err != nil {
+			return "", err
+		}
+		if handled {
+			observation = truncateObservation(observation, input.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return observation, nil
+		}
+	}
 
 	result, err := r.registry.Execute(ctx, tools.Call{
 		Name:      action.ToolName,
@@ -144,6 +165,13 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	}
 	observation := truncateObservation(result.Output, input.MaxObservationBytes)
 	appendToolObservation(state, action, observation)
+	if action.ToolName == tools.FinalAnswerToolName && input.ValidateFinalAnswer != nil {
+		if err := input.ValidateFinalAnswer(observation); err != nil {
+			observation = truncateObservation(err.Error(), input.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return observation, nil
+		}
+	}
 	return observation, nil
 }
 

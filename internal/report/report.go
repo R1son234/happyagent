@@ -7,15 +7,22 @@ import (
 	"path/filepath"
 
 	"happyagent/internal/engine"
+	"happyagent/internal/observe"
 )
 
 type RunReport struct {
-	Model        string              `json:"model"`
-	Input        string              `json:"input"`
-	Output       string              `json:"output"`
-	Trace        engine.RunTrace     `json:"trace"`
-	Steps        []engine.StepRecord `json:"steps"`
-	SystemPrompt string              `json:"system_prompt,omitempty"`
+	RunID         string              `json:"run_id,omitempty"`
+	SessionID     string              `json:"session_id,omitempty"`
+	Profile       string              `json:"profile,omitempty"`
+	Model         string              `json:"model"`
+	Input         string              `json:"input"`
+	Output        string              `json:"output"`
+	Status        string              `json:"status,omitempty"`
+	ErrorCategory string              `json:"error_category,omitempty"`
+	Trace         engine.RunTrace     `json:"trace"`
+	Steps         []engine.StepRecord `json:"steps"`
+	SystemPrompt  string              `json:"system_prompt,omitempty"`
+	Events        []observe.Event     `json:"events,omitempty"`
 }
 
 func WriteJSON(path string, value any) error {

@@ -8,11 +8,24 @@ import (
 )
 
 type Loader struct {
-	dir string
+	dir          string
+	allowedNames map[string]struct{}
 }
 
 func NewLoader(dir string) *Loader {
 	return &Loader{dir: dir}
+}
+
+func (l *Loader) WithAllowedNames(names []string) *Loader {
+	allowedNames := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		allowedNames[name] = struct{}{}
+	}
+
+	return &Loader{
+		dir:          l.dir,
+		allowedNames: allowedNames,
+	}
 }
 
 func (l *Loader) LoadCatalog() ([]Metadata, error) {
@@ -38,6 +51,9 @@ func (l *Loader) LoadCatalog() ([]Metadata, error) {
 		if err != nil {
 			return nil, err
 		}
+		if !l.allowed(skill.Name) {
+			continue
+		}
 		loaded = append(loaded, skill)
 	}
 
@@ -45,6 +61,10 @@ func (l *Loader) LoadCatalog() ([]Metadata, error) {
 }
 
 func (l *Loader) Load(name string) (*Skill, error) {
+	if !l.allowed(name) {
+		return nil, fmt.Errorf("skill %q not found in %q", name, l.dir)
+	}
+
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -71,4 +91,12 @@ func (l *Loader) Load(name string) (*Skill, error) {
 	}
 
 	return nil, fmt.Errorf("skill %q not found in %q", name, l.dir)
+}
+
+func (l *Loader) allowed(name string) bool {
+	if l.allowedNames == nil {
+		return true
+	}
+	_, ok := l.allowedNames[name]
+	return ok
 }
