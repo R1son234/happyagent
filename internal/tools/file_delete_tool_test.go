@@ -13,6 +13,10 @@ func TestFileDeleteToolDeletesFileWithConfirmation(t *testing.T) {
 	if err := os.WriteFile(path, []byte("hello"), 0o644); err != nil {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
+	realPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
 
 	tool, err := NewFileDeleteTool(root, true)
 	if err != nil {
@@ -26,7 +30,7 @@ func TestFileDeleteToolDeletesFileWithConfirmation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if result.Output != "deleted "+path {
+	if result.Output != "deleted "+realPath {
 		t.Fatalf("unexpected output: %q", result.Output)
 	}
 }

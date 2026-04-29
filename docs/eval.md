@@ -64,6 +64,8 @@ make eval-profiles
    - `success_rate`
    - `average_steps`
    - `average_tool_calls`
+   - `average_executed_tool_calls`
+   - `average_successful_tool_calls`
    - `average_duration_millis`
    - token 汇总
    - `error_categories`
@@ -73,10 +75,11 @@ make eval-profiles
    - 输入 prompt
    - 最终输出
    - 每一步 actions
+   - 每一步 tool call 状态（`blocked` / `unavailable` / `failed` / `succeeded`）
    - observation
    - 单步 planning / execution 耗时
    - token usage
-   - tool call 统计
+   - attempted / executed / successful tool call 统计
    - 错误分类
 
 ## Single Run Trace

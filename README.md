@@ -258,6 +258,14 @@ make eval-profiles
 
 `--metrics` 会同时输出 JSON 汇总和 Prometheus 文本格式指标。
 
+trace 里当前会同时区分三类 tool call：
+
+- attempted：模型发起了 tool call
+- executed：runtime 实际执行了 tool
+- successful：tool 成功执行并返回结果
+
+文件与目录工具的 root dir 边界不仅会校验 `../`，也会拒绝通过 symlink 穿透到 root 外部。
+
 ## Skill
 
 本地 skill 目录默认是 `skills/`。运行时不会再把 skill catalog、MCP resources 或 tool 列表塞进 system prompt；模型如果需要这些运行时能力信息，应调用 `list_capabilities`。需要某个 skill 时，再调用 `activate_skill` 加载它的详细说明。skill 目录使用通用的 `SKILL.md` 格式。

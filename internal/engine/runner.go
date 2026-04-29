@@ -50,6 +50,7 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 		state.Steps = append(state.Steps, StepRecord{
 			Index:                   step + 1,
 			Actions:                 append([]Action(nil), planResult.Actions...),
+			ToolCalls:               append([]ToolCallRecord(nil), result.ToolCalls...),
 			Observation:             result.Observation,
 			ModelUsage:              planResult.Usage,
 			PlanningDurationMillis:  planResult.Duration.Milliseconds(),
@@ -72,12 +73,14 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 
 func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord, terminationReason string) RunTrace {
 	trace := RunTrace{
-		StartedAt:         startedAt,
-		FinishedAt:        finishedAt,
-		DurationMillis:    finishedAt.Sub(startedAt).Milliseconds(),
-		TerminationReason: terminationReason,
-		StepCount:         len(steps),
-		ToolCallsByName:   map[string]int{},
+		StartedAt:                 startedAt,
+		FinishedAt:                finishedAt,
+		DurationMillis:            finishedAt.Sub(startedAt).Milliseconds(),
+		TerminationReason:         terminationReason,
+		StepCount:                 len(steps),
+		ToolCallsByName:           map[string]int{},
+		ExecutedToolCallsByName:   map[string]int{},
+		SuccessfulToolCallsByName: map[string]int{},
 	}
 
 	for _, step := range steps {
@@ -90,6 +93,16 @@ func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord
 			}
 			trace.ToolCallCount++
 			trace.ToolCallsByName[action.ToolName]++
+		}
+		for _, toolCall := range step.ToolCalls {
+			if toolCall.Status == toolCallStatusFailed || toolCall.Status == toolCallStatusSucceeded {
+				trace.ExecutedToolCallCount++
+				trace.ExecutedToolCallsByName[toolCall.ToolName]++
+			}
+			if toolCall.Status == toolCallStatusSucceeded {
+				trace.SuccessfulToolCallCount++
+				trace.SuccessfulToolCallsByName[toolCall.ToolName]++
+			}
 		}
 	}
 

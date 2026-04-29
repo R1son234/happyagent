@@ -1,5 +1,7 @@
 happyagent.local.json
 .DS_Store
 bin/
+.gocache/
+.gomodcache/
 logs/
 .happyagent/

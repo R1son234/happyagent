@@ -97,7 +97,7 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		record.TerminationReason = "runtime_error"
 		record.ErrorCategory = observe.ClassifyError(runErr)
 		record.ErrorMessage = runErr.Error()
-		a.metrics.RecordRun(false, record.Trace.StepCount, record.Trace.ToolCallCount, record.Trace.TotalTokens, record.ErrorCategory)
+		a.metrics.RecordRun(false, record.Trace.StepCount, record.Trace.SuccessfulToolCallCount, record.Trace.TotalTokens, record.ErrorCategory)
 		if err := a.store.SaveRun(record); err != nil {
 			return store.RunRecord{}, err
 		}
@@ -112,7 +112,7 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 	record.Output = result.Output
 	record.Status = "completed"
 	record.TerminationReason = result.Trace.TerminationReason
-	a.metrics.RecordRun(true, record.Trace.StepCount, record.Trace.ToolCallCount, record.Trace.TotalTokens, "")
+	a.metrics.RecordRun(true, record.Trace.StepCount, record.Trace.SuccessfulToolCallCount, record.Trace.TotalTokens, "")
 	if err := a.store.SaveRun(record); err != nil {
 		return store.RunRecord{}, err
 	}
@@ -156,7 +156,7 @@ func (a *Application) HistoricalMetrics() (observe.Metrics, error) {
 	}
 	metrics := observe.NewMetrics()
 	for _, run := range runs {
-		metrics.RecordRun(run.Status == "completed", run.Trace.StepCount, run.Trace.ToolCallCount, run.Trace.TotalTokens, run.ErrorCategory)
+		metrics.RecordRun(run.Status == "completed", run.Trace.StepCount, run.Trace.SuccessfulToolCallCount, run.Trace.TotalTokens, run.ErrorCategory)
 	}
 	return metrics.Snapshot(), nil
 }

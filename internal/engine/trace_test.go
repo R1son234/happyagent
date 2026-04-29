@@ -19,6 +19,10 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 				{Type: protocol.ActionToolCall, ToolName: "file_list"},
 				{Type: protocol.ActionToolCall, ToolName: "file_read"},
 			},
+			ToolCalls: []ToolCallRecord{
+				{ToolName: "file_list", Status: toolCallStatusSucceeded},
+				{ToolName: "file_read", Status: toolCallStatusFailed},
+			},
 			ModelUsage: llm.TokenUsage{
 				PromptTokens:     10,
 				CompletionTokens: 5,
@@ -46,6 +50,15 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 	}
 	if trace.ToolCallsByName["file_list"] != 1 || trace.ToolCallsByName["file_read"] != 1 {
 		t.Fatalf("unexpected tool calls: %+v", trace.ToolCallsByName)
+	}
+	if trace.ExecutedToolCallCount != 2 || trace.SuccessfulToolCallCount != 1 {
+		t.Fatalf("unexpected execution counts: %+v", trace)
+	}
+	if trace.ExecutedToolCallsByName["file_list"] != 1 || trace.ExecutedToolCallsByName["file_read"] != 1 {
+		t.Fatalf("unexpected executed tool calls: %+v", trace.ExecutedToolCallsByName)
+	}
+	if trace.SuccessfulToolCallsByName["file_list"] != 1 || trace.SuccessfulToolCallsByName["file_read"] != 0 {
+		t.Fatalf("unexpected successful tool calls: %+v", trace.SuccessfulToolCallsByName)
 	}
 	if trace.PromptTokens != 18 || trace.CompletionTokens != 9 || trace.TotalTokens != 27 {
 		t.Fatalf("unexpected token usage: %+v", trace)

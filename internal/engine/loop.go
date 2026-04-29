@@ -21,6 +21,13 @@ const actionInvalidResponse = "invalid_response"
 const invalidResponseMessage = "format error: return exactly one JSON action object or native tool call response; do not answer with plain text, markdown, or explanations"
 const defaultMaxObservationBytes = 8 * 1024
 
+const (
+	toolCallStatusUnavailable = "unavailable"
+	toolCallStatusBlocked     = "blocked"
+	toolCallStatusFailed      = "failed"
+	toolCallStatusSucceeded   = "succeeded"
+)
+
 func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopState) (PlanStepResult, error) {
 	startedAt := time.Now()
 	resp, err := r.client.Chat(ctx, llm.ChatRequest{
@@ -94,25 +101,31 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	observations := make([]string, 0, len(actions))
+	toolCalls := make([]ToolCallRecord, 0, len(actions))
 	for _, action := range actions {
 		if action.Type != protocol.ActionToolCall {
 			return StepResult{}, fmt.Errorf("unsupported action type %q in multi-action step", action.Type)
 		}
 
-		observation, err := r.executeToolCall(ctx, state, input, action)
+		outcome, err := r.executeToolCall(ctx, state, input, action)
 		if err != nil {
 			return StepResult{}, err
 		}
+		toolCalls = append(toolCalls, outcome.ToolCall)
 		if action.ToolName == tools.FinalAnswerToolName {
 			return StepResult{
-				Done:   true,
-				Output: observation,
+				Done:      true,
+				Output:    outcome.Observation,
+				ToolCalls: toolCalls,
 			}, nil
 		}
-		observations = append(observations, observation)
+		observations = append(observations, outcome.Observation)
 	}
 
-	return StepResult{Observation: truncateObservation(strings.Join(observations, "\n\n"), input.MaxObservationBytes)}, nil
+	return StepResult{
+		Observation: truncateObservation(strings.Join(observations, "\n\n"), input.MaxObservationBytes),
+		ToolCalls:   toolCalls,
+	}, nil
 }
 
 func validateStepActions(actions []Action) error {
@@ -131,21 +144,32 @@ func validateStepActions(actions []Action) error {
 	return nil
 }
 
-func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action) (string, error) {
+type toolCallOutcome struct {
+	Observation string
+	ToolCall    ToolCallRecord
+}
+
+func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action) (toolCallOutcome, error) {
 	if !toolAllowed(input.ToolDefs, action.ToolName) {
 		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
-		return observation, nil
+		return toolCallOutcome{
+			Observation: observation,
+			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusUnavailable},
+		}, nil
 	}
 	if input.BeforeToolCall != nil {
 		observation, handled, err := input.BeforeToolCall(ctx, action, input)
 		if err != nil {
-			return "", err
+			return toolCallOutcome{}, err
 		}
 		if handled {
 			observation = truncateObservation(observation, input.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
-			return observation, nil
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusBlocked},
+			}, nil
 		}
 	}
 
@@ -156,11 +180,14 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	if err != nil {
 		observation := truncateObservation("tool error: "+err.Error(), input.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
-		return observation, nil
+		return toolCallOutcome{
+			Observation: observation,
+			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusFailed},
+		}, nil
 	}
 	if input.AfterToolCall != nil {
 		if err := input.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {
-			return "", err
+			return toolCallOutcome{}, err
 		}
 	}
 	observation := truncateObservation(result.Output, input.MaxObservationBytes)
@@ -169,10 +196,16 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		if err := input.ValidateFinalAnswer(observation); err != nil {
 			observation = truncateObservation(err.Error(), input.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
-			return observation, nil
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusFailed},
+			}, nil
 		}
 	}
-	return observation, nil
+	return toolCallOutcome{
+		Observation: observation,
+		ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusSucceeded},
+	}, nil
 }
 
 func appendToolObservation(state *LoopState, action Action, observation string) {

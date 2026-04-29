@@ -42,13 +42,20 @@ func TestRunSuiteMarksSuccessfulCase(t *testing.T) {
 					Actions: []engine.Action{
 						{Type: protocol.ActionToolCall, ToolName: "file_list"},
 					},
+					ToolCalls: []engine.ToolCallRecord{
+						{ToolName: "file_list", Status: "succeeded"},
+					},
 				},
 			},
 			Trace: engine.RunTrace{
-				StepCount:       1,
-				ToolCallCount:   1,
-				ToolCallsByName: map[string]int{"file_list": 1},
-				TotalTokens:     42,
+				StepCount:                 1,
+				ToolCallCount:             1,
+				ToolCallsByName:           map[string]int{"file_list": 1},
+				ExecutedToolCallCount:     1,
+				ExecutedToolCallsByName:   map[string]int{"file_list": 1},
+				SuccessfulToolCallCount:   1,
+				SuccessfulToolCallsByName: map[string]int{"file_list": 1},
+				TotalTokens:               42,
 			},
 		},
 	}, suite, "base prompt")
@@ -87,12 +94,17 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 					Actions: []engine.Action{
 						{Type: protocol.ActionToolCall, ToolName: "file_search"},
 					},
+					ToolCalls: []engine.ToolCallRecord{
+						{ToolName: "file_search", Status: "failed"},
+					},
 				},
 			},
 			Trace: engine.RunTrace{
-				StepCount:       1,
-				ToolCallCount:   1,
-				ToolCallsByName: map[string]int{"file_search": 1},
+				StepCount:               1,
+				ToolCallCount:           1,
+				ToolCallsByName:         map[string]int{"file_search": 1},
+				ExecutedToolCallCount:   1,
+				ExecutedToolCallsByName: map[string]int{"file_search": 1},
 			},
 		},
 	}, suite, "base prompt")
@@ -109,7 +121,7 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 	if len(caseResult.MissingOutput) != 1 || caseResult.MissingOutput[0] != "argv" {
 		t.Fatalf("unexpected missing output: %+v", caseResult)
 	}
-	if len(caseResult.MissingTools) != 1 || caseResult.MissingTools[0] != "file_read" {
+	if len(caseResult.MissingTools) != 2 || caseResult.MissingTools[0] != "file_search" || caseResult.MissingTools[1] != "file_read" {
 		t.Fatalf("unexpected missing tools: %+v", caseResult)
 	}
 	if caseResult.Profile != "career-copilot" {

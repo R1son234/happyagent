@@ -113,7 +113,7 @@ trace 中会包含：
 
 - 总步数
 - 总耗时
-- tool call 统计
+- attempted / executed / successful tool call 统计
 - token usage 汇总
 - 每一步 actions、observation 和耗时
 

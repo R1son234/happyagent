@@ -10,7 +10,6 @@ import (
 
 	"happyagent/internal/engine"
 	"happyagent/internal/observe"
-	"happyagent/internal/protocol"
 	"happyagent/internal/report"
 )
 
@@ -49,22 +48,26 @@ type RunResult struct {
 }
 
 type SuiteResult struct {
-	Suite             string         `json:"suite"`
-	Description       string         `json:"description,omitempty"`
-	CaseCount         int            `json:"case_count"`
-	PassedCount       int            `json:"passed_count"`
-	FailedCount       int            `json:"failed_count"`
-	SuccessRate       float64        `json:"success_rate"`
-	DurationMillis    int64          `json:"duration_millis"`
-	AverageSteps      float64        `json:"average_steps"`
-	AverageToolCalls  float64        `json:"average_tool_calls"`
-	AverageDurationMs float64        `json:"average_duration_millis"`
-	PromptTokens      int            `json:"prompt_tokens"`
-	CompletionTokens  int            `json:"completion_tokens"`
-	TotalTokens       int            `json:"total_tokens"`
-	ToolCallsByName   map[string]int `json:"tool_calls_by_name"`
-	ErrorCategories   map[string]int `json:"error_categories"`
-	Results           []CaseResult   `json:"results"`
+	Suite                     string         `json:"suite"`
+	Description               string         `json:"description,omitempty"`
+	CaseCount                 int            `json:"case_count"`
+	PassedCount               int            `json:"passed_count"`
+	FailedCount               int            `json:"failed_count"`
+	SuccessRate               float64        `json:"success_rate"`
+	DurationMillis            int64          `json:"duration_millis"`
+	AverageSteps              float64        `json:"average_steps"`
+	AverageToolCalls          float64        `json:"average_tool_calls"`
+	AverageExecutedTools      float64        `json:"average_executed_tool_calls"`
+	AverageSuccessfulTools    float64        `json:"average_successful_tool_calls"`
+	AverageDurationMs         float64        `json:"average_duration_millis"`
+	PromptTokens              int            `json:"prompt_tokens"`
+	CompletionTokens          int            `json:"completion_tokens"`
+	TotalTokens               int            `json:"total_tokens"`
+	ToolCallsByName           map[string]int `json:"tool_calls_by_name"`
+	ExecutedToolCallsByName   map[string]int `json:"executed_tool_calls_by_name"`
+	SuccessfulToolCallsByName map[string]int `json:"successful_tool_calls_by_name"`
+	ErrorCategories           map[string]int `json:"error_categories"`
+	Results                   []CaseResult   `json:"results"`
 }
 
 type CaseResult struct {
@@ -103,15 +106,19 @@ func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemProm
 	startedAt := time.Now()
 	results := make([]CaseResult, 0, len(suite.Cases))
 	summary := SuiteResult{
-		Suite:           suite.Name,
-		Description:     suite.Description,
-		CaseCount:       len(suite.Cases),
-		ToolCallsByName: map[string]int{},
-		ErrorCategories: map[string]int{},
+		Suite:                     suite.Name,
+		Description:               suite.Description,
+		CaseCount:                 len(suite.Cases),
+		ToolCallsByName:           map[string]int{},
+		ExecutedToolCallsByName:   map[string]int{},
+		SuccessfulToolCallsByName: map[string]int{},
+		ErrorCategories:           map[string]int{},
 	}
 
 	var totalSteps int
 	var totalToolCalls int
+	var totalExecutedToolCalls int
+	var totalSuccessfulToolCalls int
 	var totalDuration int64
 
 	for _, testCase := range suite.Cases {
@@ -128,12 +135,20 @@ func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemProm
 
 		totalSteps += result.Trace.StepCount
 		totalToolCalls += result.Trace.ToolCallCount
+		totalExecutedToolCalls += result.Trace.ExecutedToolCallCount
+		totalSuccessfulToolCalls += result.Trace.SuccessfulToolCallCount
 		totalDuration += result.DurationMillis
 		summary.PromptTokens += result.Trace.PromptTokens
 		summary.CompletionTokens += result.Trace.CompletionTokens
 		summary.TotalTokens += result.Trace.TotalTokens
 		for toolName, count := range result.Trace.ToolCallsByName {
 			summary.ToolCallsByName[toolName] += count
+		}
+		for toolName, count := range result.Trace.ExecutedToolCallsByName {
+			summary.ExecutedToolCallsByName[toolName] += count
+		}
+		for toolName, count := range result.Trace.SuccessfulToolCallsByName {
+			summary.SuccessfulToolCallsByName[toolName] += count
 		}
 	}
 
@@ -143,6 +158,8 @@ func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemProm
 		summary.SuccessRate = float64(summary.PassedCount) / float64(summary.CaseCount)
 		summary.AverageSteps = float64(totalSteps) / float64(summary.CaseCount)
 		summary.AverageToolCalls = float64(totalToolCalls) / float64(summary.CaseCount)
+		summary.AverageExecutedTools = float64(totalExecutedToolCalls) / float64(summary.CaseCount)
+		summary.AverageSuccessfulTools = float64(totalSuccessfulToolCalls) / float64(summary.CaseCount)
 		summary.AverageDurationMs = float64(totalDuration) / float64(summary.CaseCount)
 	}
 
@@ -236,7 +253,7 @@ func runCase(ctx context.Context, runner Runner, testCase Case, defaultSystemPro
 		}
 	}
 
-	toolUsage := collectToolUsage(runResult.Steps)
+	toolUsage := collectSuccessfulToolUsage(runResult.Steps)
 	for _, required := range testCase.RequiredTools {
 		if toolUsage[required] == 0 {
 			caseResult.MissingTools = append(caseResult.MissingTools, required)
@@ -259,14 +276,14 @@ func runCase(ctx context.Context, runner Runner, testCase Case, defaultSystemPro
 	return caseResult
 }
 
-func collectToolUsage(steps []engine.StepRecord) map[string]int {
+func collectSuccessfulToolUsage(steps []engine.StepRecord) map[string]int {
 	usage := make(map[string]int)
 	for _, step := range steps {
-		for _, action := range step.Actions {
-			if action.Type != protocol.ActionToolCall {
+		for _, toolCall := range step.ToolCalls {
+			if toolCall.Status != "succeeded" {
 				continue
 			}
-			usage[action.ToolName]++
+			usage[toolCall.ToolName]++
 		}
 	}
 	return usage

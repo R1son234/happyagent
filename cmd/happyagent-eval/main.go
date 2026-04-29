@@ -97,13 +97,15 @@ func (a runtimeEvalAdapter) Run(ctx context.Context, req eval.RunRequest) (eval.
 }
 
 func printSummary(result eval.SuiteResult, outputPath string, traceDir string) {
-	fmt.Fprintf(os.Stdout, "suite=%s passed=%d failed=%d success_rate=%.2f avg_steps=%.2f avg_tool_calls=%.2f avg_duration_ms=%.2f total_tokens=%d\n",
+	fmt.Fprintf(os.Stdout, "suite=%s passed=%d failed=%d success_rate=%.2f avg_steps=%.2f avg_tool_calls=%.2f avg_executed_tools=%.2f avg_successful_tools=%.2f avg_duration_ms=%.2f total_tokens=%d\n",
 		result.Suite,
 		result.PassedCount,
 		result.FailedCount,
 		result.SuccessRate,
 		result.AverageSteps,
 		result.AverageToolCalls,
+		result.AverageExecutedTools,
+		result.AverageSuccessfulTools,
 		result.AverageDurationMs,
 		result.TotalTokens,
 	)
