@@ -14,8 +14,8 @@ import (
 )
 
 type stubSessionApplication struct {
-	session       store.SessionRecord
-	runs          []store.RunRecord
+	session        store.SessionRecord
+	runs           []store.RunRecord
 	appendRequests []app.AppendTurnRequest
 }
 
@@ -117,5 +117,17 @@ func TestResolveSessionCreatesSessionWhenInteractive(t *testing.T) {
 	}
 	if !created || sessionID != "session-new" {
 		t.Fatalf("unexpected session resolution: created=%v id=%s", created, sessionID)
+	}
+}
+
+func TestCareerRepoArgParsesAnalyzeRepo(t *testing.T) {
+	if got := careerRepoArg([]string{"career", "analyze", "--repo", "examples"}, "."); got != "examples" {
+		t.Fatalf("unexpected repo arg: %q", got)
+	}
+	if got := careerRepoArg([]string{"career", "analyze", "--repo=examples"}, "."); got != "examples" {
+		t.Fatalf("unexpected repo arg: %q", got)
+	}
+	if got := careerRepoArg([]string{"career", "rewrite-resume", "--report", "out.json"}, "."); got != "." {
+		t.Fatalf("unexpected repo arg for transform: %q", got)
 	}
 }

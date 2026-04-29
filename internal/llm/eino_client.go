@@ -34,7 +34,7 @@ func NewEinoClient(cfg config.LLMConfig) (Client, error) {
 		APIKey:  cfg.APIKey,
 		Model:   cfg.Model,
 		BaseURL: cfg.BaseURL,
-		Timeout: 60 * time.Second,
+		Timeout: time.Duration(cfg.TimeoutSeconds) * time.Second,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create eino openai chat model: %w", err)

@@ -14,9 +14,9 @@
     {
       "name": "career-copilot-structured-report",
       "profile": "career-copilot",
-      "prompt": "Read README.md and return a JSON object with keys summary, match_report, rewrite_plan, project_gap_analysis. Keep every field grounded in the repository evidence you inspected.",
+      "prompt": "Read README.md and docs/career-copilot-product-plan.md, then call final_answer with a valid career_report JSON object with keys summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, and appendix. Keep every field grounded in the repository evidence you inspected.",
       "timeout_seconds": 60,
-      "expected_output_contains": ["summary", "match_report", "rewrite_plan", "project_gap_analysis"],
+      "expected_output_contains": ["summary", "jd_analysis", "project_evidence", "resume_rewrite", "interview_brief", "gap_plan", "risk_flags"],
       "required_tools": ["file_read"],
       "max_steps": 10
     }

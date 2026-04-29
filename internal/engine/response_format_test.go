@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -77,6 +78,84 @@ func TestRunnerCompletesWhenModelUsesFinalAnswerTool(t *testing.T) {
 	}
 	if len(result.Steps) != 1 {
 		t.Fatalf("unexpected step count: %d", len(result.Steps))
+	}
+}
+
+func TestRunnerRetriesFinalAnswerToolAfterValidationFailure(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_1",
+							ToolName:   tools.FinalAnswerToolName,
+							Arguments:  []byte(`{"content":"{\"summary\":\"too small\"}"}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   tools.FinalAnswerToolName,
+						Arguments:  []byte(`{"content":"{\"summary\":\"too small\"}"}`),
+					},
+				},
+			},
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_2",
+							ToolName:   tools.FinalAnswerToolName,
+							Arguments:  []byte(`{"content":"valid"}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_2",
+						ToolName:   tools.FinalAnswerToolName,
+						Arguments:  []byte(`{"content":"valid"}`),
+					},
+				},
+			},
+		},
+	}
+
+	registry := tools.NewRegistry()
+	registry.MustRegister(tools.NewFinalAnswerTool())
+	runner := NewRunner(client, registry, 3)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "finish",
+		SystemPrompt: "reply with JSON action",
+		ToolDefs: []tools.Definition{
+			tools.NewFinalAnswerTool().Definition(),
+		},
+		ValidateFinalAnswer: func(content string) error {
+			if content != "valid" {
+				return fmt.Errorf("invalid final answer")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != "valid" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(result.Steps) != 2 {
+		t.Fatalf("expected validation retry to use 2 steps, got %d", len(result.Steps))
+	}
+	if result.Steps[0].Observation != "invalid final answer" {
+		t.Fatalf("unexpected validation observation: %q", result.Steps[0].Observation)
 	}
 }
 

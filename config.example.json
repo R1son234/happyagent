@@ -2,7 +2,8 @@
   "llm": {
     "model": "gpt-4o-mini",
     "api_key": "replace-with-your-api-key",
-    "base_url": ""
+    "base_url": "",
+    "timeout_seconds": 60
   },
   "engine": {
     "loop_max_steps": 8,

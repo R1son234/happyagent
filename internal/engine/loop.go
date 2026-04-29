@@ -113,6 +113,12 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		}
 		toolCalls = append(toolCalls, outcome.ToolCall)
 		if action.ToolName == tools.FinalAnswerToolName {
+			if outcome.ToolCall.Status != toolCallStatusSucceeded {
+				return StepResult{
+					Observation: outcome.Observation,
+					ToolCalls:   toolCalls,
+				}, nil
+			}
 			return StepResult{
 				Done:      true,
 				Output:    outcome.Observation,

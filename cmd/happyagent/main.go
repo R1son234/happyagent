@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"happyagent/internal/app"
+	"happyagent/internal/career"
 	"happyagent/internal/config"
 	"happyagent/internal/observe"
 	"happyagent/internal/report"
@@ -72,6 +73,18 @@ func main() {
 	if err != nil {
 		exitf("load config: %v", err)
 	}
+	if isCareerCommand(os.Args[1:]) {
+		cfg.Tools.RootDir = careerRepoArg(os.Args[1:], cfg.Tools.RootDir)
+		if cfg.Engine.LoopMaxSteps < career.MinAnalyzeLoopSteps {
+			cfg.Engine.LoopMaxSteps = career.MinAnalyzeLoopSteps
+		}
+		if cfg.Engine.RunTimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
+			cfg.Engine.RunTimeoutSeconds = career.MinAnalyzeTimeoutSeconds
+		}
+		if cfg.LLM.TimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
+			cfg.LLM.TimeoutSeconds = career.MinAnalyzeTimeoutSeconds
+		}
+	}
 
 	rt, err := runtime.NewBuilder().Build(cfg)
 	if err != nil {
@@ -86,6 +99,19 @@ func main() {
 	application, err := buildApplication(rt)
 	if err != nil {
 		exitf("build app: %v", err)
+	}
+	if isCareerCommand(os.Args[1:]) {
+		ctx, cancel := career.ContextWithConfiguredTimeout(context.Background(), cfg)
+		defer cancel()
+		if err := career.RunCLI(ctx, os.Args[2:], career.Dependencies{
+			App:    application,
+			Config: cfg,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+		}); err != nil {
+			exitf("career: %v", err)
+		}
+		return
 	}
 
 	if showSessionID != "" {
@@ -218,6 +244,25 @@ func buildApplication(rt *runtime.Runtime) (*app.Application, error) {
 		return nil, err
 	}
 	return app.New(rt, dataStore, observe.NewMetrics())
+}
+
+func isCareerCommand(args []string) bool {
+	return len(args) > 0 && args[0] == "career"
+}
+
+func careerRepoArg(args []string, fallback string) string {
+	if len(args) < 2 || args[1] != "analyze" {
+		return fallback
+	}
+	for i := 2; i < len(args); i++ {
+		if args[i] == "--repo" && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(args[i], "--repo=") {
+			return strings.TrimPrefix(args[i], "--repo=")
+		}
+	}
+	return fallback
 }
 
 func resolveSession(application sessionApplication, sessionID string, profileName string, sessionMode bool) (string, bool, error) {

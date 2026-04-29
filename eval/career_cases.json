@@ -1,0 +1,15 @@
+{
+  "name": "career-copilot",
+  "description": "Career Copilot eval cases for structured reports, repository evidence, and grounded resume guidance.",
+  "cases": [
+    {
+      "name": "career-analyze-fixed-inputs",
+      "profile": "career-copilot",
+      "prompt": "Read examples/career/jd-ai-agent-backend.md, examples/career/resume-draft.md, examples/career/target.md, internal/engine/loop.go, internal/runtime/runtime.go, and internal/tools/search_docs_tool.go. Also use file_search once for the query trace. After evidence review, call final_answer with a valid career_report JSON object containing keys summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, and appendix. Include at least three project evidence claims, three resume bullets, and one risk flag. Do not claim production traffic, revenue impact, or real users unless a file proves it.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["match_score", "project_evidence", "resume_rewrite", "risk_flags"],
+      "required_tools": ["file_read", "file_search"],
+      "max_steps": 12
+    }
+  ]
+}

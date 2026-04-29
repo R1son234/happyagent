@@ -52,6 +52,7 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
 
 	overrideInt("HAPPYAGENT_LOOP_MAX_STEPS", &cfg.Engine.LoopMaxSteps)
+	overrideInt("HAPPYAGENT_LLM_TIMEOUT_SECONDS", &cfg.LLM.TimeoutSeconds)
 	overrideInt("HAPPYAGENT_MAX_OBSERVATION_BYTES", &cfg.Engine.MaxObservationBytes)
 	overrideInt("HAPPYAGENT_RUN_TIMEOUT_SECONDS", &cfg.Engine.RunTimeoutSeconds)
 	overrideInt("HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS", &cfg.MCP.ConnectTimeoutSeconds)
@@ -82,6 +83,9 @@ func validate(cfg Config) error {
 	}
 	if cfg.LLM.APIKey == "" {
 		return fmt.Errorf("llm.api_key must not be empty")
+	}
+	if cfg.LLM.TimeoutSeconds <= 0 {
+		return fmt.Errorf("llm.timeout_seconds must be greater than zero")
 	}
 	if cfg.Tools.RootDir == "" {
 		return fmt.Errorf("tools.root_dir must not be empty")
