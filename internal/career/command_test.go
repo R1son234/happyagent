@@ -327,6 +327,76 @@ func TestRunInteractiveAutoArchivesReferencedJDFileBeforeModelTurn(t *testing.T)
 	}
 }
 
+func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "ok"}},
+	}
+	workspaceRoot := t.TempDir()
+	workdir := t.TempDir()
+	testDir := filepath.Join(workdir, "mytest")
+	if err := os.Mkdir(testDir, 0o755); err != nil {
+		t.Fatalf("mkdir test dir: %v", err)
+	}
+	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime、RAG 和 MCP。\n任职要求：熟悉 Go、LLM、observability。\n"
+	if err := os.WriteFile(filepath.Join(testDir, "ai.txt"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Fatalf("restore wd: %v", err)
+		}
+	}()
+	var stdout bytes.Buffer
+
+	err = RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("我在mytest目录里放了ai.txt,是我搜集到的jd,也是我想投的一些岗位,你帮我记录分析下\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "已自动归档 JD") {
+		t.Fatalf("expected auto-archive confirmation, got:\n%s", output)
+	}
+	if strings.Contains(output, "无法自动归档") {
+		t.Fatalf("did not expect ingest warning, got:\n%s", output)
+	}
+	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
+		t.Fatalf("expected model turn with auto-saved context, got %+v", app.appendRequests)
+	}
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	meta, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if meta.ActiveJD == "" {
+		t.Fatalf("expected active JD to be updated")
+	}
+	if len(index.Items) < 1 || index.Items[0].Type != WorkspaceTypeJD {
+		t.Fatalf("expected jd item, got %+v", index.Items)
+	}
+}
+
 func TestRunInteractiveAutoArchivesReferencedDOCXResumeWithoutSavingPromptText(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{

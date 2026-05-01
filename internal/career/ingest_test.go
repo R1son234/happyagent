@@ -31,6 +31,17 @@ func TestExtractReferencedDirectoriesFindsDirectoryHints(t *testing.T) {
 	}
 }
 
+func TestExtractReferencedFilesJoinsChineseDirectoryPhraseAndFileName(t *testing.T) {
+	input := `我在mytest目录里放了ai.txt,是我搜集到的jd,你帮我记录分析下`
+	paths := extractReferencedFiles(input)
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 path, got %+v", paths)
+	}
+	if paths[0] != filepath.Join("mytest", "ai.txt") {
+		t.Fatalf("expected joined path, got %+v", paths)
+	}
+}
+
 func TestDiscoverFilesInReferencedDirectoriesPrefersResumeDocx(t *testing.T) {
 	testDir, err := filepath.Abs("testdata")
 	if err != nil {
