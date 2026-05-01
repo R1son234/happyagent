@@ -32,7 +32,9 @@ func newRawLineReader(input io.Reader, output io.Writer) (LineReader, error) {
 	original := *termios
 	raw := original
 	raw.Iflag &^= unix.IGNBRK | unix.BRKINT | unix.PARMRK | unix.ISTRIP | unix.INLCR | unix.IGNCR | unix.ICRNL | unix.IXON
-	raw.Oflag &^= unix.OPOST
+	// Keep output post-processing enabled so regular "\n" writes from stdout
+	// and stderr still return to column 0 while the terminal is in raw input
+	// mode. Disabling OPOST makes multiline agent output render as a staircase.
 	raw.Lflag &^= unix.ECHO | unix.ICANON | unix.IEXTEN | unix.ISIG
 	raw.Cflag &^= unix.CSIZE | unix.PARENB
 	raw.Cflag |= unix.CS8

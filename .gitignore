@@ -5,3 +5,4 @@ bin/
 .gomodcache/
 logs/
 .happyagent/
+mytest/
