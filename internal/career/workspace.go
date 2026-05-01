@@ -1,0 +1,585 @@
+package career
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+const DefaultWorkspaceRoot = ".happyagent/career"
+
+var nonSlugCharPattern = regexp.MustCompile(`[^a-z0-9]+`)
+
+type Workspace struct {
+	Root string
+}
+
+type WorkspaceMetadata struct {
+	Version       int       `json:"version"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	TargetRoles   []string  `json:"target_roles,omitempty"`
+	CurrentResume string    `json:"current_resume,omitempty"`
+	ActiveJD      string    `json:"active_jd,omitempty"`
+	ActiveProject string    `json:"active_project,omitempty"`
+}
+
+type WorkspaceIndex struct {
+	Items []WorkspaceItem `json:"items"`
+}
+
+type WorkspaceItem struct {
+	ID        string                `json:"id"`
+	Type      string                `json:"type"`
+	Title     string                `json:"title"`
+	Path      string                `json:"path"`
+	Tags      []string              `json:"tags,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	Summary   string                `json:"summary,omitempty"`
+	Metadata  WorkspaceItemMetadata `json:"-"`
+}
+
+type WorkspaceItemMetadata struct {
+	ID            string    `json:"id"`
+	Title         string    `json:"title"`
+	Type          string    `json:"type"`
+	CreatedAt     time.Time `json:"created_at"`
+	Source        string    `json:"source"`
+	Original      string    `json:"original,omitempty"`
+	Extractor     string    `json:"extractor,omitempty"`
+	MIMEType      string    `json:"mime_type,omitempty"`
+	ExtractStatus string    `json:"extract_status,omitempty"`
+	ExtractError  string    `json:"extract_error,omitempty"`
+}
+
+type WorkspaceFileInput struct {
+	ItemType      string
+	Title         string
+	Text          string
+	OriginalPath  string
+	OriginalName  string
+	Now           time.Time
+	Extractor     string
+	MIMEType      string
+	ExtractStatus string
+	ExtractError  string
+}
+
+func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
+	if strings.TrimSpace(root) == "" {
+		root = DefaultWorkspaceRoot
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	for _, dir := range []string{
+		"inbox",
+		"jds",
+		"resumes",
+		"projects",
+		"interview_experience",
+		"interview_records",
+		"review_notes",
+		"reports",
+		"exports",
+	} {
+		if err := os.MkdirAll(filepath.Join(root, dir), 0o755); err != nil {
+			return nil, fmt.Errorf("create career workspace dir %q: %w", dir, err)
+		}
+	}
+	ws := &Workspace{Root: root}
+	if _, err := os.Stat(ws.metadataPath()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat workspace metadata: %w", err)
+		}
+		meta := WorkspaceMetadata{
+			Version:   1,
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+		if err := ws.writeJSON(ws.metadataPath(), meta); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := os.Stat(ws.indexPath()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat workspace index: %w", err)
+		}
+		if err := ws.writeJSON(ws.indexPath(), WorkspaceIndex{Items: []WorkspaceItem{}}); err != nil {
+			return nil, err
+		}
+	}
+	return ws, nil
+}
+
+func (w *Workspace) WriteArtifact(kind string, title string, content string, now time.Time) (string, error) {
+	if strings.TrimSpace(kind) == "" {
+		return "", fmt.Errorf("artifact kind must not be empty")
+	}
+	if strings.TrimSpace(content) == "" {
+		return "", fmt.Errorf("artifact content must not be empty")
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	dir := "exports"
+	if kind == "jd-match" || kind == "career-report" || kind == "interview-review" {
+		dir = "reports"
+	}
+	name := fmt.Sprintf("%s-%s.md", kind, now.Format("20060102-150405"))
+	rel := filepath.Join(dir, name)
+	abs := filepath.Join(w.Root, rel)
+	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+		return "", fmt.Errorf("create artifact dir: %w", err)
+	}
+	if strings.TrimSpace(title) != "" && !strings.HasPrefix(content, "# ") {
+		content = "# " + title + "\n\n" + content
+	}
+	if err := os.WriteFile(abs, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
+		return "", fmt.Errorf("write artifact: %w", err)
+	}
+	item := WorkspaceItem{
+		ID:        fmt.Sprintf("%s-%s", kind, now.Format("20060102-150405")),
+		Type:      "export",
+		Title:     title,
+		Path:      filepath.ToSlash(rel),
+		Tags:      []string{kind},
+		CreatedAt: now,
+		Summary:   summarizeMaterial(content),
+	}
+	if kind == "jd-match" || kind == "career-report" || kind == "interview-review" {
+		item.Type = "report"
+	}
+	if err := w.upsertIndexItem(item); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
+}
+
+func (w *Workspace) Status() (WorkspaceMetadata, WorkspaceIndex, error) {
+	meta, err := w.ReadMetadata()
+	if err != nil {
+		return WorkspaceMetadata{}, WorkspaceIndex{}, err
+	}
+	index, err := w.ReadIndex()
+	if err != nil {
+		return WorkspaceMetadata{}, WorkspaceIndex{}, err
+	}
+	return meta, index, nil
+}
+
+func (w *Workspace) ReadMetadata() (WorkspaceMetadata, error) {
+	var meta WorkspaceMetadata
+	if err := w.readJSON(w.metadataPath(), &meta); err != nil {
+		return WorkspaceMetadata{}, err
+	}
+	return meta, nil
+}
+
+func (w *Workspace) ReadIndex() (WorkspaceIndex, error) {
+	var index WorkspaceIndex
+	if err := w.readJSON(w.indexPath(), &index); err != nil {
+		return WorkspaceIndex{}, err
+	}
+	return index, nil
+}
+
+func (w *Workspace) AddJD(content string, now time.Time) (WorkspaceItem, error) {
+	return w.addMaterial(WorkspaceTypeJD, content, now)
+}
+
+func (w *Workspace) AddMaterial(itemType string, content string, now time.Time) (WorkspaceItem, error) {
+	if itemType == WorkspaceTypeJD {
+		return w.AddJD(content, now)
+	}
+	if !IsSupportedWorkspaceType(itemType) {
+		return WorkspaceItem{}, fmt.Errorf("unsupported workspace item type %q", itemType)
+	}
+	return w.addMaterial(itemType, content, now)
+}
+
+func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem, error) {
+	itemType := input.ItemType
+	if !IsSupportedWorkspaceType(itemType) {
+		return WorkspaceItem{}, fmt.Errorf("unsupported workspace item type %q", itemType)
+	}
+	content := strings.TrimSpace(input.Text)
+	if content == "" && strings.TrimSpace(input.OriginalPath) == "" {
+		return WorkspaceItem{}, fmt.Errorf("%s file text must not be empty", itemType)
+	}
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" {
+		title = strings.TrimSuffix(input.OriginalName, filepath.Ext(input.OriginalName))
+	}
+	if title == "" {
+		title = inferMaterialTitle(itemType, content)
+	}
+	id := fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
+	relDir := filepath.Join(workspaceTypeDir(itemType), id)
+	if itemType == WorkspaceTypeResume {
+		relDir = filepath.Join("resumes", "versions", id)
+	}
+	absDir := filepath.Join(w.Root, relDir)
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
+	}
+	sourceRel := filepath.Join(relDir, "extracted.md")
+	sourceContent := content
+	if sourceContent == "" {
+		sourceContent = extractionFailurePlaceholder(filepath.Base(input.OriginalPath), input.ExtractError)
+	}
+	if err := os.WriteFile(filepath.Join(w.Root, sourceRel), []byte(sourceContent+"\n"), 0o644); err != nil {
+		return WorkspaceItem{}, fmt.Errorf("write extracted %s source: %w", itemType, err)
+	}
+	originalRel := ""
+	if strings.TrimSpace(input.OriginalPath) != "" {
+		originalRel = filepath.Join(relDir, "source"+filepath.Ext(input.OriginalPath))
+		if err := copyFile(input.OriginalPath, filepath.Join(w.Root, originalRel)); err != nil {
+			return WorkspaceItem{}, err
+		}
+	}
+	metadata := WorkspaceItemMetadata{
+		ID:            id,
+		Title:         title,
+		Type:          itemType,
+		CreatedAt:     now,
+		Source:        filepath.ToSlash(sourceRel),
+		Original:      filepath.ToSlash(originalRel),
+		Extractor:     input.Extractor,
+		MIMEType:      input.MIMEType,
+		ExtractStatus: normalizeExtractStatus(input.ExtractStatus),
+		ExtractError:  strings.TrimSpace(input.ExtractError),
+	}
+	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
+		return WorkspaceItem{}, err
+	}
+	item := WorkspaceItem{
+		ID:        id,
+		Type:      itemType,
+		Title:     title,
+		Path:      filepath.ToSlash(sourceRel),
+		Tags:      inferMaterialTags(itemType, content),
+		CreatedAt: now,
+		Summary:   summarizeMaterial(sourceContent),
+		Metadata:  metadata,
+	}
+	if err := w.upsertIndexItem(item); err != nil {
+		return WorkspaceItem{}, err
+	}
+	if err := w.updateActivePointers(itemType, relDir, sourceRel, now); err != nil {
+		return WorkspaceItem{}, err
+	}
+	return item, nil
+}
+
+func (w *Workspace) addMaterial(itemType string, content string, now time.Time) (WorkspaceItem, error) {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return WorkspaceItem{}, fmt.Errorf("%s content must not be empty", itemType)
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	title := inferMaterialTitle(itemType, content)
+	id := fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
+	relDir := filepath.Join(workspaceTypeDir(itemType), id)
+	absDir := filepath.Join(w.Root, relDir)
+	if itemType == WorkspaceTypeResume {
+		relDir = filepath.Join("resumes", "versions", id)
+		absDir = filepath.Join(w.Root, relDir)
+	}
+	if err := os.MkdirAll(absDir, 0o755); err != nil {
+		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
+	}
+	sourceRel := filepath.Join(relDir, "extracted.md")
+	sourceAbs := filepath.Join(w.Root, sourceRel)
+	if err := os.WriteFile(sourceAbs, []byte(content+"\n"), 0o644); err != nil {
+		return WorkspaceItem{}, fmt.Errorf("write %s source: %w", itemType, err)
+	}
+	metadata := WorkspaceItemMetadata{
+		ID:            id,
+		Title:         title,
+		Type:          itemType,
+		CreatedAt:     now,
+		Source:        filepath.ToSlash(sourceRel),
+		Extractor:     "inline_text",
+		MIMEType:      "text/markdown",
+		ExtractStatus: "ok",
+	}
+	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
+		return WorkspaceItem{}, err
+	}
+
+	item := WorkspaceItem{
+		ID:        id,
+		Type:      itemType,
+		Title:     title,
+		Path:      filepath.ToSlash(sourceRel),
+		Tags:      inferMaterialTags(itemType, content),
+		CreatedAt: now,
+		Summary:   summarizeMaterial(content),
+		Metadata:  metadata,
+	}
+	if err := w.upsertIndexItem(item); err != nil {
+		return WorkspaceItem{}, err
+	}
+	if err := w.updateActivePointers(itemType, relDir, sourceRel, now); err != nil {
+		return WorkspaceItem{}, err
+	}
+	return item, nil
+}
+
+func (w *Workspace) updateActivePointers(itemType string, relDir string, sourceRel string, now time.Time) error {
+	meta, err := w.ReadMetadata()
+	if err != nil {
+		return err
+	}
+	switch itemType {
+	case WorkspaceTypeJD:
+		meta.ActiveJD = filepath.ToSlash(sourceRel)
+	case WorkspaceTypeResume:
+		meta.CurrentResume = filepath.ToSlash(sourceRel)
+	case WorkspaceTypeProject:
+		meta.ActiveProject = filepath.ToSlash(sourceRel)
+	}
+	meta.UpdatedAt = now
+	return w.writeJSON(w.metadataPath(), meta)
+}
+
+func normalizeExtractStatus(status string) string {
+	status = strings.TrimSpace(status)
+	if status == "" {
+		return "ok"
+	}
+	return status
+}
+
+func extractionFailurePlaceholder(name string, extractError string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "source file"
+	}
+	extractError = strings.TrimSpace(extractError)
+	if extractError == "" {
+		return fmt.Sprintf("Extraction failed for %s.", name)
+	}
+	return fmt.Sprintf("Extraction failed for %s.\n\nError: %s", name, extractError)
+}
+
+func LooksLikeJD(content string) bool {
+	normalized := strings.ToLower(content)
+	signals := []string{
+		"job description",
+		"responsibilities",
+		"requirements",
+		"qualifications",
+		"岗位职责",
+		"职位描述",
+		"任职要求",
+		"岗位要求",
+		"加分项",
+	}
+	count := 0
+	for _, signal := range signals {
+		if strings.Contains(normalized, signal) {
+			count++
+		}
+	}
+	return count >= 1 && len([]rune(strings.TrimSpace(content))) >= 40
+}
+
+func (w *Workspace) upsertIndexItem(item WorkspaceItem) error {
+	index, err := w.ReadIndex()
+	if err != nil {
+		return err
+	}
+	replaced := false
+	for i, existing := range index.Items {
+		if existing.ID == item.ID {
+			index.Items[i] = item
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		index.Items = append(index.Items, item)
+	}
+	sort.SliceStable(index.Items, func(i, j int) bool {
+		return index.Items[i].CreatedAt.Before(index.Items[j].CreatedAt)
+	})
+	return w.writeJSON(w.indexPath(), index)
+}
+
+func (w *Workspace) metadataPath() string {
+	return filepath.Join(w.Root, "workspace.json")
+}
+
+func (w *Workspace) indexPath() string {
+	return filepath.Join(w.Root, "index.json")
+}
+
+func (w *Workspace) writeJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal %q: %w", path, err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write %q: %w", path, err)
+	}
+	return nil
+}
+
+func (w *Workspace) readJSON(path string, dest any) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read %q: %w", path, err)
+	}
+	if err := json.Unmarshal(data, dest); err != nil {
+		return fmt.Errorf("parse %q: %w", path, err)
+	}
+	return nil
+}
+
+func inferMaterialTitle(itemType string, content string) string {
+	if itemType == WorkspaceTypeJD {
+		return inferJDTitle(content)
+	}
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if line == "" {
+			continue
+		}
+		if len([]rune(line)) > 80 {
+			line = string([]rune(line)[:80])
+		}
+		return line
+	}
+	return itemType
+}
+
+func inferJDTitle(content string) string {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(line, "#"))
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.Contains(lower, "job description") || strings.Contains(line, "职位描述") || strings.Contains(line, "岗位职责") {
+			continue
+		}
+		if len([]rune(line)) > 80 {
+			line = string([]rune(line)[:80])
+		}
+		return line
+	}
+	return "job-description"
+}
+
+func inferMaterialTags(itemType string, content string) []string {
+	lower := strings.ToLower(content)
+	candidates := []string{"agent", "rag", "mcp", "go", "golang", "backend", "llm", "python", "kubernetes", "observability", "resume", "interview", "project"}
+	var tags []string
+	seen := map[string]bool{itemType: true}
+	tags = append(tags, itemType)
+	for _, candidate := range candidates {
+		if strings.Contains(lower, candidate) && !seen[candidate] {
+			tag := candidate
+			if tag == "golang" {
+				tag = "go"
+			}
+			if !seen[tag] {
+				tags = append(tags, tag)
+				seen[tag] = true
+			}
+			seen[candidate] = true
+		}
+	}
+	return tags
+}
+
+func summarizeMaterial(content string) string {
+	compact := strings.Join(strings.Fields(content), " ")
+	if len([]rune(compact)) > 180 {
+		return string([]rune(compact)[:180])
+	}
+	return compact
+}
+
+func workspaceTypeDir(itemType string) string {
+	switch itemType {
+	case WorkspaceTypeJD:
+		return "jds"
+	case WorkspaceTypeResume:
+		return "resumes"
+	case WorkspaceTypeProject:
+		return "projects"
+	case WorkspaceTypeInterviewExperience:
+		return "interview_experience"
+	case WorkspaceTypeInterviewRecord:
+		return "interview_records"
+	case WorkspaceTypeReviewNote:
+		return "review_notes"
+	default:
+		return "inbox"
+	}
+}
+
+func itemIDPrefix(itemType string) string {
+	switch itemType {
+	case WorkspaceTypeInterviewExperience:
+		return "interview-exp"
+	case WorkspaceTypeInterviewRecord:
+		return "interview-record"
+	case WorkspaceTypeReviewNote:
+		return "review-note"
+	default:
+		return strings.ReplaceAll(itemType, "_", "-")
+	}
+}
+
+func copyFile(src string, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("open source file %q: %w", src, err)
+	}
+	defer in.Close()
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("create parent directory for %q: %w", dst, err)
+	}
+	out, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("create copied file %q: %w", dst, err)
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, in); err != nil {
+		return fmt.Errorf("copy %q to %q: %w", src, dst, err)
+	}
+	return nil
+}
+
+func slug(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = nonSlugCharPattern.ReplaceAllString(value, "-")
+	value = strings.Trim(value, "-")
+	if value == "" {
+		return "job-description"
+	}
+	if len(value) > 48 {
+		value = strings.Trim(value[:48], "-")
+	}
+	if value == "" {
+		return "job-description"
+	}
+	return value
+}

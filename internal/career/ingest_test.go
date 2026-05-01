@@ -1,0 +1,102 @@
+package career
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestExtractReferencedFilesFindsMultipleLocalPaths(t *testing.T) {
+	input := `我在 "` + filepath.Join("testdata", "resume-sample.docx") + `" 放了简历，` + filepath.Join("testdata", "jd-sample.txt") + ` 是目标 jd，帮我分析一下。`
+	paths := extractReferencedFiles(input)
+	if len(paths) != 2 {
+		t.Fatalf("expected 2 paths, got %+v", paths)
+	}
+	if paths[0] != filepath.Join("testdata", "resume-sample.docx") || paths[1] != filepath.Join("testdata", "jd-sample.txt") {
+		t.Fatalf("unexpected paths: %+v", paths)
+	}
+}
+
+func TestExtractReferencedDirectoriesFindsDirectoryHints(t *testing.T) {
+	input := `我在 test目录 里放了简历，在 ./fixtures 文件夹里放了 JD。`
+	dirs := extractReferencedDirectories(input)
+	if len(dirs) != 2 {
+		t.Fatalf("expected 2 directories, got %+v", dirs)
+	}
+	if dirs[0] != "test" || dirs[1] != "./fixtures" {
+		t.Fatalf("unexpected directories: %+v", dirs)
+	}
+}
+
+func TestDiscoverFilesInReferencedDirectoriesPrefersResumeDocx(t *testing.T) {
+	testDir, err := filepath.Abs("testdata")
+	if err != nil {
+		t.Fatalf("filepath.Abs() error = %v", err)
+	}
+	files := discoverFilesInReferencedDirectories("我在 " + testDir + "目录里存了我的简历,一个docx文件,你帮我分析一下")
+	if len(files) != 1 {
+		t.Fatalf("expected 1 discovered file, got %+v", files)
+	}
+	expected := filepath.Join(testDir, "resume-sample.docx")
+	if files[0] != expected {
+		t.Fatalf("expected %q, got %+v", expected, files)
+	}
+}
+
+func TestIngestFileExtractsDOCXResume(t *testing.T) {
+	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	result, err := IngestFile(context.Background(), ws, IngestRequest{
+		Path:      filepath.Join("testdata", "resume-sample.docx"),
+		HintType:  WorkspaceTypeResume,
+		UserInput: "这是我的简历，帮我看看",
+		Now:       time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("IngestFile() error = %v", err)
+	}
+	if result.Item.Type != WorkspaceTypeResume {
+		t.Fatalf("expected resume item, got %+v", result.Item)
+	}
+	if result.ExtractedRel == "" || result.OriginalRel == "" {
+		t.Fatalf("expected original and extracted paths, got %+v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(ws.Root, filepath.FromSlash(result.ExtractedRel)))
+	if err != nil {
+		t.Fatalf("read extracted: %v", err)
+	}
+	text := string(data)
+	for _, expected := range []string{"Sample Backend Engineer", "Go", "Agent runtime"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected extracted docx to contain %q, got:\n%s", expected, text)
+		}
+	}
+}
+
+func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
+	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
+	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime。\n任职要求：熟悉 Go、LLM。\n"
+	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	result, err := IngestFile(context.Background(), ws, IngestRequest{
+		Path:      sourcePath,
+		UserInput: "帮我记录一下这个岗位",
+		Now:       time.Now(),
+	})
+	if err != nil {
+		t.Fatalf("IngestFile() error = %v", err)
+	}
+	if result.ItemType != WorkspaceTypeJD {
+		t.Fatalf("expected jd type, got %+v", result)
+	}
+}

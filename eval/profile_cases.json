@@ -1,0 +1,24 @@
+{
+  "name": "profile-runtime",
+  "description": "Profile-aware eval cases for session, tool policy, and structured output checks.",
+  "cases": [
+    {
+      "name": "general-assistant-readme-summary",
+      "profile": "general-assistant",
+      "prompt": "Call file_list on the repository root, then summarize this repository in Chinese and mention happyagent.",
+      "timeout_seconds": 60,
+      "expected_output_contains": ["happyagent"],
+      "required_tools": ["file_list"],
+      "max_steps": 8
+    },
+    {
+      "name": "career-copilot-structured-report",
+      "profile": "career-copilot",
+      "prompt": "Read README.md and docs/architecture.md, then call final_answer with a valid career_report JSON object with keys summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, and appendix. Keep every field grounded in the repository evidence you inspected.",
+      "timeout_seconds": 60,
+      "expected_output_contains": ["summary", "jd_analysis", "project_evidence", "resume_rewrite", "interview_brief", "gap_plan", "risk_flags"],
+      "required_tools": ["file_read"],
+      "max_steps": 10
+    }
+  ]
+}

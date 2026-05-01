@@ -1,0 +1,69 @@
+# Career Copilot Report
+
+## Executive Summary
+
+Target role: {{.Summary.TargetRole}}
+
+Match score: {{.Summary.MatchScore}}/100
+
+Verdict: {{.Summary.Verdict}}
+
+## JD Capability Breakdown
+
+{{range .JDAnalysis.RequiredCapabilities}}- {{.Name}} ({{.Importance}}): {{.EvidenceNeeded}}
+{{end}}
+## Project Evidence
+
+{{range .ProjectEvidence}}### {{.Claim}}
+
+Confidence: {{.Confidence}}
+
+{{range .Evidence}}- {{.Path}}: {{.Reason}}
+{{end}}
+{{end}}
+## Resume Rewrite
+
+{{range .ResumeRewrite.Bullets}}- Original: {{.Original}}
+- Recommended: {{.Recommended}}
+- Why: {{.Why}}
+
+{{end}}
+## Interview Brief
+
+### Project Pitch
+
+{{.InterviewBrief.ProjectPitch}}
+
+### Architecture Talk Track
+
+{{.InterviewBrief.ArchitectureTalkTrack}}
+
+### Tradeoffs
+
+{{range .InterviewBrief.Tradeoffs}}- {{.}}
+{{end}}
+### Questions To Expect
+
+{{range .InterviewBrief.QuestionsToExpect}}- {{.}}
+{{end}}
+## Gap Plan
+
+{{range .GapPlan}}### {{.Priority}} - {{.Item}}
+
+Why it matters: {{.WhyItMatters}}
+
+Acceptance: {{.Acceptance}}
+
+{{end}}
+## Risk Flags
+
+{{range .RiskFlags}}- {{.Statement}}: {{.Reason}}
+{{end}}
+## Appendix: Trace And Files Reviewed
+
+Run: {{.Appendix.RunID}}
+
+Session: {{.Appendix.SessionID}}
+
+{{range .Appendix.FilesReviewed}}- {{.}}
+{{end}}
