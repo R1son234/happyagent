@@ -275,6 +275,57 @@ func TestRunnerTruncatesToolObservations(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotTruncateFinalAnswerToolOutput(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.MustRegister(tools.NewFinalAnswerTool())
+
+	longOutput := strings.Repeat("x", 128)
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_1",
+							ToolName:   tools.FinalAnswerToolName,
+							Arguments:  []byte(`{"content":"` + longOutput + `"}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   tools.FinalAnswerToolName,
+						Arguments:  []byte(`{"content":"` + longOutput + `"}`),
+					},
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, registry, 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:               "finish",
+		SystemPrompt:        "reply with tool call",
+		MaxObservationBytes: 48,
+		ToolDefs: []tools.Definition{
+			tools.NewFinalAnswerTool().Definition(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != longOutput {
+		t.Fatalf("final output was truncated: got len %d want %d", len(result.Output), len(longOutput))
+	}
+	if result.Steps[0].Observation != "" {
+		t.Fatalf("final answer step observation should stay out of trace, got %q", result.Steps[0].Observation)
+	}
+}
+
 func registryBackedClient(client *stubClient) *stubClient {
 	return client
 }

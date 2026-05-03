@@ -2,10 +2,10 @@
 
 The generated report should include:
 
-- JD capability breakdown with required AI agent backend skills.
+- JD capability breakdown with required marketing and growth skills.
 - Match score and verdict.
-- Project evidence citing repository paths.
-- Resume bullet rewrites connected to runtime, tool calling, trace, eval, RAG, and MCP.
-- Interview pitch with architecture and tradeoffs.
+- Project evidence citing reviewed material paths.
+- Resume bullet rewrites connected to campaign planning, content strategy, growth metrics, cross-functional coordination, and AI-assisted productivity.
+- Interview pitch with marketing workflow, campaign tradeoffs, and evidence boundaries.
 - Gap plan with concrete acceptance checks.
 - Risk flags for claims that need evidence.

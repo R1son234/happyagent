@@ -20,5 +20,5 @@
     "max_chars": 2400
   },
   "output_schema": "",
-  "eval_suite": "eval/career_copilot_cases.json"
+  "eval_suite": "eval/career_cases.json"
 }

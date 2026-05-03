@@ -12,10 +12,10 @@ func TestRenderAndWriteWorkspaceArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
-	if _, err := ws.AddMaterial(WorkspaceTypeJD, "AI Agent Backend\n岗位职责：负责 RAG 和 MCP。", time.Now()); err != nil {
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, "Sample Role\n岗位职责：负责项目规划和跨部门协作。", time.Now()); err != nil {
 		t.Fatalf("AddMaterial jd error = %v", err)
 	}
-	if _, err := ws.AddMaterial(WorkspaceTypeResume, "简历：Go 后端，Agent runtime 项目。", time.Now()); err != nil {
+	if _, err := ws.AddMaterial(WorkspaceTypeResume, "简历：负责项目推进、协作沟通和结果复盘。", time.Now()); err != nil {
 		t.Fatalf("AddMaterial resume error = %v", err)
 	}
 	title, content, err := RenderWorkspaceArtifact(ws, "jd-match")

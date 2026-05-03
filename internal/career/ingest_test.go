@@ -95,7 +95,7 @@ func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
-	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime。\n任职要求：熟悉 Go、LLM。\n"
+	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调和执行复盘。\n"
 	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}

@@ -120,8 +120,8 @@ Supported material types:
 Examples:
 
 ```text
-/add jd ./examples/career/jd-ai-agent-backend.md
-/add resume ./examples/career/resume-draft.md
+/add jd ./examples/career/real-world-anonymized/jd-marketing-growth.md
+/add resume ./examples/career/real-world-anonymized/resume-marketing-anonymized.md
 /export jd-match
 ```
 
@@ -131,14 +131,29 @@ Batch analysis is available through `career analyze`:
 
 ```bash
 ./bin/happyagent career analyze \
-  --jd examples/career/jd-ai-agent-backend.md \
-  --resume examples/career/resume-draft.md \
-  --target examples/career/target.md \
+  --jd examples/career/real-world-anonymized/jd-marketing-growth.md \
+  --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
+  --target examples/career/real-world-anonymized/target.md \
   --repo . \
   --out outputs/career-report.md \
   --json outputs/career-report.json \
   --trace-json logs/career/latest-trace.json
 ```
+
+Run the anonymized real-world demo used for resume and interview evidence:
+
+```bash
+./bin/happyagent career analyze \
+  --jd examples/career/real-world-anonymized/jd-marketing-growth.md \
+  --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
+  --target examples/career/real-world-anonymized/target.md \
+  --repo . \
+  --out outputs/demo-career-report.md \
+  --json outputs/demo-career-report.json \
+  --trace-json logs/career/demo-trace.json
+```
+
+The repository also includes checked-in example outputs at `outputs/demo-career-report.md`, `outputs/demo-career-report.json`, and `outputs/demo-career-trace.example.json`.
 
 Report transforms can be generated from the structured report:
 
@@ -277,7 +292,7 @@ Run Career Copilot eval:
 make eval-career
 ```
 
-Eval reports and traces are written under `logs/eval/`.
+Eval reports, traces, and Markdown summaries are written under `logs/eval/`, including `logs/eval/career-summary.md`.
 
 ## Configuration
 

@@ -56,13 +56,13 @@ func TestAddJDSavesSourceMetadataAndIndex(t *testing.T) {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 
-	item, err := ws.AddJD(`# AI Agent Backend Engineer
+	item, err := ws.AddJD(`# Sample Role
 
 岗位职责：
-- Build Go backend services for Agent runtime and RAG workflows.
+- Coordinate cross-functional projects and organize reusable work artifacts.
 
 任职要求：
-- Familiar with MCP, LLM, observability, and tool calling.
+- Familiar with stakeholder communication, execution tracking, and review habits.
 `, now)
 	if err != nil {
 		t.Fatalf("AddJD() error = %v", err)
@@ -70,7 +70,7 @@ func TestAddJDSavesSourceMetadataAndIndex(t *testing.T) {
 	if item.Type != "jd" {
 		t.Fatalf("unexpected item type: %+v", item)
 	}
-	if item.Title != "AI Agent Backend Engineer" {
+	if item.Title != "Sample Role" {
 		t.Fatalf("unexpected title: %q", item.Title)
 	}
 	if item.Path == "" {
@@ -103,7 +103,7 @@ func TestAddMaterialSavesResumeVersionAndUpdatesCurrentResume(t *testing.T) {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 
-	item, err := ws.AddMaterial(WorkspaceTypeResume, "简历\n工作经历：Go 后端开发\n项目经历：Agent runtime", now)
+	item, err := ws.AddMaterial(WorkspaceTypeResume, "简历\n工作经历：项目协作\n项目经历：跨部门项目推进", now)
 	if err != nil {
 		t.Fatalf("AddMaterial() error = %v", err)
 	}
@@ -162,10 +162,10 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 }
 
 func TestLooksLikeJD(t *testing.T) {
-	if !LooksLikeJD("岗位职责：负责 RAG 后端服务和 Agent runtime。\n任职要求：熟悉 Go、MCP、LLM tool calling。") {
+	if !LooksLikeJD("岗位职责：负责业务规划、跨部门协作、资料整理和结果复盘。\n任职要求：熟悉沟通协调、执行跟踪、文档沉淀和问题分析。") {
 		t.Fatalf("expected Chinese JD to be detected")
 	}
-	if LooksLikeJD("今天面试问到了 MCP，我回答得一般。") {
+	if LooksLikeJD("今天面试问到了项目复盘，我回答得一般。") {
 		t.Fatalf("short interview note should not be detected as JD")
 	}
 }

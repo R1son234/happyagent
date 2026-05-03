@@ -488,16 +488,29 @@ func inferJDTitle(content string) string {
 
 func inferMaterialTags(itemType string, content string) []string {
 	lower := strings.ToLower(content)
-	candidates := []string{"agent", "rag", "mcp", "go", "golang", "backend", "llm", "python", "kubernetes", "observability", "resume", "interview", "project"}
+	candidates := []string{
+		"resume",
+		"cv",
+		"interview",
+		"project",
+		"portfolio",
+		"case study",
+		"metrics",
+		"impact",
+		"leadership",
+		"collaboration",
+		"communication",
+		"writing",
+		"operations",
+		"analysis",
+		"strategy",
+	}
 	var tags []string
 	seen := map[string]bool{itemType: true}
 	tags = append(tags, itemType)
 	for _, candidate := range candidates {
 		if strings.Contains(lower, candidate) && !seen[candidate] {
 			tag := candidate
-			if tag == "golang" {
-				tag = "go"
-			}
 			if !seen[tag] {
 				tags = append(tags, tag)
 				seen[tag] = true

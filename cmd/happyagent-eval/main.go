@@ -20,10 +20,12 @@ func main() {
 	var suitePath string
 	var outputPath string
 	var traceDir string
+	var summaryPath string
 
 	flag.StringVar(&suitePath, "cases", defaultSuitePath, "path to eval suite json")
 	flag.StringVar(&outputPath, "output", "", "optional path for the suite json report")
 	flag.StringVar(&traceDir, "trace-dir", "", "optional directory for per-case trace json reports")
+	flag.StringVar(&summaryPath, "summary", "", "optional path for a markdown suite summary")
 	flag.Parse()
 
 	cfg, err := config.Load()
@@ -68,8 +70,13 @@ func main() {
 			exitf("write eval report: %v", err)
 		}
 	}
+	if summaryPath != "" {
+		if err := writeText(summaryPath, eval.RenderMarkdownSummary(result)); err != nil {
+			exitf("write eval summary: %v", err)
+		}
+	}
 
-	printSummary(result, outputPath, traceDir)
+	printSummary(result, outputPath, traceDir, summaryPath)
 	if result.FailedCount > 0 {
 		os.Exit(1)
 	}
@@ -96,7 +103,7 @@ func (a runtimeEvalAdapter) Run(ctx context.Context, req eval.RunRequest) (eval.
 	}, nil
 }
 
-func printSummary(result eval.SuiteResult, outputPath string, traceDir string) {
+func printSummary(result eval.SuiteResult, outputPath string, traceDir string, summaryPath string) {
 	fmt.Fprintf(os.Stdout, "suite=%s passed=%d failed=%d success_rate=%.2f avg_steps=%.2f avg_tool_calls=%.2f avg_executed_tools=%.2f avg_successful_tools=%.2f avg_duration_ms=%.2f total_tokens=%d\n",
 		result.Suite,
 		result.PassedCount,
@@ -134,6 +141,9 @@ func printSummary(result eval.SuiteResult, outputPath string, traceDir string) {
 	if traceDir != "" {
 		fmt.Fprintf(os.Stdout, "trace_dir=%s\n", traceDir)
 	}
+	if summaryPath != "" {
+		fmt.Fprintf(os.Stdout, "summary=%s\n", summaryPath)
+	}
 }
 
 func sanitizeFilename(value string) string {
@@ -157,6 +167,16 @@ func sanitizeFilename(value string) string {
 		return "case"
 	}
 	return name
+}
+
+func writeText(path string, content string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create output directory for %q: %w", path, err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		return fmt.Errorf("write text report %q: %w", path, err)
+	}
+	return nil
 }
 
 func exitf(format string, args ...any) {

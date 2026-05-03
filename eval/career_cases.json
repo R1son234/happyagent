@@ -1,14 +1,95 @@
 {
   "name": "career-copilot",
-  "description": "Career Copilot eval cases for structured reports, repository evidence, and grounded resume guidance.",
+  "description": "Career Copilot eval cases for structured reports, repository evidence, resume guidance, hallucination controls, and interview preparation.",
   "cases": [
     {
       "name": "career-analyze-fixed-inputs",
       "profile": "career-copilot",
-      "prompt": "Read examples/career/jd-ai-agent-backend.md, examples/career/resume-draft.md, examples/career/target.md, internal/engine/loop.go, internal/runtime/runtime.go, and internal/tools/search_docs_tool.go. Also use file_search once for the query trace. After evidence review, call final_answer with a valid career_report JSON object containing keys summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, and appendix. Include at least three project evidence claims, three resume bullets, and one risk flag. Do not claim production traffic, revenue impact, or real users unless a file proves it.",
+      "prompt": "Read examples/career/real-world-anonymized/jd-marketing-growth.md, examples/career/real-world-anonymized/resume-marketing-anonymized.md, examples/career/real-world-anonymized/target.md, README.md, docs/demo.md, and examples/career/expected-report-outline.md. Also use file_search once for the query trace. After evidence review, call final_answer with a valid career_report JSON object containing keys summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, and appendix. Include at least three project evidence claims, three resume bullets, and one risk flag. Do not claim revenue, ROI, conversion lift, paid budget, or brand growth unless a file proves it.",
       "timeout_seconds": 180,
       "expected_output_contains": ["match_score", "project_evidence", "resume_rewrite", "risk_flags"],
       "required_tools": ["file_read", "file_search"],
+      "max_steps": 12
+    },
+    {
+      "name": "anonymized-real-world-demo",
+      "profile": "career-copilot",
+      "prompt": "Read examples/career/real-world-anonymized/jd-marketing-growth.md, examples/career/real-world-anonymized/resume-marketing-anonymized.md, examples/career/real-world-anonymized/target.md, README.md, docs/demo.md, internal/career/report.go, and internal/career/command.go. Use search_docs for Career Copilot or report evidence. Then call final_answer with valid career_report JSON only. Focus on marketing role fit, campaign planning, content strategy, growth metrics, AI-assisted marketing productivity, and evidence boundaries.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["Marketing", "project_evidence", "gap_plan", "risk_flags"],
+      "required_tools": ["file_read", "search_docs"],
+      "max_steps": 14
+    },
+    {
+      "name": "resume-bullet-rewrite-grounded",
+      "profile": "career-copilot",
+      "prompt": "Read examples/career/real-world-anonymized/resume-marketing-anonymized.md, examples/career/real-world-anonymized/jd-marketing-growth.md, examples/career/real-world-anonymized/target.md, README.md, and docs/demo.md. Rewrite marketing resume bullets for Marketing Manager and Growth Marketing roles. Call final_answer with valid career_report JSON only. The resume_rewrite.bullets field must include at least four recommended bullets and each project_evidence item must cite reviewed paths.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["resume_rewrite", "campaign", "growth", "Marketing"],
+      "required_tools": ["file_read"],
+      "max_steps": 12
+    },
+    {
+      "name": "risk-flag-hallucination-guard",
+      "profile": "career-copilot",
+      "prompt": "Read examples/career/real-world-anonymized/resume-marketing-anonymized.md, examples/career/real-world-anonymized/jd-marketing-growth.md, README.md, internal/career/report.go, and eval/career_cases.json. Produce a career_report JSON that explicitly flags unsupported marketing claims. Do not claim large-scale revenue, ROI, conversion lift, paid-channel budget, or brand growth unless exact evidence exists. Include those boundaries in risk_flags and explain what evidence would be needed.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["risk_flags", "ROI", "evidence"],
+      "required_tools": ["file_read"],
+      "max_steps": 10
+    },
+    {
+      "name": "trace-eval-reliability-story",
+      "profile": "career-copilot",
+      "prompt": "Read docs/eval.md, eval/smoke_cases.json, eval/profile_cases.json, eval/career_cases.json, internal/eval/eval.go, internal/engine/runner.go, internal/engine/types.go, and cmd/happyagent-eval/main.go. Then call final_answer with valid career_report JSON only. Focus the project_evidence and interview_brief on Trace/Eval reliability, metrics, error categories, required tools, and per-case traces.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["error_categories", "tool", "trace", "eval"],
+      "required_tools": ["file_read"],
+      "max_steps": 12
+    },
+    {
+      "name": "mcp-skill-ecosystem-story",
+      "profile": "career-copilot",
+      "prompt": "Read README.md, docs/demo.md, internal/mcp/manager.go, internal/mcp/tool_adapter.go, internal/mcp/resource_preview.go, internal/runtime/skill_session.go, internal/runtime/capability_session.go, internal/tools/list_capabilities_tool.go, and internal/tools/activate_skill_tool.go. Produce valid career_report JSON only. Focus on how Career Copilot can use MCP integration, Skill activation, and capability discovery to support traceable marketing material analysis.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["MCP", "Skill", "list_capabilities", "project_evidence"],
+      "required_tools": ["file_read"],
+      "max_steps": 12
+    },
+    {
+      "name": "local-tool-safety-controls",
+      "profile": "career-copilot",
+      "prompt": "Read config.example.json, README.md, internal/tools/paths.go, internal/tools/shell_tool.go, internal/tools/file_write_tool.go, internal/tools/file_delete_tool.go, internal/policy/policy.go, and internal/runtime/runtime.go. Produce valid career_report JSON only. Focus on local execution safety, path boundaries, approval policy, shell allowlist, write/delete controls, and output validation.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["policy", "shell", "risk_flags", "path"],
+      "required_tools": ["file_read"],
+      "max_steps": 12
+    },
+    {
+      "name": "career-workspace-product-flow",
+      "profile": "career-copilot",
+      "prompt": "Read README.md, docs/demo.md, internal/career/workspace.go, internal/career/ingest.go, internal/career/classifier.go, internal/career/artifacts.go, internal/career/command.go, and docs/templates/career-report.md.tmpl. Produce valid career_report JSON only. Focus on the Career Copilot product workflow: material classification, local archive, active pointers, report rendering, and export commands.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["Career Copilot", "workspace", "resume_rewrite", "interview_brief"],
+      "required_tools": ["file_read"],
+      "max_steps": 12
+    },
+    {
+      "name": "gap-plan-rag-memory-upgrade",
+      "profile": "career-copilot",
+      "prompt": "Read examples/career/real-world-anonymized/jd-marketing-growth.md, examples/career/real-world-anonymized/resume-marketing-anonymized.md, internal/rag/rag.go, internal/memory/memory.go, internal/tools/search_docs_tool.go, profiles/career-copilot/profile.json, and docs/architecture.md. Produce valid career_report JSON only. The gap_plan must prioritize quantified campaign outcomes, portfolio artifacts, and stronger evidence citations, while risk_flags must avoid overstating marketing impact.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["campaign", "portfolio", "gap_plan", "risk_flags"],
+      "required_tools": ["file_read"],
+      "max_steps": 10
+    },
+    {
+      "name": "interview-brief-architecture-defense",
+      "profile": "career-copilot",
+      "prompt": "Read README.md, docs/architecture.md, docs/demo.md, internal/runtime/builder.go, internal/runtime/runtime.go, internal/engine/loop.go, internal/app/app.go, and internal/store/store.go. Produce valid career_report JSON only. The interview_brief must include a concise project pitch, architecture talk track, tradeoffs, and questions to expect.",
+      "timeout_seconds": 180,
+      "expected_output_contains": ["architecture_talk_track", "tradeoffs", "questions_to_expect"],
+      "required_tools": ["file_read"],
       "max_steps": 12
     }
   ]

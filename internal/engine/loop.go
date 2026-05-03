@@ -121,7 +121,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 			}
 			return StepResult{
 				Done:      true,
-				Output:    outcome.Observation,
+				Output:    outcome.Output,
 				ToolCalls: toolCalls,
 			}, nil
 		}
@@ -152,6 +152,7 @@ func validateStepActions(actions []Action) error {
 
 type toolCallOutcome struct {
 	Observation string
+	Output      string
 	ToolCall    ToolCallRecord
 }
 
@@ -196,10 +197,11 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			return toolCallOutcome{}, err
 		}
 	}
-	observation := truncateObservation(result.Output, input.MaxObservationBytes)
+	rawOutput := result.Output
+	observation := truncateObservation(rawOutput, input.MaxObservationBytes)
 	appendToolObservation(state, action, observation)
 	if action.ToolName == tools.FinalAnswerToolName && input.ValidateFinalAnswer != nil {
-		if err := input.ValidateFinalAnswer(observation); err != nil {
+		if err := input.ValidateFinalAnswer(rawOutput); err != nil {
 			observation = truncateObservation(err.Error(), input.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
@@ -210,6 +212,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	}
 	return toolCallOutcome{
 		Observation: observation,
+		Output:      rawOutput,
 		ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusSucceeded},
 	}, nil
 }

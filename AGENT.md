@@ -80,9 +80,9 @@ Run Career Copilot batch analysis:
 
 ```bash
 ./bin/happyagent career analyze \
-  --jd examples/career/jd-ai-agent-backend.md \
-  --resume examples/career/resume-draft.md \
-  --target examples/career/target.md \
+  --jd examples/career/real-world-anonymized/jd-marketing-growth.md \
+  --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
+  --target examples/career/real-world-anonymized/target.md \
   --repo . \
   --out outputs/career-report.md \
   --json outputs/career-report.json \

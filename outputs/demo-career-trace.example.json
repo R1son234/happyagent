@@ -1,0 +1,9 @@
+{
+  "note": "Example trace placeholder for the anonymized Marketing Career Copilot demo. Run the command in README to generate a fresh provider-specific trace under logs/career/demo-trace.json.",
+  "command": "./bin/happyagent career analyze --jd examples/career/real-world-anonymized/jd-marketing-growth.md --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md --target examples/career/real-world-anonymized/target.md --repo . --out outputs/demo-career-report.md --json outputs/demo-career-report.json --trace-json logs/career/demo-trace.json",
+  "expected_artifacts": [
+    "outputs/demo-career-report.md",
+    "outputs/demo-career-report.json",
+    "logs/career/demo-trace.json"
+  ]
+}

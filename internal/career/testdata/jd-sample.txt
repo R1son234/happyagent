@@ -1,11 +1,11 @@
-# AI Agent Backend Engineer
+# Sample Role
 
 Responsibilities:
-- Build agent runtime loops for tool use and structured observations.
-- Integrate local file tools, shell execution boundaries, MCP servers, and document retrieval.
-- Maintain traces, run history, and eval workflows for debugging and regression checks.
+- Coordinate cross-functional projects from planning to delivery.
+- Organize reusable work artifacts, stakeholder updates, and review notes.
+- Track execution risks, outcomes, and lessons learned.
 
 Requirements:
-- Go backend development experience.
-- Practical LLM API integration and structured output handling.
-- Familiarity with RAG, MCP, and local developer automation.
+- Experience with project ownership, communication, and execution tracking.
+- Ability to summarize evidence, quantify outcomes, and identify gaps.
+- Strong writing, collaboration, and structured review habits.

@@ -10,7 +10,7 @@ func TestClassifyInputDetectsMaterialTypes(t *testing.T) {
 	}{
 		{
 			name: "jd",
-			text: "岗位职责：负责 Agent runtime 和 RAG 服务。任职要求：熟悉 Go、MCP、LLM tool calling。",
+			text: "岗位职责：负责业务规划、跨部门协作、资料整理和结果复盘。任职要求：熟悉沟通协调、执行跟踪、文档沉淀和问题分析。",
 			want: WorkspaceTypeJD,
 		},
 		{
@@ -25,12 +25,12 @@ func TestClassifyInputDetectsMaterialTypes(t *testing.T) {
 		},
 		{
 			name: "interview record",
-			text: "刚才面试记录：面试官问了 MCP tool calling，我回答了 runtime 里的工具注册流程。",
+			text: "刚才面试记录：面试官问了项目复盘和协作方式，我回答了推进流程。",
 			want: WorkspaceTypeInterviewRecord,
 		},
 		{
 			name: "review note",
-			text: "复习笔记：RAG 需要补一下 hybrid retrieval、rerank 和 citation 的知识点。",
+			text: "复习笔记：项目复盘需要补一下目标拆解、过程跟踪和结果量化的知识点。",
 			want: WorkspaceTypeReviewNote,
 		},
 	}

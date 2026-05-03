@@ -387,7 +387,7 @@ func Analyze(ctx context.Context, options AnalyzeOptions, deps Dependencies) err
 		return fmt.Errorf("run career analysis: %w", err)
 	}
 
-	careerReport, err := ParseReportString(record.Output)
+	careerReport, record, err := parseOrRepairReport(ctx, deps, session.ID, record)
 	if err != nil {
 		return err
 	}
@@ -440,6 +440,46 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 		SystemPrompt: deps.Config.Engine.SystemPrompt,
 		Events:       []observe.Event{classificationEvent(classification)},
 	})
+}
+
+func parseOrRepairReport(ctx context.Context, deps Dependencies, sessionID string, record store.RunRecord) (Report, store.RunRecord, error) {
+	careerReport, err := ParseReportString(record.Output)
+	if err == nil {
+		return careerReport, record, nil
+	}
+	repairPrompt := BuildReportRepairPrompt(record.Output, err)
+	repairedRecord, repairErr := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
+		SessionID:    sessionID,
+		ProfileName:  ProfileName,
+		Input:        repairPrompt,
+		SystemPrompt: deps.Config.Engine.SystemPrompt,
+	})
+	if repairErr != nil {
+		return Report{}, record, fmt.Errorf("parse career report json: %w; repair run failed: %v", err, repairErr)
+	}
+	careerReport, repairParseErr := ParseReportString(repairedRecord.Output)
+	if repairParseErr != nil {
+		return Report{}, repairedRecord, fmt.Errorf("parse career report json: %w; repair parse failed: %v", err, repairParseErr)
+	}
+	return careerReport, repairedRecord, nil
+}
+
+func BuildReportRepairPrompt(output string, parseErr error) string {
+	return fmt.Sprintf(`The previous final_answer content was not valid career_report JSON.
+
+JSON parse error:
+%v
+
+Repair task:
+- Return only one valid JSON object for the career_report schema.
+- Do not use Markdown fences.
+- Do not include comments.
+- Do not put raw line breaks inside JSON string values; use short single-line strings or arrays.
+- Keep all fields required by the career_report schema: summary, jd_analysis, project_evidence, resume_rewrite, interview_brief, gap_plan, risk_flags, appendix.
+- Preserve the same facts and evidence boundaries as much as possible.
+
+Invalid previous content:
+%s`, parseErr, output)
 }
 
 func BuildInteractivePrompt(input string, classification InputClassification) string {
@@ -642,7 +682,7 @@ func displayWorkspaceType(itemType string) string {
 }
 
 func BuildAnalyzePrompt(options AnalyzeOptions) string {
-	return fmt.Sprintf(`Run Career Copilot analysis for an AI Agent backend engineering job search.
+	return fmt.Sprintf(`Run Career Copilot analysis for the target role described by the input files.
 
 Use the career-copilot profile behavior and inspect evidence before concluding.
 
@@ -654,8 +694,8 @@ Inputs:
 
 Required tool use:
 - Read the JD, resume, and target files with file_read.
-- Search the repository with file_search or search_docs for project evidence.
-- Read the most relevant source and docs files before writing project evidence.
+- Use file_search or search_docs for supporting evidence when useful.
+- Prefer scoped reads of the most relevant example, README, docs, or project files. Do not scan unrelated source files unless the target role or resume explicitly needs them.
 
 When complete, call final_answer with valid JSON only, with this exact shape:
 {
@@ -670,9 +710,18 @@ When complete, call final_answer with valid JSON only, with this exact shape:
 }
 
 Constraints:
-- Do not invent employment history, production usage, metrics, or business impact.
+- Adapt the analysis to the target role in the JD and target files; do not assume an engineering role.
+- Do not invent employment history, production usage, metrics, financial impact, business impact, or other domain-specific outcomes.
+- Do not strengthen vague claims into specific numbers, scale, tools, budgets, user counts, revenue, performance, conversion, accuracy, latency, adoption, efficiency, awards, or business outcomes unless reviewed evidence explicitly provides them.
+- Resume rewrites may improve clarity, structure, seniority framing, and role alignment, but must not add new facts, responsibilities, metrics, technologies, domains, or outcomes.
+- Resume rewrites must not add unstated delivery qualities, timing claims, adoption claims, collaboration scope, decision authority, iteration cadence, or impact language such as on schedule, real-time, team-wide, led, owned, improved, accelerated, or established unless reviewed evidence explicitly supports that exact claim.
+- If a stronger bullet requires missing evidence, place it in gap_plan or mark it as needing user confirmation instead of writing it as fact.
+- Treat resume-only claims as candidate-provided evidence, not independently verified evidence.
+- Use high confidence only for claims directly supported by reviewed files; use medium or low confidence for inferred, self-reported, or partially supported claims.
 - Every project_evidence item must cite at least one repository path.
 - Include at least three resume bullets, three project evidence claims, three gap items, and one risk flag.
+- Keep every JSON string value on one line. Do not place raw line breaks inside quoted strings.
+- Return only the JSON object. Do not wrap it in Markdown fences.
 - Keep the report actionable for editing a resume and preparing for interviews.`,
 		options.JDPath,
 		options.ResumePath,

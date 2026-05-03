@@ -8,7 +8,7 @@
 | --- | --- | --- |
 | Smoke | `eval/smoke_cases.json` | Basic capability checks for skills, file tools, and repository inspection. |
 | Profile | `eval/profile_cases.json` | Profile selection, scoped behavior, and structured output checks. |
-| Career Copilot | `eval/career_cases.json` | Evidence-grounded career report generation from fixed sample inputs. |
+| Career Copilot | `eval/career_cases.json` | Evidence-grounded career report generation, resume rewrite, hallucination controls, tool safety, Trace/Eval story, and interview preparation. |
 
 Each case can define:
 
@@ -52,7 +52,8 @@ The underlying eval runner can also be called directly:
 ./bin/happyagent-eval \
   -cases eval/smoke_cases.json \
   -output logs/eval/smoke-report.json \
-  -trace-dir logs/eval/smoke-traces
+  -trace-dir logs/eval/smoke-traces \
+  -summary logs/eval/smoke-summary.md
 ```
 
 ## Outputs
@@ -69,6 +70,14 @@ Suite reports include:
 - `average_duration_millis`
 - token totals
 - `error_categories`
+
+Markdown summaries include:
+
+- pass/fail count and success rate
+- average steps and tool-call counts
+- attempted/executed/successful tool-call table
+- per-case status table
+- failure reasons and missing expectations
 
 Per-case traces include:
 

@@ -37,26 +37,26 @@ func TestRenderMarkdownUsesTemplate(t *testing.T) {
 func sampleReportJSON() string {
 	return `{
   "summary": {
-    "target_role": "AI Agent Backend Engineer",
+    "target_role": "Sample Target Role",
     "match_score": 78,
-    "verdict": "Strong project fit with productization gaps"
+    "verdict": "Strong fit with evidence gaps"
   },
   "jd_analysis": {
     "required_capabilities": [
       {
-        "name": "Agent runtime engineering",
+        "name": "Cross-functional execution",
         "importance": "high",
-        "evidence_needed": "Tool loop, state management, traceability"
+        "evidence_needed": "Project brief, deliverables, metrics, and review notes"
       }
     ]
   },
   "project_evidence": [
     {
-      "claim": "Implements tool orchestration",
+      "claim": "Coordinates cross-functional work",
       "evidence": [
         {
-          "path": "internal/engine/loop.go",
-          "reason": "Executes model actions and tool calls"
+          "path": "resume.md",
+          "reason": "Lists project planning, deliverables, and review notes"
         }
       ],
       "confidence": "high"
@@ -65,34 +65,34 @@ func sampleReportJSON() string {
   "resume_rewrite": {
     "bullets": [
       {
-        "original": "Built a Go CLI agent runtime.",
-        "recommended": "Built a Go agent runtime with structured tool calling, trace output, and profile-scoped behavior.",
-        "why": "Connects implementation to agent platform value"
+        "original": "Owned a project.",
+        "recommended": "Led a cross-functional project from planning to delivery, aligning stakeholders, tracking execution, and summarizing reusable learnings.",
+        "why": "Connects ownership to concrete responsibilities and evidence"
       }
     ]
   },
   "interview_brief": {
-    "project_pitch": "happyagent is a local AI agent runtime for evidence-based workflows.",
-    "architecture_talk_track": "The CLI creates a session, loads a profile, runs the engine loop, executes tools, validates output, and stores traces.",
-    "tradeoffs": ["Local files are inspectable but require careful path policy."],
-    "questions_to_expect": ["How do you prevent unsafe tool use?"]
+    "project_pitch": "The candidate uses structured material review to connect project evidence and role requirements.",
+    "architecture_talk_track": "The workflow reviews JD, resume, project notes, artifacts, and risk flags before producing resume and interview guidance.",
+    "tradeoffs": ["Process evidence is strong, but metrics must be confirmed before claiming impact."],
+    "questions_to_expect": ["How did you measure impact?"]
   },
   "gap_plan": [
     {
       "priority": "P0",
-      "item": "Make product demo flow reliable",
-      "why_it_matters": "Converts runtime into usable product",
-      "acceptance": "career analyze produces report, JSON, and trace from fixed inputs"
+      "item": "Add quantified outcomes",
+      "why_it_matters": "Target roles require impact evidence",
+      "acceptance": "Each major project bullet includes one confirmed metric or concrete result"
     }
   ],
   "risk_flags": [
     {
-      "statement": "Do not claim production-scale deployment",
-      "reason": "No server deployment or real traffic evidence exists"
+      "statement": "Do not claim measurable impact without evidence",
+      "reason": "No confirmed metric exists"
     }
   ],
   "appendix": {
-    "files_reviewed": ["internal/engine/loop.go"]
+    "files_reviewed": ["resume.md"]
   }
 }`
 }

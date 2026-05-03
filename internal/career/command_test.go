@@ -78,7 +78,7 @@ func TestRunInteractiveIngestsJDWithoutModelTurn(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	var stdout bytes.Buffer
 
-	input := "# AI Agent Backend Engineer 岗位。岗位职责：负责 Agent runtime、RAG 和 MCP 工具平台。任职要求：熟悉 Go backend、LLM、observability 和 tool calling。"
+	input := "# Sample Role 岗位。岗位职责：负责项目规划和跨部门协作。任职要求：熟悉沟通协调、执行跟踪和复盘。"
 	err := RunInteractive(Dependencies{
 		App:           app,
 		Config:        config.Default(),
@@ -124,9 +124,9 @@ func TestRunInteractiveAddJDCommandSupportsMultilineInput(t *testing.T) {
 		App:    app,
 		Config: config.Default(),
 		Stdin: strings.NewReader(`/add jd
-# AI Agent Backend Engineer
-岗位职责：负责 Agent runtime、RAG 和 MCP 工具平台。
-任职要求：熟悉 Go backend、LLM、observability 和 tool calling。
+# Sample Role
+岗位职责：负责项目规划和跨部门协作。
+任职要求：熟悉沟通协调、执行跟踪和复盘。
 .
 /exit
 `),
@@ -145,7 +145,7 @@ func TestRunInteractiveAddJDCommandSupportsMultilineInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if len(index.Items) != 1 || index.Items[0].Title != "AI Agent Backend Engineer" {
+	if len(index.Items) != 1 || index.Items[0].Title != "Sample Role" {
 		t.Fatalf("expected multiline jd item, got %+v", index.Items)
 	}
 	if !strings.Contains(stdout.String(), "已添加 JD") {
@@ -166,7 +166,7 @@ func TestRunInteractiveAddResumeCommandArchivesResume(t *testing.T) {
 	err := RunInteractive(Dependencies{
 		App:           app,
 		Config:        config.Default(),
-		Stdin:         strings.NewReader("/add resume 简历：工作经历 Go 后端，项目经历 Agent runtime。\n/exit\n"),
+		Stdin:         strings.NewReader("/add resume 简历：工作经历 项目协作，项目经历 跨部门项目推进。\n/exit\n"),
 		Stdout:        &bytes.Buffer{},
 		Stderr:        &bytes.Buffer{},
 		WorkspaceRoot: workspaceRoot,
@@ -200,7 +200,7 @@ func TestRunInteractiveAddJDFileCommandArchivesOriginalFile(t *testing.T) {
 	}
 	workspaceRoot := t.TempDir()
 	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
-	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime、RAG 和 MCP。\n任职要求：熟悉 Go、LLM、observability。\n"
+	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调、执行跟踪和复盘。\n"
 	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestRunInteractiveAutoArchivesReferencedJDFileBeforeModelTurn(t *testing.T)
 	}
 	workspaceRoot := t.TempDir()
 	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
-	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime、RAG 和 MCP。\n任职要求：熟悉 Go、LLM、observability。\n"
+	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调、执行跟踪和复盘。\n"
 	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
@@ -342,7 +342,7 @@ func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
 	if err := os.Mkdir(testDir, 0o755); err != nil {
 		t.Fatalf("mkdir test dir: %v", err)
 	}
-	content := "# AI Agent Backend Engineer\n岗位职责：负责 Agent runtime、RAG 和 MCP。\n任职要求：熟悉 Go、LLM、observability。\n"
+	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调、执行跟踪和复盘。\n"
 	if err := os.WriteFile(filepath.Join(testDir, "ai.txt"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write source file: %v", err)
 	}
@@ -699,4 +699,96 @@ func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *te
 			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
 		}
 	}
+}
+
+func TestBuildAnalyzePromptIsRoleNeutralAndJSONStrict(t *testing.T) {
+	prompt := BuildAnalyzePrompt(AnalyzeOptions{
+		JDPath:     "jd.md",
+		ResumePath: "resume.md",
+		TargetPath: "target.md",
+		RepoPath:   ".",
+	})
+	for _, expected := range []string{
+		"target role described by the input files",
+		"do not assume an engineering role",
+		"Do not strengthen vague claims into specific numbers",
+		"must not add new facts, responsibilities, metrics, technologies, domains, or outcomes",
+		"must not add unstated delivery qualities",
+		"Treat resume-only claims as candidate-provided evidence",
+		"Use high confidence only for claims directly supported by reviewed files",
+		"Do not place raw line breaks inside quoted strings",
+		"Return only the JSON object",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
+func TestAnalyzeRepairsInvalidJSONReport(t *testing.T) {
+	root := t.TempDir()
+	jdPath := filepath.Join(root, "jd.md")
+	resumePath := filepath.Join(root, "resume.md")
+	targetPath := filepath.Join(root, "target.md")
+	for path, content := range map[string]string{
+		jdPath:     "# Sample JD\nProject ownership and measurable outcomes.",
+		resumePath: "# Resume\nProject coordination.",
+		targetPath: "# Target\nSample Role.",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write input: %v", err)
+		}
+	}
+
+	app := &stubCareerApp{
+		session: store.SessionRecord{ID: "session-career"},
+		runs: []store.RunRecord{
+			{ID: "run-1", SessionID: "session-career", Profile: ProfileName, Output: "{\"summary\":{\"target_role\":\"Sample\nRole\"}}"},
+			{ID: "run-2", SessionID: "session-career", Profile: ProfileName, Output: validCareerReportJSON()},
+		},
+	}
+	outDir := filepath.Join(root, "out")
+	err := Analyze(context.Background(), AnalyzeOptions{
+		JDPath:        jdPath,
+		ResumePath:    resumePath,
+		TargetPath:    targetPath,
+		RepoPath:      root,
+		MarkdownPath:  filepath.Join(outDir, "report.md"),
+		JSONPath:      filepath.Join(outDir, "report.json"),
+		TraceJSONPath: filepath.Join(outDir, "trace.json"),
+		TemplatePath:  filepath.Join("..", "..", DefaultReportTemplatePath),
+	}, Dependencies{
+		App:    app,
+		Config: config.Default(),
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatalf("Analyze() error = %v", err)
+	}
+	if len(app.appendRequests) != 2 {
+		t.Fatalf("expected initial run and repair run, got %d", len(app.appendRequests))
+	}
+	if !strings.Contains(app.appendRequests[1].Input, "not valid career_report JSON") {
+		t.Fatalf("repair prompt missing parse context:\n%s", app.appendRequests[1].Input)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "report.md")); err != nil {
+		t.Fatalf("report markdown not written: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outDir, "report.json")); err != nil {
+		t.Fatalf("report json not written: %v", err)
+	}
+}
+
+func validCareerReportJSON() string {
+	return `{
+  "summary": {"target_role": "Sample Role", "match_score": 80, "verdict": "Good role fit."},
+  "jd_analysis": {"required_capabilities": [{"name": "Project coordination", "importance": "high", "evidence_needed": "Project brief and metrics."}]},
+  "project_evidence": [{"claim": "Coordinated projects.", "evidence": [{"path": "resume.md", "reason": "Resume lists project work."}], "confidence": "medium"}],
+  "resume_rewrite": {"bullets": [{"original": "Did projects.", "recommended": "Coordinated measurable projects.", "why": "More specific."}]},
+  "interview_brief": {"project_pitch": "Sample candidate.", "architecture_talk_track": "Uses structured material review.", "tradeoffs": ["Needs metrics."], "questions_to_expect": ["How did you measure impact?"]},
+  "gap_plan": [{"priority": "P0", "item": "Add metrics", "why_it_matters": "Target roles need impact.", "acceptance": "Each project has one metric."}],
+  "risk_flags": [{"statement": "Do not invent impact.", "reason": "No evidence."}],
+  "appendix": {"files_reviewed": ["resume.md"]}
+}`
 }

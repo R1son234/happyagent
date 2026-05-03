@@ -49,7 +49,7 @@ func renderResumeReview(workspace *Workspace, index WorkspaceIndex) string {
 	writeItemsSection(&b, workspace, "Target JD Context", filterItems(index, WorkspaceTypeJD), 1)
 	b.WriteString("## Rewrite Rules\n\n")
 	b.WriteString("- Keep confirmed facts separate from suggestions needing user confirmation.\n")
-	b.WriteString("- Connect implementation details to engineering value, tradeoffs, reliability, and verification.\n")
+	b.WriteString("- Connect responsibilities to concrete actions, scope, tradeoffs, evidence, outcomes, and maintainable examples.\n")
 	b.WriteString("- Do not add metrics unless the user provided them.\n")
 	return b.String()
 }
@@ -59,10 +59,10 @@ func renderProjectPitch(workspace *Workspace, index WorkspaceIndex) string {
 	b.WriteString("# Project Pitch\n\n")
 	writeItemsSection(&b, workspace, "Project Material", filterItems(index, WorkspaceTypeProject), 3)
 	b.WriteString("## Talk Track Template\n\n")
-	b.WriteString("1. Problem: what the project is solving.\n")
-	b.WriteString("2. Architecture: main components and data flow.\n")
-	b.WriteString("3. Tradeoffs: constraints, alternatives, and why this design was chosen.\n")
-	b.WriteString("4. Verification: tests, evals, traces, demos, or operational signals.\n")
+	b.WriteString("1. Goal: what problem, responsibility, or opportunity the work addressed.\n")
+	b.WriteString("2. Approach: main decisions, collaborators, workflow, and execution steps.\n")
+	b.WriteString("3. Tradeoffs: constraints, alternatives, and why this approach was chosen.\n")
+	b.WriteString("4. Evidence: deliverables, metrics, reviews, demos, artifacts, or operational signals.\n")
 	b.WriteString("5. Lessons: what you would improve next based on evidence.\n")
 	return b.String()
 }
@@ -85,10 +85,10 @@ func renderReviewMaterial(workspace *Workspace, index WorkspaceIndex) string {
 	writeItemsSection(&b, workspace, "Review Notes", filterItems(index, WorkspaceTypeReviewNote), 5)
 	writeItemsSection(&b, workspace, "Interview Records", filterItems(index, WorkspaceTypeInterviewRecord), 2)
 	b.WriteString("## Suggested Buckets\n\n")
-	b.WriteString("- Agent runtime and tool calling\n")
-	b.WriteString("- RAG retrieval, rerank, and citation\n")
-	b.WriteString("- MCP and external tool integration\n")
-	b.WriteString("- Backend reliability, observability, and evals\n")
+	b.WriteString("- Role requirements and capability gaps\n")
+	b.WriteString("- Project examples and evidence paths\n")
+	b.WriteString("- Metrics, outcomes, and claims needing confirmation\n")
+	b.WriteString("- Interview questions, weak answers, and follow-up tasks\n")
 	return b.String()
 }
 
