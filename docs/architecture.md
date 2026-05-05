@@ -55,6 +55,18 @@
 11. The app layer stores session and run records.
 12. Optional trace output writes per-step actions, observations, timing, token usage, and tool-call status.
 
+## Local RAG Flow
+
+The `search_docs` tool provides a lightweight local RAG path for project documentation:
+
+1. Scope retrieval to the project `docs/` directory only.
+2. Split supported local text files into overlapping line chunks.
+3. Score chunks with lexical term frequency and deterministic tie-breaking.
+4. Return bounded snippets with citations in `path:start-end` form.
+5. Feed only the selected evidence back to the model as tool observation context.
+
+This keeps the default retrieval path local, deterministic, and dependency-free while leaving room for a future embedding-backed retriever behind the same retrieval boundary.
+
 ## Career Copilot Flow
 
 The `career` command adds an application layer on top of the runtime:

@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestSearchDocsToolSearchesDocsAndRootDocsOnly(t *testing.T) {
+func TestSearchDocsToolSearchesDocsOnly(t *testing.T) {
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "docs"), 0o755); err != nil {
 		t.Fatalf("mkdir docs: %v", err)
@@ -38,11 +38,11 @@ func TestSearchDocsToolSearchesDocsAndRootDocsOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
-	if !strings.Contains(result.Output, "docs/architecture.md") {
+	if !strings.Contains(result.Output, "docs/architecture.md:1") {
 		t.Fatalf("expected docs match, got %q", result.Output)
 	}
-	if !strings.Contains(result.Output, "README.md") {
-		t.Fatalf("expected README match, got %q", result.Output)
+	if strings.Contains(result.Output, "README.md") {
+		t.Fatalf("expected README to be excluded, got %q", result.Output)
 	}
 	if strings.Contains(result.Output, "internal/code.md") {
 		t.Fatalf("expected internal docs to be excluded, got %q", result.Output)

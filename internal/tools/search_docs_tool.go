@@ -13,9 +13,6 @@ const SearchDocsToolName = "search_docs"
 
 var defaultSearchDocsPaths = []string{
 	"docs",
-	"README.md",
-	"AGENT.md",
-	"AGENTS.md",
 }
 
 type SearchDocsTool struct {
@@ -35,7 +32,7 @@ func NewSearchDocsTool(root string) (*SearchDocsTool, error) {
 func (t *SearchDocsTool) Definition() Definition {
 	return Definition{
 		Name:        SearchDocsToolName,
-		Description: "Search local project documentation on demand. Searches docs/ and root README/AGENT files only; use file_search for arbitrary repository code search.",
+		Description: "Search local project documentation on demand. Searches docs/ only; use file_search for arbitrary repository code or root file search.",
 		InputSchema: `{"type":"object","properties":{"query":{"type":"string"},"max_results":{"type":"integer","minimum":1,"description":"Optional maximum number of documentation matches to return. Defaults to 5."}},"required":["query"]}`,
 	}
 }

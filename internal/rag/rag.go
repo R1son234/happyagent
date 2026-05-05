@@ -13,10 +13,27 @@ type Indexer struct {
 	paths []string
 }
 
+type Retriever interface {
+	SearchWithLimit(query string, maxResults int) (BuildResult, error)
+}
+
 type BuildResult struct {
 	Text      string
 	Citations []string
 }
+
+type SearchResult struct {
+	Path      string
+	StartLine int
+	EndLine   int
+	Snippet   string
+	Score     int
+}
+
+const (
+	defaultChunkLines   = 24
+	defaultChunkOverlap = 4
+)
 
 func NewIndexer(root string) *Indexer {
 	if strings.TrimSpace(root) == "" {
@@ -52,12 +69,46 @@ func (i *Indexer) SearchWithLimit(query string, maxResults int) (BuildResult, er
 		maxResults = 3
 	}
 
-	terms := tokenize(query)
-	if len(terms) == 0 {
+	results, err := i.SearchResults(query, maxResults)
+	if err != nil {
+		return BuildResult{}, err
+	}
+	if len(results) == 0 {
 		return BuildResult{}, nil
 	}
 
-	var matches []string
+	citations := make([]string, 0, len(results))
+	var builder strings.Builder
+	builder.WriteString("Relevant local references:\n")
+	for _, result := range results {
+		citation := formatCitation(result)
+		citations = append(citations, citation)
+		builder.WriteString("- [")
+		builder.WriteString(citation)
+		builder.WriteString("] ")
+		builder.WriteString(result.Snippet)
+		builder.WriteString("\n")
+	}
+	return BuildResult{
+		Text:      strings.TrimSpace(builder.String()),
+		Citations: citations,
+	}, nil
+}
+
+func (i *Indexer) SearchResults(query string, maxResults int) ([]SearchResult, error) {
+	if i == nil || strings.TrimSpace(query) == "" {
+		return nil, nil
+	}
+	if maxResults <= 0 {
+		maxResults = 3
+	}
+
+	terms := tokenize(query)
+	if len(terms) == 0 {
+		return nil, nil
+	}
+
+	var results []SearchResult
 	searchPaths := i.paths
 	if len(searchPaths) == 0 {
 		searchPaths = []string{"."}
@@ -65,18 +116,18 @@ func (i *Indexer) SearchWithLimit(query string, maxResults int) (BuildResult, er
 	for _, searchPath := range searchPaths {
 		resolved, err := resolveSearchPath(i.root, searchPath)
 		if err != nil {
-			return BuildResult{}, err
+			return nil, err
 		}
 		info, err := os.Stat(resolved)
 		if os.IsNotExist(err) {
 			continue
 		}
 		if err != nil {
-			return BuildResult{}, err
+			return nil, err
 		}
 		if !info.IsDir() {
-			if err := collectFileMatch(i.root, resolved, terms, &matches); err != nil {
-				return BuildResult{}, err
+			if err := collectFileMatches(i.root, resolved, terms, &results); err != nil {
+				return nil, err
 			}
 			continue
 		}
@@ -91,40 +142,30 @@ func (i *Indexer) SearchWithLimit(query string, maxResults int) (BuildResult, er
 				}
 				return nil
 			}
-			return collectFileMatch(i.root, path, terms, &matches)
+			return collectFileMatches(i.root, path, terms, &results)
 		})
 		if err != nil {
-			return BuildResult{}, err
+			return nil, err
 		}
 	}
-	if len(matches) == 0 {
-		return BuildResult{}, nil
+	if len(results) == 0 {
+		return nil, nil
 	}
-	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
+	sort.Slice(results, func(a, b int) bool {
+		if results[a].Score != results[b].Score {
+			return results[a].Score > results[b].Score
+		}
+		if results[a].Path != results[b].Path {
+			return results[a].Path < results[b].Path
+		}
+		return results[a].StartLine < results[b].StartLine
+	})
 
 	limit := maxResults
-	if len(matches) < limit {
-		limit = len(matches)
+	if len(results) < limit {
+		limit = len(results)
 	}
-	citations := make([]string, 0, limit)
-	var builder strings.Builder
-	builder.WriteString("Relevant local references:\n")
-	for _, entry := range matches[:limit] {
-		parts := strings.SplitN(entry, "|", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		citations = append(citations, parts[1])
-		builder.WriteString("- [")
-		builder.WriteString(parts[1])
-		builder.WriteString("] ")
-		builder.WriteString(parts[2])
-		builder.WriteString("\n")
-	}
-	return BuildResult{
-		Text:      strings.TrimSpace(builder.String()),
-		Citations: citations,
-	}, nil
+	return results[:limit], nil
 }
 
 func resolveSearchPath(root string, path string) (string, error) {
@@ -143,7 +184,7 @@ func resolveSearchPath(root string, path string) (string, error) {
 	return clean, nil
 }
 
-func collectFileMatch(root string, path string, terms []string, matches *[]string) error {
+func collectFileMatches(root string, path string, terms []string, results *[]SearchResult) error {
 	if !isSupportedFile(path) {
 		return nil
 	}
@@ -151,14 +192,66 @@ func collectFileMatch(root string, path string, terms []string, matches *[]strin
 	if err != nil {
 		return nil
 	}
-	content := string(data)
-	score := matchScore(content, terms)
-	if score == 0 {
+	rel, _ := filepath.Rel(root, path)
+	for _, chunk := range chunkText(string(data), defaultChunkLines, defaultChunkOverlap) {
+		score := matchScore(chunk.Text, terms)
+		if score == 0 {
+			continue
+		}
+		*results = append(*results, SearchResult{
+			Path:      rel,
+			StartLine: chunk.StartLine,
+			EndLine:   chunk.EndLine,
+			Snippet:   extractSnippet(chunk.Text, terms),
+			Score:     score,
+		})
+	}
+	return nil
+}
+
+type textChunk struct {
+	StartLine int
+	EndLine   int
+	Text      string
+}
+
+func chunkText(content string, chunkLines int, overlap int) []textChunk {
+	if chunkLines <= 0 {
+		chunkLines = defaultChunkLines
+	}
+	if overlap < 0 {
+		overlap = 0
+	}
+	if overlap >= chunkLines {
+		overlap = chunkLines - 1
+	}
+
+	content = strings.TrimSuffix(content, "\n")
+	content = strings.TrimSuffix(content, "\r")
+	lines := strings.Split(content, "\n")
+	if len(lines) == 0 {
 		return nil
 	}
-	rel, _ := filepath.Rel(root, path)
-	*matches = append(*matches, fmt.Sprintf("%03d|%s|%s", score, rel, extractSnippet(content, terms)))
-	return nil
+	chunks := make([]textChunk, 0, (len(lines)/chunkLines)+1)
+	step := chunkLines - overlap
+	for start := 0; start < len(lines); start += step {
+		end := start + chunkLines
+		if end > len(lines) {
+			end = len(lines)
+		}
+		text := strings.TrimSpace(strings.Join(lines[start:end], "\n"))
+		if text != "" {
+			chunks = append(chunks, textChunk{
+				StartLine: start + 1,
+				EndLine:   end,
+				Text:      text,
+			})
+		}
+		if end == len(lines) {
+			break
+		}
+	}
+	return chunks
 }
 
 func tokenize(query string) []string {
@@ -204,6 +297,16 @@ func extractSnippet(content string, terms []string) string {
 		return strings.ReplaceAll(strings.TrimSpace(content[:160]), "\n", " ")
 	}
 	return strings.ReplaceAll(strings.TrimSpace(content), "\n", " ")
+}
+
+func formatCitation(result SearchResult) string {
+	if result.StartLine <= 0 || result.EndLine <= 0 {
+		return result.Path
+	}
+	if result.StartLine == result.EndLine {
+		return fmt.Sprintf("%s:%d", result.Path, result.StartLine)
+	}
+	return fmt.Sprintf("%s:%d-%d", result.Path, result.StartLine, result.EndLine)
 }
 
 func isSupportedFile(path string) bool {
