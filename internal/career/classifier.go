@@ -6,13 +6,13 @@ import (
 )
 
 const (
-	WorkspaceTypeGeneral             = "general"
-	WorkspaceTypeJD                  = "jd"
-	WorkspaceTypeResume              = "resume"
-	WorkspaceTypeProject             = "project"
-	WorkspaceTypeInterviewExperience = "interview_experience"
-	WorkspaceTypeInterviewRecord     = "interview_record"
-	WorkspaceTypeReviewNote          = "review_note"
+	WorkspaceTypeGeneral      = "general"
+	WorkspaceTypeJD           = "jd"
+	WorkspaceTypeResume       = "resume"
+	WorkspaceTypeExperiences  = "experiences"
+	WorkspaceTypePrepare      = "prepare"
+	WorkspaceTypeMyInterviews = "my-interviews"
+	WorkspaceTypeRecord       = "record"
 )
 
 type InputClassification struct {
@@ -48,17 +48,17 @@ func ClassifyInput(content string) InputClassification {
 	}
 
 	addSignals(WorkspaceTypeResume, "简历", "resume", "工作经历", "教育经历", "专业技能", "求职意向", "work experience", "education")
-	addSignals(WorkspaceTypeProject, "项目", "project", "技术栈", "架构", "repository", "repo", "github", "system design")
-	addSignals(WorkspaceTypeInterviewExperience, "面经", "面试题", "一面", "二面", "三面", "interview experience", "面试经验")
-	addSignals(WorkspaceTypeInterviewRecord, "面试记录", "刚才面试", "面试复盘", "我回答", "面试官问", "interviewer asked", "asked me")
-	addSignals(WorkspaceTypeReviewNote, "笔记", "复习", "知识点", "review note", "study note", "todo", "待复习")
+	addSignals(WorkspaceTypePrepare, "项目", "project", "项目追问", "项目亮点", "项目难点", "技术方案", "证据口径", "技术栈", "架构", "repository", "repo", "github", "system design")
+	addSignals(WorkspaceTypeExperiences, "面经", "面试题", "一面", "二面", "三面", "interview experience", "面试经验", "高频题", "公开面经")
+	addSignals(WorkspaceTypeMyInterviews, "面试记录", "刚面完", "刚才面试", "面试复盘", "我回答", "面试官问我", "面试官问", "现场表现", "interviewer asked", "asked me")
+	addSignals(WorkspaceTypeRecord, "笔记", "复习", "知识点", "review note", "study note", "todo", "待复习", "导入记录", "处理记录")
 
 	typeOrder := []string{
-		WorkspaceTypeInterviewRecord,
-		WorkspaceTypeInterviewExperience,
+		WorkspaceTypeMyInterviews,
+		WorkspaceTypeExperiences,
 		WorkspaceTypeResume,
-		WorkspaceTypeProject,
-		WorkspaceTypeReviewNote,
+		WorkspaceTypePrepare,
+		WorkspaceTypeRecord,
 	}
 	sort.SliceStable(typeOrder, func(i, j int) bool {
 		return scores[typeOrder[i]] > scores[typeOrder[j]]
@@ -84,14 +84,14 @@ func ClassifyInput(content string) InputClassification {
 }
 
 func IsSupportedWorkspaceType(itemType string) bool {
-	switch itemType {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
 	case WorkspaceTypeGeneral,
 		WorkspaceTypeJD,
 		WorkspaceTypeResume,
-		WorkspaceTypeProject,
-		WorkspaceTypeInterviewExperience,
-		WorkspaceTypeInterviewRecord,
-		WorkspaceTypeReviewNote:
+		WorkspaceTypeExperiences,
+		WorkspaceTypePrepare,
+		WorkspaceTypeMyInterviews,
+		WorkspaceTypeRecord:
 		return true
 	default:
 		return false

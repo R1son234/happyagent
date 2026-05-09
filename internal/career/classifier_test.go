@@ -20,18 +20,23 @@ func TestClassifyInputDetectsMaterialTypes(t *testing.T) {
 		},
 		{
 			name: "project",
-			text: "项目名称 happyagent，技术栈 Go，架构包括 runtime、tools、store 和 trace。",
-			want: WorkspaceTypeProject,
+			text: "项目名称 happyagent，项目追问包括技术方案、证据口径和架构取舍。",
+			want: WorkspaceTypePrepare,
+		},
+		{
+			name: "public interview experience",
+			text: "市场营销公开面经：一面问了用户增长、内容策略和复盘方法，二面追问高频题。",
+			want: WorkspaceTypeExperiences,
 		},
 		{
 			name: "interview record",
-			text: "刚才面试记录：面试官问了项目复盘和协作方式，我回答了推进流程。",
-			want: WorkspaceTypeInterviewRecord,
+			text: "刚面完市场营销岗位，面试官问我项目复盘和协作方式，我回答了推进流程，现场表现一般。",
+			want: WorkspaceTypeMyInterviews,
 		},
 		{
 			name: "review note",
 			text: "复习笔记：项目复盘需要补一下目标拆解、过程跟踪和结果量化的知识点。",
-			want: WorkspaceTypeReviewNote,
+			want: WorkspaceTypeRecord,
 		},
 	}
 	for _, tt := range cases {

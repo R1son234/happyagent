@@ -112,7 +112,7 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 
 func inferIngestItemType(hintType string, path string, userInput string, content string) string {
 	if IsSupportedWorkspaceType(hintType) {
-		return hintType
+		return strings.ToLower(strings.TrimSpace(hintType))
 	}
 	if hinted := detectWorkspaceTypeHintNearPath(userInput, path); hinted != "" {
 		return hinted
@@ -329,13 +329,25 @@ func extractReferencedFiles(input string) []string {
 		if looksLikeDirectoryPhrase(candidate) && !isExistingFile(candidate) {
 			continue
 		}
-		if candidate == "" || seen[candidate] {
+		if candidate == "" || seen[candidate] || hasEquivalentReferencedPath(seen, candidate) {
 			continue
 		}
 		seen[candidate] = true
 		paths = append(paths, candidate)
 	}
 	return paths
+}
+
+func hasEquivalentReferencedPath(seen map[string]bool, candidate string) bool {
+	if filepath.IsAbs(candidate) || filepath.Dir(candidate) != "." {
+		return false
+	}
+	for path := range seen {
+		if filepath.Base(path) == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func extractFilesNamedInsideReferencedDirectories(input string) []string {
@@ -508,15 +520,29 @@ func scoreReferencedDirectoryCandidate(hintType string, name string, ext string,
 		if strings.Contains(lowerName, "jd") || strings.Contains(lowerName, "job") || strings.Contains(name, "岗位") || strings.Contains(name, "职位") {
 			score += 40
 		}
-	case WorkspaceTypeProject:
+	case WorkspaceTypePrepare:
 		if strings.Contains(lowerName, "project") || strings.Contains(lowerName, "portfolio") || strings.Contains(name, "项目") {
 			score += 40
 		}
+	case WorkspaceTypeExperiences:
+		if ext == ".md" || ext == ".txt" {
+			score += 20
+		}
+		if strings.Contains(lowerName, "interview") || strings.Contains(lowerName, "experience") || strings.Contains(name, "面经") || strings.Contains(name, "面试题") {
+			score += 40
+		}
+	case WorkspaceTypeMyInterviews:
+		if ext == ".md" || ext == ".txt" {
+			score += 20
+		}
+		if strings.Contains(lowerName, "interview") || strings.Contains(lowerName, "record") || strings.Contains(name, "面试记录") || strings.Contains(name, "复盘") {
+			score += 40
+		}
 	}
-	if score == 0 && (strings.Contains(lowerName, "resume") || strings.Contains(lowerName, "cv") || strings.Contains(name, "简历")) {
+	if strings.Contains(lowerName, "resume") || strings.Contains(lowerName, "cv") || strings.Contains(name, "简历") {
 		score += 25
 	}
-	if score == 0 && (strings.Contains(lowerName, "jd") || strings.Contains(lowerName, "job") || strings.Contains(name, "岗位") || strings.Contains(name, "职位")) {
+	if strings.Contains(lowerName, "jd") || strings.Contains(lowerName, "job") || strings.Contains(name, "岗位") || strings.Contains(name, "职位") {
 		score += 25
 	}
 	return score

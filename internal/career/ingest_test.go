@@ -42,6 +42,17 @@ func TestExtractReferencedFilesJoinsChineseDirectoryPhraseAndFileName(t *testing
 	}
 }
 
+func TestExtractReferencedFilesDeduplicatesParenthesizedFileInDirectory(t *testing.T) {
+	input := `我在mytest目录里放了我的简历和jd(ai.txt),你帮我记录并分析一下`
+	paths := extractReferencedFiles(input)
+	if len(paths) != 1 {
+		t.Fatalf("expected 1 path, got %+v", paths)
+	}
+	if paths[0] != filepath.Join("mytest", "ai.txt") {
+		t.Fatalf("expected joined path, got %+v", paths)
+	}
+}
+
 func TestDiscoverFilesInReferencedDirectoriesPrefersResumeDocx(t *testing.T) {
 	testDir, err := filepath.Abs("testdata")
 	if err != nil {
@@ -54,6 +65,38 @@ func TestDiscoverFilesInReferencedDirectoriesPrefersResumeDocx(t *testing.T) {
 	expected := filepath.Join(testDir, "resume-sample.docx")
 	if files[0] != expected {
 		t.Fatalf("expected %q, got %+v", expected, files)
+	}
+}
+
+func TestDiscoverFilesInReferencedDirectoriesPrefersInterviewExperience(t *testing.T) {
+	testDir, err := os.MkdirTemp(".", "careerexp")
+	if err != nil {
+		t.Fatalf("create fixture dir: %v", err)
+	}
+	defer os.RemoveAll(testDir)
+	resumePath := filepath.Join(testDir, "resume-base-optimized-v2.docx")
+	if err := os.WriteFile(resumePath, []byte("not a real docx"), 0o644); err != nil {
+		t.Fatalf("write resume fixture: %v", err)
+	}
+	experiencePath := filepath.Join(testDir, "字节跳动-AI-Agent-面经-2026-04-30.md")
+	if err := os.WriteFile(experiencePath, []byte("# 字节跳动 AI Agent 面经"), 0o644); err != nil {
+		t.Fatalf("write experience fixture: %v", err)
+	}
+
+	input := "我在 " + testDir + "目录里存了一份面经,你帮我记录一下"
+	dirs := extractReferencedDirectories(input)
+	if len(dirs) != 1 {
+		t.Fatalf("expected 1 referenced dir from %q, got %+v", input, dirs)
+	}
+	if dirs[0] != testDir {
+		t.Fatalf("expected referenced dir %q, got %+v", testDir, dirs)
+	}
+	files := discoverFilesInReferencedDirectories(input)
+	if len(files) != 1 {
+		t.Fatalf("expected 1 discovered file, got %+v", files)
+	}
+	if files[0] != experiencePath {
+		t.Fatalf("expected %q, got %+v", experiencePath, files)
 	}
 }
 

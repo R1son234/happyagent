@@ -29,7 +29,7 @@ func TestRenderAndWriteWorkspaceArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteArtifact() error = %v", err)
 	}
-	if !strings.HasPrefix(path, "reports/") {
-		t.Fatalf("expected report path, got %s", path)
+	if !strings.HasPrefix(path, "record/generated/") {
+		t.Fatalf("expected generated record path, got %s", path)
 	}
 }

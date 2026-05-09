@@ -12,7 +12,7 @@
 - Session and run persistence under `.happyagent/store/`.
 - JSON run traces with step timing, tool-call status, token usage, and error categories.
 - Eval runner for smoke, profile, and Career Copilot scenarios.
-- Career Copilot CLI for maintaining a local workspace of JDs, resumes, project notes, interview records, review notes, and generated reports.
+- Career Copilot CLI for maintaining a local interview library of resumes, JDs, public interview experience, project preparation, real interview records, and operation records.
 
 ## Repository Layout
 
@@ -23,7 +23,7 @@ cmd/
   mcpdemo/           Small local MCP server for integration checks.
 internal/
   app/               Session-oriented application layer.
-  career/            Career Copilot workspace, reports, prompts, and ingestion.
+  career/            Career Copilot workspace, prompts, ingestion, and generated records.
   config/            JSON config loading and environment overrides.
   engine/            Agent loop and action execution.
   eval/              Eval case runner.
@@ -104,7 +104,7 @@ The command creates `.happyagent/career/` and keeps all workspace material local
 
 - `/status` shows workspace counts and active pointers.
 - `/add <type>` archives material.
-- `/export <kind>` writes generated Markdown artifacts.
+- `/export <kind>` generates Markdown material and saves it back into the relevant workspace area.
 - `/help` lists available commands.
 - `/exit` exits the workspace.
 
@@ -112,20 +112,39 @@ Supported material types:
 
 - `jd`
 - `resume`
-- `project`
-- `interview_experience`
-- `interview_record`
-- `review_note`
+- `prepare`
+- `experiences`
+- `my-interviews`
+- `record`
+
+The workspace creates this user-facing layout:
+
+```text
+.happyagent/career/
+  resume/
+  jd/
+  experiences/
+  prepare/
+  my-interviews/
+  record/
+  workspace.json
+  index.json
+```
+
+`record/` stores import logs, migration notes, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library.
 
 Examples:
 
 ```text
 /add jd ./examples/career/real-world-anonymized/jd-marketing-growth.md
 /add resume ./examples/career/real-world-anonymized/resume-marketing-anonymized.md
+/add prepare "市场营销项目准备：活动复盘、用户增长案例、内容策略证据口径"
 /export jd-match
 ```
 
 The workspace also accepts natural-language references to local `.md`, `.txt`, `.docx`, and `.pdf` files. Markdown and text are extracted directly. DOCX and PDF ingestion use the repository's document extraction path and preserve the original file with extracted text in the workspace.
+
+When an existing workspace still has legacy directories such as `jds/`, `resumes/`, `projects/`, `interview_experience/`, `interview_records/`, `review_notes/`, `reports/`, `exports/`, `search_sources/`, or `inbox/`, Career Copilot migrates recognizable content into the new layout and writes a migration note under `record/migrations/`. Unclassified legacy material is preserved under `record/unclassified/`.
 
 Batch analysis is available through `career analyze`:
 

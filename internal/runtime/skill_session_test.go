@@ -113,6 +113,9 @@ func TestCapabilitySessionJSON(t *testing.T) {
 	if !strings.Contains(output, `"name": "demo"`) || !strings.Contains(output, `"active_skills": []`) || !strings.Contains(output, `"mcp_resources_total": 0`) {
 		t.Fatalf("unexpected capabilities json: %q", output)
 	}
+	if strings.Contains(output, `"prompt"`) || strings.Contains(output, "focus on listing files") {
+		t.Fatalf("list_capabilities should not expose skill prompts: %q", output)
+	}
 	if !strings.Contains(output, `"available_tools": [`) || !strings.Contains(output, `"mcp_read_resource"`) || !strings.Contains(output, `"mcp_resource_read_supported": true`) {
 		t.Fatalf("unexpected capabilities json: %q", output)
 	}

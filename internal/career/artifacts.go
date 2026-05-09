@@ -33,8 +33,8 @@ func renderJDMatch(workspace *Workspace, index WorkspaceIndex) string {
 	b.WriteString("# JD Match Report\n\n")
 	writeItemsSection(&b, workspace, "Active JD Signals", filterItems(index, WorkspaceTypeJD), 2)
 	writeItemsSection(&b, workspace, "Resume Evidence", filterItems(index, WorkspaceTypeResume), 1)
-	writeItemsSection(&b, workspace, "Project Evidence", filterItems(index, WorkspaceTypeProject), 2)
-	writeItemsSection(&b, workspace, "External Sources", filterItems(index, "search_source"), 3)
+	writeItemsSection(&b, workspace, "Project Evidence", filterItems(index, WorkspaceTypePrepare), 2)
+	writeItemsSection(&b, workspace, "Experience Sources", filterItems(index, WorkspaceTypeExperiences), 3)
 	b.WriteString("## Next Actions\n\n")
 	b.WriteString("- Map each JD requirement to a resume bullet or project evidence path.\n")
 	b.WriteString("- Mark missing claims as needing user confirmation instead of writing them as facts.\n")
@@ -57,7 +57,7 @@ func renderResumeReview(workspace *Workspace, index WorkspaceIndex) string {
 func renderProjectPitch(workspace *Workspace, index WorkspaceIndex) string {
 	var b strings.Builder
 	b.WriteString("# Project Pitch\n\n")
-	writeItemsSection(&b, workspace, "Project Material", filterItems(index, WorkspaceTypeProject), 3)
+	writeItemsSection(&b, workspace, "Project Material", filterItems(index, WorkspaceTypePrepare), 3)
 	b.WriteString("## Talk Track Template\n\n")
 	b.WriteString("1. Goal: what problem, responsibility, or opportunity the work addressed.\n")
 	b.WriteString("2. Approach: main decisions, collaborators, workflow, and execution steps.\n")
@@ -70,8 +70,8 @@ func renderProjectPitch(workspace *Workspace, index WorkspaceIndex) string {
 func renderInterviewReview(workspace *Workspace, index WorkspaceIndex) string {
 	var b strings.Builder
 	b.WriteString("# Interview Review\n\n")
-	writeItemsSection(&b, workspace, "Interview Records", filterItems(index, WorkspaceTypeInterviewRecord), 3)
-	writeItemsSection(&b, workspace, "Interview Experience Sources", filterItems(index, WorkspaceTypeInterviewExperience), 3)
+	writeItemsSection(&b, workspace, "Interview Records", filterItems(index, WorkspaceTypeMyInterviews), 3)
+	writeItemsSection(&b, workspace, "Interview Experience Sources", filterItems(index, WorkspaceTypeExperiences), 3)
 	b.WriteString("## Review Checklist\n\n")
 	b.WriteString("- Extract questions that appeared repeatedly.\n")
 	b.WriteString("- Record weak answers and rewrite them with structure.\n")
@@ -82,8 +82,8 @@ func renderInterviewReview(workspace *Workspace, index WorkspaceIndex) string {
 func renderReviewMaterial(workspace *Workspace, index WorkspaceIndex) string {
 	var b strings.Builder
 	b.WriteString("# Review Material\n\n")
-	writeItemsSection(&b, workspace, "Review Notes", filterItems(index, WorkspaceTypeReviewNote), 5)
-	writeItemsSection(&b, workspace, "Interview Records", filterItems(index, WorkspaceTypeInterviewRecord), 2)
+	writeItemsSection(&b, workspace, "Review Notes", filterItems(index, WorkspaceTypeRecord), 5)
+	writeItemsSection(&b, workspace, "Interview Records", filterItems(index, WorkspaceTypeMyInterviews), 2)
 	b.WriteString("## Suggested Buckets\n\n")
 	b.WriteString("- Role requirements and capability gaps\n")
 	b.WriteString("- Project examples and evidence paths\n")

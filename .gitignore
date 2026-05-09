@@ -6,3 +6,4 @@ bin/
 logs/
 .happyagent/
 mytest/
+spec/

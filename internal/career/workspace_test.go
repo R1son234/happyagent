@@ -22,18 +22,22 @@ func TestOpenWorkspaceCreatesCareerDirsAndFiles(t *testing.T) {
 	for _, rel := range []string{
 		"workspace.json",
 		"index.json",
-		"inbox",
-		"jds",
-		"resumes",
-		"projects",
-		"interview_experience",
-		"interview_records",
-		"review_notes",
-		"reports",
-		"exports",
+		"resume",
+		"jd",
+		"experiences",
+		"prepare",
+		"my-interviews",
+		"record",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("workspace missing %s: %v", rel, err)
+		}
+	}
+	for _, rel := range legacyWorkspaceDirs {
+		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
+			t.Fatalf("workspace should not create legacy dir %s", rel)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("stat legacy dir %s: %v", rel, err)
 		}
 	}
 	meta, index, err := ws.Status()
@@ -79,7 +83,7 @@ func TestAddJDSavesSourceMetadataAndIndex(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(item.Path))); err != nil {
 		t.Fatalf("source was not written: %v", err)
 	}
-	metadataPath := filepath.Join(root, "jds", item.ID, "metadata.json")
+	metadataPath := filepath.Join(root, "jd", item.ID, "metadata.json")
 	if _, err := os.Stat(metadataPath); err != nil {
 		t.Fatalf("metadata was not written: %v", err)
 	}
@@ -110,7 +114,7 @@ func TestAddMaterialSavesResumeVersionAndUpdatesCurrentResume(t *testing.T) {
 	if item.Type != WorkspaceTypeResume {
 		t.Fatalf("unexpected type: %+v", item)
 	}
-	if filepath.Dir(filepath.FromSlash(item.Path)) != filepath.Join("resumes", "versions", item.ID) {
+	if filepath.Dir(filepath.FromSlash(item.Path)) != filepath.Join("resume", "versions", item.ID) {
 		t.Fatalf("unexpected resume path: %s", item.Path)
 	}
 	meta, index, err := ws.Status()
@@ -122,6 +126,49 @@ func TestAddMaterialSavesResumeVersionAndUpdatesCurrentResume(t *testing.T) {
 	}
 	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeResume {
 		t.Fatalf("index not updated: %+v", index.Items)
+	}
+}
+
+func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	legacyResumeDir := filepath.Join(root, "resumes", "versions", "resume-old")
+	legacyJDDir := filepath.Join(root, "jds", "jd-old")
+	legacyInboxDir := filepath.Join(root, "inbox")
+	for _, dir := range []string{legacyResumeDir, legacyJDDir, legacyInboxDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir legacy dir: %v", err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(legacyResumeDir, "extracted.md"), []byte("legacy resume\n"), 0o644); err != nil {
+		t.Fatalf("write legacy resume: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyJDDir, "extracted.md"), []byte("legacy jd\n"), 0o644); err != nil {
+		t.Fatalf("write legacy jd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyInboxDir, "unknown.md"), []byte("unknown\n"), 0o644); err != nil {
+		t.Fatalf("write legacy inbox: %v", err)
+	}
+
+	ws, err := OpenWorkspace(root, time.Date(2026, 5, 9, 20, 30, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	for _, rel := range []string{
+		"resume/versions/resume-old/extracted.md",
+		"jd/jd-old/extracted.md",
+		"record/unclassified/inbox/unknown.md",
+	} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("migrated file missing %s: %v", rel, err)
+		}
+	}
+	migrationDir := filepath.Join(ws.Root, "record", "migrations")
+	entries, err := os.ReadDir(migrationDir)
+	if err != nil {
+		t.Fatalf("read migration dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one migration record, got %d", len(entries))
 	}
 }
 
@@ -158,6 +205,48 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(item.Metadata.Original))); err != nil {
 		t.Fatalf("expected copied original file: %v", err)
+	}
+}
+
+func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+
+	result, err := ws.ArchivePublicInterviewExperience("市场营销公开面经：一面问用户增长，高频题包括项目追问、技术方案和证据口径。", now)
+	if err != nil {
+		t.Fatalf("ArchivePublicInterviewExperience() error = %v", err)
+	}
+	if result.ExperienceItem.Type != WorkspaceTypeExperiences || !strings.HasPrefix(result.ExperienceItem.Path, "experiences/") {
+		t.Fatalf("unexpected experience item: %+v", result.ExperienceItem)
+	}
+	if result.PrepareItem.Type != WorkspaceTypePrepare || !strings.HasPrefix(result.PrepareItem.Path, "prepare/") {
+		t.Fatalf("expected prepare item, got %+v", result.PrepareItem)
+	}
+	for _, rel := range []string{
+		result.MyInterviewRel,
+		result.RecordRel,
+	} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("expected derived file %s: %v", rel, err)
+		}
+	}
+	if !strings.Contains(result.MyInterviewRel, "my-interviews/市场营销/") {
+		t.Fatalf("expected marketing interview directory, got %s", result.MyInterviewRel)
+	}
+	_, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	counts := map[string]int{}
+	for _, item := range index.Items {
+		counts[item.Type]++
+	}
+	if counts[WorkspaceTypeExperiences] != 1 || counts[WorkspaceTypePrepare] != 1 || counts[WorkspaceTypeRecord] != 1 {
+		t.Fatalf("unexpected index counts: %+v", counts)
 	}
 }
 

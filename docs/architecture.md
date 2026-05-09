@@ -72,13 +72,13 @@ This keeps the default retrieval path local, deterministic, and dependency-free 
 The `career` command adds an application layer on top of the runtime:
 
 1. Open or create `.happyagent/career/`.
-2. Classify user input as JD, resume, project, interview experience, interview record, review note, or general request.
+2. Classify user input as JD, resume, experiences, prepare, my-interviews, record, or a general request.
 3. Extract referenced local files when possible.
 4. Archive source material and extracted text in the workspace.
 5. Update active pointers such as current resume, active JD, and active project.
 6. Build a prompt that includes workspace status and saved material paths.
 7. Run the `career-copilot` profile through the shared app/runtime stack.
-8. Persist generated artifacts under workspace `reports/` or `exports/`.
+8. Persist generated artifacts under `record/generated/` or the relevant business directory.
 
 The batch `career analyze` command follows the same evidence-first behavior with explicit input files and produces Markdown, JSON, and trace outputs.
 

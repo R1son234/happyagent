@@ -234,7 +234,7 @@ func TestRunInteractiveAddJDFileCommandArchivesOriginalFile(t *testing.T) {
 	if !strings.HasSuffix(item.Path, "/extracted.md") {
 		t.Fatalf("expected extracted markdown path, got %q", item.Path)
 	}
-	metadataPath := filepath.Join(workspaceRoot, "jds", item.ID, "metadata.json")
+	metadataPath := filepath.Join(workspaceRoot, "jd", item.ID, "metadata.json")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		t.Fatalf("read metadata: %v", err)
@@ -394,6 +394,114 @@ func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
 	}
 	if len(index.Items) < 1 || index.Items[0].Type != WorkspaceTypeJD {
 		t.Fatalf("expected jd item, got %+v", index.Items)
+	}
+}
+
+func TestRunInteractiveAutoArchivesThenStillCallsModelForRecordOnlyRequest(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "我已经记录，并会基于已保存材料继续。"}},
+	}
+	workspaceRoot := t.TempDir()
+	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
+	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调、执行跟踪和复盘。\n"
+	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write source file: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("我在 " + sourcePath + " 放了一个jd，帮我记录一下\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 1 {
+		t.Fatalf("expected auto-archive to be followed by a model turn, got %d", len(app.appendRequests))
+	}
+	if !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") || !strings.Contains(app.appendRequests[0].Input, sourcePath) {
+		t.Fatalf("expected model prompt to include original input and auto-saved context, got:\n%s", app.appendRequests[0].Input)
+	}
+	if !strings.Contains(stdout.String(), "assistant> 我已经记录") {
+		t.Fatalf("expected model response after auto-archive, got:\n%s", stdout.String())
+	}
+}
+
+func TestRunInteractiveAutoArchivesNamedJDAndDiscoveredResumeFromSameDirectory(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "已记录简历和 JD。"}},
+	}
+	workspaceRoot := t.TempDir()
+	workdir := t.TempDir()
+	testDir := filepath.Join(workdir, "mytest")
+	if err := os.Mkdir(testDir, 0o755); err != nil {
+		t.Fatalf("mkdir test dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "ai.txt"), []byte("# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(testDir, "resume.md"), []byte("# Resume\n项目：内容增长复盘。"), 0o644); err != nil {
+		t.Fatalf("write resume: %v", err)
+	}
+	oldWd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(workdir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	defer func() {
+		if err := os.Chdir(oldWd); err != nil {
+			t.Fatalf("restore wd: %v", err)
+		}
+	}()
+
+	err = RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("我在mytest目录里放了我的简历和ai.txt(这个是jd),你帮我记录一下\n/exit\n"),
+		Stdout:        &bytes.Buffer{},
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	meta, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if meta.CurrentResume == "" || meta.ActiveJD == "" {
+		t.Fatalf("expected both resume and JD pointers, got %+v", meta)
+	}
+	var hasResume, hasJD bool
+	for _, item := range index.Items {
+		hasResume = hasResume || item.Type == WorkspaceTypeResume
+		hasJD = hasJD || item.Type == WorkspaceTypeJD
+	}
+	if !hasResume || !hasJD {
+		t.Fatalf("expected archived resume and jd items, got %+v", index.Items)
+	}
+	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
+		t.Fatalf("expected one model turn with auto-saved context, got %+v", app.appendRequests)
 	}
 }
 
@@ -571,7 +679,7 @@ func TestRunInteractiveAutoArchivesResumeAndJDInSameTurn(t *testing.T) {
 			hasResume = true
 		case WorkspaceTypeJD:
 			hasJD = true
-		case "report":
+		case WorkspaceTypeRecord:
 			hasReport = true
 		}
 	}
@@ -603,7 +711,7 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "已导出 Review Material") {
+	if !strings.Contains(output, "已生成并沉淀 Review Material") {
 		t.Fatalf("unexpected output:\n%s", output)
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
@@ -614,14 +722,56 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	var hasExport bool
+	var hasRecord bool
 	for _, item := range index.Items {
-		if item.Type == "export" {
-			hasExport = true
+		if item.Type == WorkspaceTypeRecord {
+			hasRecord = true
+			if strings.HasPrefix(item.Path, "exports/") || strings.HasPrefix(item.Path, "reports/") {
+				t.Fatalf("generated artifact should not use legacy dir: %+v", item)
+			}
 		}
 	}
-	if !hasExport {
-		t.Fatalf("expected export item: %+v", index.Items)
+	if !hasRecord {
+		t.Fatalf("expected record item: %+v", index.Items)
+	}
+}
+
+func TestRunInteractiveRejectsLegacyAddAlias(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("/add project 市场营销项目准备\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, `暂不支持归档类型 "project"`) {
+		t.Fatalf("expected legacy alias rejection, got:\n%s", output)
+	}
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	_, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if len(index.Items) != 0 {
+		t.Fatalf("legacy alias should not archive material: %+v", index.Items)
 	}
 }
 
@@ -681,17 +831,20 @@ func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *te
 		[]WorkspaceItem{{
 			Type:  WorkspaceTypeResume,
 			Title: "resume-sample",
-			Path:  "resumes/versions/resume-20260501-143151-resume-sample/extracted.md",
+			Path:  "resume/versions/resume-20260501-143151-resume-sample/extracted.md",
 		}},
 		nil,
 		WorkspaceMetadata{
-			CurrentResume: "resumes/versions/resume-20260501-143151-resume-sample/extracted.md",
+			CurrentResume: "resume/versions/resume-20260501-143151-resume-sample/extracted.md",
 		},
 		true,
 		".happyagent/career",
 	)
 	for _, expected := range []string{
-		".happyagent/career/resumes/versions/resume-20260501-143151-resume-sample/extracted.md",
+		".happyagent/career/resume/versions/resume-20260501-143151-resume-sample/extracted.md",
+		"preferably in one multi-tool step",
+		"Do not call file_list or file_search to rediscover files",
+		"Do not inspect record directories just to verify saving",
 		"do not ask the user to choose storage paths",
 		"Treat DOCX/PDF extraction as already handled by the application layer",
 	} {

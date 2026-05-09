@@ -155,10 +155,6 @@ func RunInteractive(deps Dependencies) error {
 			continue
 		}
 		analysisRequested := shouldAnalyzeInput(input)
-		if len(autoArchived) > 0 && !analysisRequested {
-			continue
-		}
-
 		meta, err := workspace.ReadMetadata()
 		if err != nil {
 			return err
@@ -194,20 +190,20 @@ func handleExportCommand(output io.Writer, workspace *Workspace, input string) e
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "assistant> 已导出 %s：%s\n", title, path)
+	fmt.Fprintf(output, "assistant> 已生成并沉淀 %s：%s\n", title, path)
 	return nil
 }
 
 func handleAddCommand(output io.Writer, lineReader terminal.LineReader, workspace *Workspace, input string) error {
 	fields := strings.Fields(input)
 	if len(fields) < 2 {
-		fmt.Fprintln(output, "assistant> 用法：/add <类型> <内容>。支持 jd、resume、project、interview_experience、interview_record、review_note。多行内容可输入 /add <类型> 后粘贴，单独一行 . 结束。")
+		fmt.Fprintln(output, "assistant> 用法：/add <类型> <内容>。支持 jd、resume、prepare、experiences、my-interviews、record。多行内容可输入 /add <类型> 后粘贴，单独一行 . 结束。")
 		return nil
 	}
 	itemType := normalizeWorkspaceType(fields[1])
 	inline := strings.TrimSpace(strings.TrimPrefix(input, strings.Join(fields[:2], " ")))
 	if !IsSupportedWorkspaceType(itemType) {
-		fmt.Fprintf(output, "assistant> 暂不支持归档类型 %q。可用类型：jd、resume、project、interview_experience、interview_record、review_note。\n", fields[1])
+		fmt.Fprintf(output, "assistant> 暂不支持归档类型 %q。可用类型：jd、resume、prepare、experiences、my-interviews、record。\n", fields[1])
 		return nil
 	}
 	content := inline
@@ -259,6 +255,14 @@ func isExistingFile(path string) bool {
 }
 
 func saveMaterialAndPrint(output io.Writer, workspace *Workspace, itemType string, content string, prefix string) error {
+	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeExperiences {
+		result, err := workspace.ArchivePublicInterviewExperience(content, time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(output, "assistant> %s，并保存到 %s；已同步沉淀到 %s，并记录导入流程 %s。\n", prefix, result.ExperienceItem.Path, result.MyInterviewRel, result.RecordRel)
+		return nil
+	}
 	item, err := workspace.AddMaterial(itemType, content, time.Now())
 	if err != nil {
 		return err
@@ -278,8 +282,14 @@ func saveMaterialFileAndPrint(output io.Writer, workspace *Workspace, input Work
 
 func autoArchiveReferencedFiles(ctx context.Context, output io.Writer, workspace *Workspace, input string) ([]WorkspaceItem, []string, error) {
 	paths := extractReferencedFiles(input)
-	if len(paths) == 0 {
-		paths = discoverFilesInReferencedDirectories(input)
+	explicitPaths := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		explicitPaths[path] = true
+	}
+	for _, path := range discoverFilesInReferencedDirectories(input) {
+		if !containsString(paths, path) {
+			paths = append(paths, path)
+		}
 	}
 	if len(paths) == 0 {
 		return nil, nil, nil
@@ -287,9 +297,13 @@ func autoArchiveReferencedFiles(ctx context.Context, output io.Writer, workspace
 	archived := make([]WorkspaceItem, 0, len(paths))
 	ingestErrors := make([]string, 0)
 	for _, path := range paths {
+		hintType := ""
+		if explicitPaths[path] {
+			hintType = detectWorkspaceTypeHintNearPath(input, path)
+		}
 		result, err := IngestFile(ctx, workspace, IngestRequest{
 			Path:      path,
-			HintType:  detectWorkspaceTypeHintNearPath(input, path),
+			HintType:  hintType,
 			UserInput: input,
 			Now:       time.Now(),
 		})
@@ -310,6 +324,15 @@ func autoArchiveReferencedFiles(ctx context.Context, output io.Writer, workspace
 	return archived, ingestErrors, nil
 }
 
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func detectWorkspaceTypeHint(input string) string {
 	normalized := strings.ToLower(input)
 	switch {
@@ -318,13 +341,13 @@ func detectWorkspaceTypeHint(input string) string {
 	case strings.Contains(normalized, "resume"), strings.Contains(normalized, "cv"), strings.Contains(input, "简历"):
 		return WorkspaceTypeResume
 	case strings.Contains(normalized, "project"), strings.Contains(input, "项目"):
-		return WorkspaceTypeProject
+		return WorkspaceTypePrepare
 	case strings.Contains(normalized, "interview experience"), strings.Contains(input, "面经"):
-		return WorkspaceTypeInterviewExperience
+		return WorkspaceTypeExperiences
 	case strings.Contains(normalized, "interview record"), strings.Contains(input, "面试记录"), strings.Contains(input, "复盘"):
-		return WorkspaceTypeInterviewRecord
+		return WorkspaceTypeMyInterviews
 	case strings.Contains(normalized, "review note"), strings.Contains(normalized, "study note"), strings.Contains(input, "笔记"), strings.Contains(input, "复习"):
-		return WorkspaceTypeReviewNote
+		return WorkspaceTypeRecord
 	default:
 		return ""
 	}
@@ -336,7 +359,15 @@ func detectWorkspaceTypeHintNearPath(input string, path string) string {
 	}
 	index := strings.Index(input, path)
 	if index < 0 {
-		return detectWorkspaceTypeHint(input)
+		base := filepath.Base(path)
+		if base == "." || base == string(filepath.Separator) || base == path {
+			return ""
+		}
+		index = strings.Index(input, base)
+		if index < 0 {
+			return ""
+		}
+		path = base
 	}
 	start := index - 24
 	if start < 0 {
@@ -505,7 +536,7 @@ func BuildInteractivePromptWithAutoSaved(input string, classification InputClass
 	}
 	analysisSection := ""
 	if analysisRequested {
-		analysisSection = "\n\nAnalysis priority:\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read the extracted workspace files before concluding.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- Keep user-provided facts separate from suggestions."
+		analysisSection = "\n\nAnalysis priority:\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read all listed stored_path and current workspace pointer files directly, preferably in one multi-tool step when more than one file is needed.\n- Do not call file_list or file_search to rediscover files that are already listed in this prompt.\n- Do not inspect record directories just to verify saving; the application layer saves generated analysis artifacts after the model response.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- Keep user-provided facts separate from suggestions."
 	}
 	return fmt.Sprintf(`You are running inside the Career Copilot continuous conversation workspace.
 
@@ -558,7 +589,7 @@ func printCareerWelcome(output io.Writer, workspaceRoot string, sessionID string
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "我是你的智能求职助手，可以帮你分析 JD、优化简历、匹配项目经历、推荐面试问题、模拟面试、记录面试过程，并整理复习资料。")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "我会把与你求职相关的资料保存在本地工作区，包含 JD、简历版本、项目素材、面经、面试记录、复习资料和生成报告。你可以随时让我查看、整理、更新或导出这些资料。")
+	fmt.Fprintln(output, "我会把与你求职相关的资料保存在本地工作区，包含 JD、简历版本、公开面经、项目准备、真实面试记录和操作记录。你可以随时让我查看、整理、更新或生成沉淀材料。")
 	fmt.Fprintln(output)
 	fmt.Fprintf(output, "Workspace: %s\n", workspaceRoot)
 	fmt.Fprintf(output, "Session: %s\n", sessionID)
@@ -570,9 +601,9 @@ func printCareerHelp(output io.Writer) {
 	fmt.Fprintln(output, "Commands:")
 	fmt.Fprintln(output, "  /help     查看可用命令")
 	fmt.Fprintln(output, "  /status   查看当前求职工作区")
-	fmt.Fprintln(output, "  /export   导出 jd-match、resume-review、project-pitch、interview-review、review-material")
+	fmt.Fprintln(output, "  /export   生成并沉淀 jd-match、resume-review、project-pitch、interview-review、review-material")
 	fmt.Fprintln(output, "  /add jd   添加 JD；多行内容用单独一行 . 结束")
-	fmt.Fprintln(output, "  /add resume | project | interview_experience | interview_record | review_note")
+	fmt.Fprintln(output, "  /add resume | prepare | experiences | my-interviews | record")
 	fmt.Fprintln(output, "  /exit     退出")
 	fmt.Fprintln(output)
 	fmt.Fprintln(output, "你也可以直接输入自然语言，例如：这是一个新的 JD，帮我分析一下。")
@@ -611,12 +642,12 @@ func printWorkspaceStatus(output io.Writer, workspace *Workspace) error {
 	fmt.Fprintln(output, "Workspace Status")
 	fmt.Fprintf(output, "  Root: %s\n", workspace.Root)
 	fmt.Fprintf(output, "  Items: %d\n", len(index.Items))
-	fmt.Fprintf(output, "  JDs: %d\n", counts["jd"])
-	fmt.Fprintf(output, "  Resumes: %d\n", counts["resume"])
-	fmt.Fprintf(output, "  Projects: %d\n", counts["project"])
-	fmt.Fprintf(output, "  Interview Experience: %d\n", counts["interview_experience"])
-	fmt.Fprintf(output, "  Interview Records: %d\n", counts["interview_record"])
-	fmt.Fprintf(output, "  Review Notes: %d\n", counts["review_note"])
+	fmt.Fprintf(output, "  Resumes: %d\n", counts[WorkspaceTypeResume])
+	fmt.Fprintf(output, "  JDs: %d\n", counts[WorkspaceTypeJD])
+	fmt.Fprintf(output, "  Experiences: %d\n", counts[WorkspaceTypeExperiences])
+	fmt.Fprintf(output, "  Prepare: %d\n", counts[WorkspaceTypePrepare])
+	fmt.Fprintf(output, "  My Interviews: %d\n", counts[WorkspaceTypeMyInterviews])
+	fmt.Fprintf(output, "  Records: %d\n", counts[WorkspaceTypeRecord])
 	if meta.ActiveJD != "" {
 		fmt.Fprintf(output, "  Active JD: %s\n", meta.ActiveJD)
 	}
@@ -649,14 +680,14 @@ func normalizeWorkspaceType(value string) string {
 		return WorkspaceTypeJD
 	case "resume", "cv", "简历":
 		return WorkspaceTypeResume
-	case "project", "项目":
-		return WorkspaceTypeProject
-	case "interview_experience", "interview-experience", "experience", "面经":
-		return WorkspaceTypeInterviewExperience
-	case "interview_record", "interview-record", "record", "面试记录":
-		return WorkspaceTypeInterviewRecord
-	case "review_note", "review-note", "note", "notes", "笔记", "复习":
-		return WorkspaceTypeReviewNote
+	case "prepare", "项目准备":
+		return WorkspaceTypePrepare
+	case "experiences", "面经":
+		return WorkspaceTypeExperiences
+	case "my-interviews", "面试记录":
+		return WorkspaceTypeMyInterviews
+	case "record", "记录":
+		return WorkspaceTypeRecord
 	default:
 		return strings.ToLower(strings.TrimSpace(value))
 	}
@@ -668,13 +699,13 @@ func displayWorkspaceType(itemType string) string {
 		return "JD"
 	case WorkspaceTypeResume:
 		return "简历"
-	case WorkspaceTypeProject:
+	case WorkspaceTypePrepare:
 		return "项目素材"
-	case WorkspaceTypeInterviewExperience:
+	case WorkspaceTypeExperiences:
 		return "面经"
-	case WorkspaceTypeInterviewRecord:
+	case WorkspaceTypeMyInterviews:
 		return "面试记录"
-	case WorkspaceTypeReviewNote:
+	case WorkspaceTypeRecord:
 		return "复习笔记"
 	default:
 		return itemType

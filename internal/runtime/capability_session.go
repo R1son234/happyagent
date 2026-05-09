@@ -5,7 +5,6 @@ import (
 	"sort"
 
 	"happyagent/internal/mcp"
-	"happyagent/internal/skills"
 )
 
 const mcpReadResourceToolName = "mcp_read_resource"
@@ -13,6 +12,11 @@ const mcpReadResourceToolName = "mcp_read_resource"
 type CapabilitySession struct {
 	skillSession *SkillSession
 	mcpManager   *mcp.Manager
+}
+
+type listedSkill struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
 }
 
 func NewCapabilitySession(skillSession *SkillSession, mcpManager *mcp.Manager) *CapabilitySession {
@@ -25,7 +29,7 @@ func NewCapabilitySession(skillSession *SkillSession, mcpManager *mcp.Manager) *
 func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 	payload := struct {
 		AvailableTools           []string           `json:"available_tools"`
-		Skills                   []skills.Metadata  `json:"skills"`
+		Skills                   []listedSkill      `json:"skills"`
 		ActiveSkills             []string           `json:"active_skills"`
 		MCPResourceReadSupported bool               `json:"mcp_resource_read_supported"`
 		MCPResources             []mcp.ResourceInfo `json:"mcp_resources"`
@@ -33,11 +37,16 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 		MCPResourcesTruncated    bool               `json:"mcp_resources_truncated"`
 	}{
 		AvailableTools: []string{},
-		Skills:         []skills.Metadata{},
+		Skills:         []listedSkill{},
 		ActiveSkills:   []string{},
 	}
 	if s.skillSession != nil {
-		payload.Skills = append([]skills.Metadata{}, s.skillSession.Catalog()...)
+		for _, skill := range s.skillSession.Catalog() {
+			payload.Skills = append(payload.Skills, listedSkill{
+				Name:        skill.Name,
+				Description: skill.Description,
+			})
+		}
 		for _, skill := range s.skillSession.ActiveSkills() {
 			payload.ActiveSkills = append(payload.ActiveSkills, skill.Name)
 		}
