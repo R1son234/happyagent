@@ -2,6 +2,7 @@ package career
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"happyagent/internal/config"
 	"happyagent/internal/observe"
 	"happyagent/internal/report"
+	"happyagent/internal/runlog"
 	"happyagent/internal/store"
 	"happyagent/internal/terminal"
 )
@@ -95,7 +97,7 @@ func RunInteractive(deps Dependencies) error {
 		return fmt.Errorf("create career session: %w", err)
 	}
 
-	printCareerWelcome(deps.Stdout, workspace.Root, session.ID)
+	printCareerWelcome(deps.Stdout, workspace, session.ID)
 	lineReader, err := terminal.NewLineReader(deps.Stdin, deps.Stdout)
 	if err != nil {
 		return err
@@ -143,35 +145,8 @@ func RunInteractive(deps Dependencies) error {
 			}
 			continue
 		}
-		autoArchived, ingestErrors, err := autoArchiveReferencedFiles(context.Background(), deps.Stdout, workspace, input)
-		if err != nil {
+		if err := handleNaturalLanguageInput(deps, workspace, session.ID, input); err != nil {
 			return err
-		}
-		classification := ClassifyInput(input)
-		if classification.ShouldSave && len(autoArchived) == 0 {
-			if err := saveMaterialAndPrint(deps.Stdout, workspace, classification.Type, input, "已识别并归档为 "+displayWorkspaceType(classification.Type)); err != nil {
-				return err
-			}
-			continue
-		}
-		analysisRequested := shouldAnalyzeInput(input)
-		meta, err := workspace.ReadMetadata()
-		if err != nil {
-			return err
-		}
-		record, err := runCareerTurn(deps, session.ID, BuildInteractivePromptWithAutoSaved(input, classification, autoArchived, ingestErrors, meta, analysisRequested, workspace.Root), classification)
-		if err != nil {
-			if record.ID != "" {
-				fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
-			}
-			return fmt.Errorf("run career turn: %w", err)
-		}
-		fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
-		fmt.Fprintf(deps.Stdout, "assistant> %s\n", record.Output)
-		if analysisRequested {
-			if reportPath, writeErr := workspace.WriteArtifact("career-report", "Career Analysis", record.Output, time.Now()); writeErr == nil {
-				fmt.Fprintf(deps.Stdout, "assistant> 已保存本轮分析报告：%s\n", reportPath)
-			}
 		}
 	}
 }
@@ -186,11 +161,11 @@ func handleExportCommand(output io.Writer, workspace *Workspace, input string) e
 	if err != nil {
 		return err
 	}
-	path, err := workspace.WriteArtifact(kind, title, content, time.Now())
+	paths, err := workspace.WriteUserOutput(kind, title, content, nil, time.Now())
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "assistant> 已生成并沉淀 %s：%s\n", title, path)
+	fmt.Fprintf(output, "assistant> 已生成并保存 %s：%s\n", title, paths.LatestMarkdown)
 	return nil
 }
 
@@ -462,15 +437,26 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 	if timeout <= 0 {
 		timeout = 60 * time.Second
 	}
+	runlog.Section("Run Input", prompt)
+	runlog.Linef("Model: `%s`", deps.Config.LLM.Model)
+	runlog.Linef("Timeout: `%ds`", deps.Config.Engine.RunTimeoutSeconds)
+	runlog.Linef("Profile: `%s`", ProfileName)
+	runlog.Linef("Session: `%s`", sessionID)
+	runlog.Linef("")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
+	record, err := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
 		SessionID:    sessionID,
 		ProfileName:  ProfileName,
 		Input:        prompt,
 		SystemPrompt: deps.Config.Engine.SystemPrompt,
 		Events:       []observe.Event{classificationEvent(classification)},
 	})
+	if err != nil {
+		return record, err
+	}
+	runlog.Section("Final Output", record.Output)
+	return record, nil
 }
 
 func parseOrRepairReport(ctx context.Context, deps Dependencies, sessionID string, record store.RunRecord) (Report, store.RunRecord, error) {
@@ -561,20 +547,220 @@ func promptWorkspacePath(workspaceRoot string, storedPath string) string {
 	return filepath.ToSlash(filepath.Join(workspaceRoot, storedPath))
 }
 
-func shouldAnalyzeInput(input string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(input))
-	if normalized == "" {
-		return false
+func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
+	intent := ClassifyIntent(input)
+	classification := ClassifyInput(input)
+	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(context.Background(), deps.Stdout, workspace, input)
+	if err != nil {
+		return err
 	}
-	signals := []string{
-		"分析", "看看", "建议", "优化", "匹配", "评估", "review", "analy", "match", "gap", "rewrite",
+	if shouldScanInbox(intent) {
+		inboxResult, inboxErr := IngestInbox(context.Background(), workspace, time.Now())
+		if inboxErr != nil {
+			return inboxErr
+		}
+		for _, item := range inboxResult.Items {
+			autoArchived = append(autoArchived, item)
+			fmt.Fprintf(deps.Stdout, "assistant> 已整理 inbox 文件到 %s：%s（已保留 inbox 原件）\n", displayWorkspaceType(item.Type), item.Path)
+		}
+		ingestErrors = append(ingestErrors, inboxResult.Warnings...)
 	}
-	for _, signal := range signals {
-		if strings.Contains(normalized, signal) {
-			return true
+	if classification.ShouldSave && len(autoArchived) == 0 {
+		item, err := saveMaterial(workspace, classification.Type, input)
+		if err != nil {
+			return err
+		}
+		autoArchived = append(autoArchived, item)
+		fmt.Fprintf(deps.Stdout, "assistant> 已识别并归档为 %s：%s\n", displayWorkspaceType(item.Type), item.Path)
+		if intent.Intent == CareerIntentChat || intent.Intent == CareerIntentIngest {
+			return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
 		}
 	}
-	return false
+	switch intent.Intent {
+	case CareerIntentStatus:
+		return printWorkspaceStatus(deps.Stdout, workspace)
+	case CareerIntentIngest:
+		return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
+	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
+		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
+	default:
+		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
+	}
+}
+
+func shouldScanInbox(intent IntentClassification) bool {
+	switch intent.Intent {
+	case CareerIntentIngest, CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
+		return true
+	default:
+		return false
+	}
+}
+
+func saveMaterial(workspace *Workspace, itemType string, content string) (WorkspaceItem, error) {
+	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeExperiences {
+		result, err := workspace.ArchivePublicInterviewExperience(content, time.Now())
+		if err != nil {
+			return WorkspaceItem{}, err
+		}
+		return result.ExperienceItem, nil
+	}
+	return workspace.AddMaterial(itemType, content, time.Now())
+}
+
+func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) error {
+	meta, err := workspace.ReadMetadata()
+	if err != nil {
+		return err
+	}
+	if message := readinessMessage(workspace, meta, intent.Intent); message != "" {
+		fmt.Fprintln(deps.Stdout, message)
+		return nil
+	}
+	record, err := runCareerTurn(deps, sessionID, BuildInteractivePromptWithAutoSaved(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root), classification)
+	if err != nil {
+		if record.ID != "" {
+			fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
+		}
+		return fmt.Errorf("run career turn: %w", err)
+	}
+	fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
+	fmt.Fprintf(deps.Stdout, "assistant> %s\n", record.Output)
+	if !shouldGenerateOutput(intent.Intent) {
+		return nil
+	}
+	now := time.Now()
+	jsonContent := []byte(nil)
+	if intent.Intent == CareerIntentAnalyze {
+		payload := map[string]string{
+			"run_id":         record.ID,
+			"session_id":     record.SessionID,
+			"intent":         string(intent.Intent),
+			"output":         record.Output,
+			"current_jd":     meta.ActiveJD,
+			"current_resume": meta.CurrentResume,
+		}
+		data, marshalErr := json.MarshalIndent(payload, "", "  ")
+		if marshalErr == nil {
+			jsonContent = data
+		}
+	}
+	outputKind, outputTitle := outputSpec(intent.Intent)
+	paths, err := workspace.WriteUserOutput(outputKind, outputTitle, record.Output, jsonContent, now)
+	if err != nil {
+		return err
+	}
+	printCompletionSummary(deps.Stdout, outputTitle, collectedInputPaths(workspace.Root, meta, autoArchived), paths)
+	return nil
+}
+
+func shouldGenerateOutput(intent CareerIntent) bool {
+	switch intent {
+	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
+		return true
+	default:
+		return false
+	}
+}
+
+func outputSpec(intent CareerIntent) (string, string) {
+	switch intent {
+	case CareerIntentAnalyze:
+		return "report", "完整匹配报告"
+	case CareerIntentResumeReview:
+		return "resume-review", "简历优化建议"
+	case CareerIntentInterviewBrief:
+		return "interview-brief", "面试准备材料"
+	case CareerIntentGapPlan:
+		return "gap-plan", "能力差距计划"
+	case CareerIntentInterviewReview:
+		return "interview-review", "面试复盘"
+	default:
+		return "career-note", "求职助手输出"
+	}
+}
+
+func readinessMessage(workspace *Workspace, meta WorkspaceMetadata, intent CareerIntent) string {
+	switch intent {
+	case CareerIntentAnalyze:
+		if meta.CurrentResume == "" && meta.ActiveJD == "" {
+			return fmt.Sprintf("assistant> 现在还缺少简历和 JD。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		}
+		if meta.CurrentResume == "" {
+			return fmt.Sprintf("assistant> 现在还缺少简历。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		}
+		if meta.ActiveJD == "" {
+			return fmt.Sprintf("assistant> 现在还缺少 JD。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		}
+	case CareerIntentResumeReview:
+		if meta.CurrentResume == "" {
+			return fmt.Sprintf("assistant> 现在还缺少简历。请把你准备好的内容放到 %s，然后直接说：帮我优化简历。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		}
+	case CareerIntentInterviewBrief, CareerIntentGapPlan:
+		if meta.ActiveJD == "" {
+			return fmt.Sprintf("assistant> 现在还缺少 JD。请把你准备好的内容放到 %s，然后直接说：帮我生成面试准备材料。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		}
+	}
+	return ""
+}
+
+func printIngestSummary(output io.Writer, workspace *Workspace, items []WorkspaceItem, warnings []string) error {
+	if len(items) == 0 && len(warnings) == 0 {
+		fmt.Fprintf(output, "assistant> 还没有发现新的可归档资料。请把你准备好的内容放到 %s。\n", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+		return nil
+	}
+	if len(items) > 0 {
+		fmt.Fprintln(output, "assistant> 已整理这些资料：")
+		for _, item := range items {
+			fmt.Fprintf(output, "  - %s：%s\n", displayWorkspaceType(item.Type), item.Path)
+		}
+	}
+	for _, warning := range warnings {
+		fmt.Fprintf(output, "assistant> 注意：%s\n", warning)
+	}
+	meta, _, err := workspace.Status()
+	if err != nil {
+		return err
+	}
+	if meta.CurrentResume != "" && meta.ActiveJD != "" {
+		fmt.Fprintln(output, "assistant> 当前简历和 JD 都已就绪。你可以直接说：帮我分析一下匹配度。")
+		return nil
+	}
+	fmt.Fprintf(output, "assistant> 请继续把你准备好的内容放到 %s。\n", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
+	return nil
+}
+
+func collectedInputPaths(workspaceRoot string, meta WorkspaceMetadata, autoArchived []WorkspaceItem) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, candidate := range []string{meta.CurrentResume, meta.ActiveJD, meta.ActiveProject} {
+		if strings.TrimSpace(candidate) == "" || seen[candidate] {
+			continue
+		}
+		paths = append(paths, promptWorkspacePath(workspaceRoot, candidate))
+		seen[candidate] = true
+	}
+	for _, item := range autoArchived {
+		if strings.TrimSpace(item.Path) == "" || seen[item.Path] {
+			continue
+		}
+		paths = append(paths, promptWorkspacePath(workspaceRoot, item.Path))
+		seen[item.Path] = true
+	}
+	return paths
+}
+
+func printCompletionSummary(output io.Writer, title string, inputs []string, paths UserOutputPaths) {
+	fmt.Fprintf(output, "assistant> 完成：%s\n", title)
+	for _, input := range inputs {
+		fmt.Fprintf(output, "assistant> 读取：%s\n", input)
+	}
+	if paths.LatestMarkdown != "" {
+		fmt.Fprintf(output, "assistant> 结果：%s\n", paths.LatestMarkdown)
+	}
+	if paths.LatestJSON != "" {
+		fmt.Fprintf(output, "assistant> JSON：%s\n", paths.LatestJSON)
+	}
 }
 
 func emptyIfBlank(value string) string {
@@ -584,29 +770,55 @@ func emptyIfBlank(value string) string {
 	return value
 }
 
-func printCareerWelcome(output io.Writer, workspaceRoot string, sessionID string) {
-	fmt.Fprintln(output, "Career Copilot")
+func printCareerWelcome(output io.Writer, workspace *Workspace, sessionID string) {
+	meta, index, err := workspace.Status()
+	if err != nil {
+		fmt.Fprintf(output, "求职助手 Career Copilot\n\n工作区：%s\n会话：%s\n", workspace.Root, sessionID)
+		return
+	}
+	counts := workspaceCounts(index)
+	fmt.Fprintln(output, careerBanner())
+	fmt.Fprintln(output, "求职助手 Career Copilot")
 	fmt.Fprintln(output)
-	fmt.Fprintln(output, "我是你的智能求职助手，可以帮你分析 JD、优化简历、匹配项目经历、推荐面试问题、模拟面试、记录面试过程，并整理复习资料。")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "我会把与你求职相关的资料保存在本地工作区，包含 JD、简历版本、公开面经、项目准备、真实面试记录和操作记录。你可以随时让我查看、整理、更新或生成沉淀材料。")
-	fmt.Fprintln(output)
-	fmt.Fprintf(output, "Workspace: %s\n", workspaceRoot)
-	fmt.Fprintf(output, "Session: %s\n", sessionID)
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "你可以直接粘贴 JD、简历、面经或面试记录，也可以输入 /help 查看命令。")
+	box := renderCareerBox("求职工作台", []string{
+		"请把你准备好的内容放到：",
+		"",
+		"  " + filepath.ToSlash(filepath.Join(workspace.Root, "inbox")) + "/",
+		"",
+		"支持内容：简历、JD、项目经历、面经、面试记录、复习笔记",
+	}, "当前资料", []string{
+		"简历：" + displayPointer(meta.CurrentResume, "未发现"),
+		"JD：" + displayPointer(meta.ActiveJD, "未发现"),
+		fmt.Sprintf("项目素材：%d 份", counts[WorkspaceTypePrepare]),
+		fmt.Sprintf("面经/面试记录：%d 份", counts[WorkspaceTypeExperiences]+counts[WorkspaceTypeMyInterviews]),
+	}, "生成结果", []string{
+		"所有报告和建议会保存到：",
+		"",
+		"  " + filepath.ToSlash(filepath.Join(workspace.Root, "outputs")) + "/",
+	}, "你可以直接说", []string{
+		"我把简历和 JD 放进 inbox 了，帮我分析一下",
+		"帮我针对当前岗位优化简历",
+		"帮我生成面试准备材料",
+		"我刚面完，帮我复盘一下",
+	})
+	fmt.Fprintln(output, box)
+	fmt.Fprintf(output, "会话：%s\n", sessionID)
 }
 
 func printCareerHelp(output io.Writer) {
-	fmt.Fprintln(output, "Commands:")
-	fmt.Fprintln(output, "  /help     查看可用命令")
-	fmt.Fprintln(output, "  /status   查看当前求职工作区")
-	fmt.Fprintln(output, "  /export   生成并沉淀 jd-match、resume-review、project-pitch、interview-review、review-material")
+	fmt.Fprintln(output, "你可以直接这样说：")
+	fmt.Fprintln(output, "  我把简历和 JD 放进 inbox 了，帮我分析一下")
+	fmt.Fprintln(output, "  帮我针对当前岗位优化简历")
+	fmt.Fprintln(output, "  帮我生成面试准备材料")
+	fmt.Fprintln(output, "  我刚面完，帮我复盘一下")
+	fmt.Fprintln(output)
+	fmt.Fprintln(output, "高级命令：")
+	fmt.Fprintln(output, "  /help     查看帮助")
+	fmt.Fprintln(output, "  /status   查看当前工作区状态")
+	fmt.Fprintln(output, "  /export   生成 jd-match、resume-review、project-pitch、interview-review、review-material")
 	fmt.Fprintln(output, "  /add jd   添加 JD；多行内容用单独一行 . 结束")
 	fmt.Fprintln(output, "  /add resume | prepare | experiences | my-interviews | record")
 	fmt.Fprintln(output, "  /exit     退出")
-	fmt.Fprintln(output)
-	fmt.Fprintln(output, "你也可以直接输入自然语言，例如：这是一个新的 JD，帮我分析一下。")
 }
 
 func isCommandHelpQuestion(input string) bool {
@@ -635,29 +847,175 @@ func printWorkspaceStatus(output io.Writer, workspace *Workspace) error {
 	if err != nil {
 		return err
 	}
+	counts := workspaceCounts(index)
+	reportPath := outputPathIfExists(workspace, workspace.LatestOutputPath("report", ".md"))
+	if reportPath == "" {
+		reportPath = "未生成"
+	}
+	ready := "可直接生成完整匹配报告"
+	if meta.CurrentResume == "" || meta.ActiveJD == "" {
+		ready = "还不能生成完整匹配报告"
+	}
+	box := renderCareerBox("工作区状态", []string{
+		"工作区：" + workspace.Root,
+		"当前简历：" + displayPointer(meta.CurrentResume, "未发现"),
+		"当前 JD：" + displayPointer(meta.ActiveJD, "未发现"),
+		"当前项目：" + displayPointer(meta.ActiveProject, "未发现"),
+	}, "资料统计", []string{
+		fmt.Sprintf("简历：%d 份", counts[WorkspaceTypeResume]),
+		fmt.Sprintf("JD：%d 份", counts[WorkspaceTypeJD]),
+		fmt.Sprintf("项目素材：%d 份", counts[WorkspaceTypePrepare]),
+		fmt.Sprintf("面经：%d 份", counts[WorkspaceTypeExperiences]),
+		fmt.Sprintf("面试记录：%d 份", counts[WorkspaceTypeMyInterviews]),
+		fmt.Sprintf("记录：%d 份", counts[WorkspaceTypeRecord]),
+	}, "生成结果", []string{
+		"最新报告：" + reportPath,
+		"输出目录：" + filepath.ToSlash(filepath.Join(workspace.Root, "outputs")) + "/",
+	}, "就绪情况", []string{
+		ready,
+		missingMaterialsHint(workspace, meta),
+	})
+	fmt.Fprintln(output, box)
+	return nil
+}
+
+func workspaceCounts(index WorkspaceIndex) map[string]int {
 	counts := map[string]int{}
 	for _, item := range index.Items {
 		counts[item.Type]++
 	}
-	fmt.Fprintln(output, "Workspace Status")
-	fmt.Fprintf(output, "  Root: %s\n", workspace.Root)
-	fmt.Fprintf(output, "  Items: %d\n", len(index.Items))
-	fmt.Fprintf(output, "  Resumes: %d\n", counts[WorkspaceTypeResume])
-	fmt.Fprintf(output, "  JDs: %d\n", counts[WorkspaceTypeJD])
-	fmt.Fprintf(output, "  Experiences: %d\n", counts[WorkspaceTypeExperiences])
-	fmt.Fprintf(output, "  Prepare: %d\n", counts[WorkspaceTypePrepare])
-	fmt.Fprintf(output, "  My Interviews: %d\n", counts[WorkspaceTypeMyInterviews])
-	fmt.Fprintf(output, "  Records: %d\n", counts[WorkspaceTypeRecord])
-	if meta.ActiveJD != "" {
-		fmt.Fprintf(output, "  Active JD: %s\n", meta.ActiveJD)
+	return counts
+}
+
+func displayPointer(path string, fallback string) string {
+	if strings.TrimSpace(path) == "" {
+		return fallback
 	}
-	if meta.CurrentResume != "" {
-		fmt.Fprintf(output, "  Current Resume: %s\n", meta.CurrentResume)
+	return path
+}
+
+func outputPathIfExists(workspace *Workspace, rel string) string {
+	if strings.TrimSpace(rel) == "" {
+		return ""
 	}
-	if meta.ActiveProject != "" {
-		fmt.Fprintf(output, "  Active Project: %s\n", meta.ActiveProject)
+	if _, err := os.Stat(filepath.Join(workspace.Root, filepath.FromSlash(rel))); err != nil {
+		return ""
 	}
-	return nil
+	return rel
+}
+
+func missingMaterialsHint(workspace *Workspace, meta WorkspaceMetadata) string {
+	var missing []string
+	if meta.CurrentResume == "" {
+		missing = append(missing, "简历")
+	}
+	if meta.ActiveJD == "" {
+		missing = append(missing, "JD")
+	}
+	if len(missing) == 0 {
+		return "你可以直接说：帮我分析一下匹配度"
+	}
+	return "缺少：" + strings.Join(missing, "、") + "。请放到 " + filepath.ToSlash(filepath.Join(workspace.Root, "inbox")) + "/"
+}
+
+func careerBanner() string {
+	return strings.TrimRight(`
+██╗  ██╗ █████╗ ██████╗ ██████╗ ██╗   ██╗
+██║  ██║██╔══██╗██╔══██╗██╔══██╗╚██╗ ██╔╝
+███████║███████║██████╔╝██████╔╝ ╚████╔╝
+██╔══██║██╔══██║██╔═══╝ ██╔═══╝   ╚██╔╝
+██║  ██║██║  ██║██║     ██║        ██║
+╚═╝  ╚═╝╚═╝  ╚═╝╚═╝     ╚═╝        ╚═╝
+`, "\n")
+}
+
+func renderCareerBox(title string, intro []string, section1 string, body1 []string, section2 string, body2 []string, section3 string, body3 []string) string {
+	const innerWidth = 64
+	var lines []string
+	lines = append(lines, boxTop(title, innerWidth))
+	for _, line := range intro {
+		lines = append(lines, boxLine(line, innerWidth))
+	}
+	lines = append(lines, boxSection(section1, innerWidth))
+	for _, line := range body1 {
+		lines = append(lines, boxLine(line, innerWidth))
+	}
+	lines = append(lines, boxSection(section2, innerWidth))
+	for _, line := range body2 {
+		lines = append(lines, boxLine(line, innerWidth))
+	}
+	lines = append(lines, boxSection(section3, innerWidth))
+	for _, line := range body3 {
+		lines = append(lines, boxLine(line, innerWidth))
+	}
+	lines = append(lines, boxBottom(innerWidth))
+	return strings.Join(lines, "\n")
+}
+
+func boxTop(title string, width int) string {
+	return "╭" + centeredRule(title, width) + "╮"
+}
+
+func boxSection(title string, width int) string {
+	return "├" + centeredRule(title, width) + "┤"
+}
+
+func boxBottom(width int) string {
+	return "╰" + strings.Repeat("─", width+2) + "╯"
+}
+
+func centeredRule(title string, width int) string {
+	label := " " + title + " "
+	remaining := width + 2 - displayWidth(label)
+	if remaining < 0 {
+		remaining = 0
+	}
+	left := remaining / 2
+	right := remaining - left
+	return strings.Repeat("─", left) + label + strings.Repeat("─", right)
+}
+
+func boxLine(content string, width int) string {
+	padding := width - displayWidth(content)
+	if padding < 0 {
+		padding = 0
+	}
+	return "│ " + content + strings.Repeat(" ", padding) + " │"
+}
+
+func displayWidth(value string) int {
+	width := 0
+	for _, r := range value {
+		width += runeDisplayWidth(r)
+	}
+	return width
+}
+
+func runeDisplayWidth(r rune) int {
+	switch {
+	case r == 0:
+		return 0
+	case r < 0x20 || (r >= 0x7f && r < 0xa0):
+		return 0
+	case r >= 0x1100 && r <= 0x115f:
+		return 2
+	case r >= 0x2e80 && r <= 0xa4cf:
+		return 2
+	case r >= 0xac00 && r <= 0xd7a3:
+		return 2
+	case r >= 0xf900 && r <= 0xfaff:
+		return 2
+	case r >= 0xfe10 && r <= 0xfe19:
+		return 2
+	case r >= 0xfe30 && r <= 0xfe6f:
+		return 2
+	case r >= 0xff00 && r <= 0xff60:
+		return 2
+	case r >= 0xffe0 && r <= 0xffe6:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func classificationEvent(classification InputClassification) observe.Event {
@@ -769,8 +1127,8 @@ func parseAnalyzeOptions(args []string) (AnalyzeOptions, error) {
 	fs.StringVar(&options.ResumePath, "resume", "", "path to resume draft markdown")
 	fs.StringVar(&options.TargetPath, "target", "", "path to career target markdown")
 	fs.StringVar(&options.RepoPath, "repo", ".", "repository root to inspect")
-	fs.StringVar(&options.MarkdownPath, "out", "outputs/career-report.md", "markdown report output path")
-	fs.StringVar(&options.JSONPath, "json", "outputs/career-report.json", "structured career report JSON output path")
+	fs.StringVar(&options.MarkdownPath, "out", "", "markdown report output path")
+	fs.StringVar(&options.JSONPath, "json", "", "structured career report JSON output path")
 	fs.StringVar(&options.TraceJSONPath, "trace-json", "logs/career/latest-trace.json", "runtime trace JSON output path")
 	fs.StringVar(&options.TemplatePath, "template", DefaultReportTemplatePath, "markdown template path")
 	if err := fs.Parse(args); err != nil {
@@ -789,10 +1147,10 @@ func normalizeAnalyzeOptions(options AnalyzeOptions) (AnalyzeOptions, error) {
 	}
 	options.RepoPath = repo
 	if strings.TrimSpace(options.MarkdownPath) == "" {
-		options.MarkdownPath = "outputs/career-report.md"
+		options.MarkdownPath = filepath.Join(DefaultWorkspaceRoot, "outputs", "latest-report.md")
 	}
 	if strings.TrimSpace(options.JSONPath) == "" {
-		options.JSONPath = "outputs/career-report.json"
+		options.JSONPath = filepath.Join(DefaultWorkspaceRoot, "outputs", "latest-report.json")
 	}
 	if strings.TrimSpace(options.TraceJSONPath) == "" {
 		options.TraceJSONPath = "logs/career/latest-trace.json"

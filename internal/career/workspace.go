@@ -12,16 +12,19 @@ import (
 	"time"
 )
 
-const DefaultWorkspaceRoot = ".happyagent/career"
+const DefaultWorkspaceRoot = "career-workspace"
 
 var nonSlugCharPattern = regexp.MustCompile(`[^a-z0-9]+`)
 
 var workspaceDirs = []string{
+	"inbox",
 	"resume",
 	"jd",
 	"experiences",
 	"prepare",
 	"my-interviews",
+	"outputs",
+	"outputs/runs",
 	"record",
 	"record/imports",
 	"record/migrations",
@@ -30,7 +33,6 @@ var workspaceDirs = []string{
 }
 
 var legacyWorkspaceDirs = []string{
-	"inbox",
 	"jds",
 	"resumes",
 	"projects",
@@ -55,7 +57,6 @@ var legacyPathPrefixes = []struct {
 	{"search_sources/", "experiences/sources/"},
 	{"reports/", "record/generated/reports/"},
 	{"exports/", "record/generated/exports/"},
-	{"inbox/", "record/unclassified/inbox/"},
 }
 
 type Workspace struct {
@@ -88,16 +89,17 @@ type WorkspaceItem struct {
 }
 
 type WorkspaceItemMetadata struct {
-	ID            string    `json:"id"`
-	Title         string    `json:"title"`
-	Type          string    `json:"type"`
-	CreatedAt     time.Time `json:"created_at"`
-	Source        string    `json:"source"`
-	Original      string    `json:"original,omitempty"`
-	Extractor     string    `json:"extractor,omitempty"`
-	MIMEType      string    `json:"mime_type,omitempty"`
-	ExtractStatus string    `json:"extract_status,omitempty"`
-	ExtractError  string    `json:"extract_error,omitempty"`
+	ID             string    `json:"id"`
+	Title          string    `json:"title"`
+	Type           string    `json:"type"`
+	CreatedAt      time.Time `json:"created_at"`
+	Source         string    `json:"source"`
+	Original       string    `json:"original,omitempty"`
+	ExternalSource string    `json:"external_source,omitempty"`
+	Extractor      string    `json:"extractor,omitempty"`
+	MIMEType       string    `json:"mime_type,omitempty"`
+	ExtractStatus  string    `json:"extract_status,omitempty"`
+	ExtractError   string    `json:"extract_error,omitempty"`
 }
 
 type WorkspaceFileInput struct {
@@ -195,7 +197,6 @@ func (w *Workspace) MigrateLegacyLayout(now time.Time) error {
 		{"search_sources", filepath.Join("experiences", "sources")},
 		{"reports", filepath.Join("record", "generated", "reports")},
 		{"exports", filepath.Join("record", "generated", "exports")},
-		{"inbox", filepath.Join("record", "unclassified", "inbox")},
 	}
 	for _, rule := range moveRules {
 		moved, err := w.moveLegacyDir(rule.old, rule.new)
@@ -393,6 +394,69 @@ func (w *Workspace) WriteArtifact(kind string, title string, content string, now
 	return filepath.ToSlash(rel), nil
 }
 
+type UserOutputPaths struct {
+	LatestMarkdown      string
+	TimestampedMarkdown string
+	LatestJSON          string
+	TimestampedJSON     string
+}
+
+func (w *Workspace) LatestOutputPath(kind string, ext string) string {
+	if strings.TrimSpace(ext) == "" {
+		ext = ".md"
+	}
+	return filepath.ToSlash(filepath.Join("outputs", latestOutputName(kind)+ext))
+}
+
+func (w *Workspace) TimestampedOutputPath(kind string, ext string, now time.Time) string {
+	if strings.TrimSpace(ext) == "" {
+		ext = ".md"
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return filepath.ToSlash(filepath.Join("outputs", "runs", fmt.Sprintf("%s-%s%s", now.Format("20060102-150405"), latestOutputName(kind), ext)))
+}
+
+func (w *Workspace) WriteUserOutput(kind string, title string, markdown string, jsonContent []byte, now time.Time) (UserOutputPaths, error) {
+	if strings.TrimSpace(kind) == "" {
+		return UserOutputPaths{}, fmt.Errorf("user output kind must not be empty")
+	}
+	if strings.TrimSpace(markdown) == "" && len(jsonContent) == 0 {
+		return UserOutputPaths{}, fmt.Errorf("user output content must not be empty")
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	paths := UserOutputPaths{}
+	if strings.TrimSpace(markdown) != "" {
+		content := strings.TrimSpace(markdown)
+		if strings.TrimSpace(title) != "" && !strings.HasPrefix(content, "# ") {
+			content = "# " + title + "\n\n" + content
+		}
+		paths.LatestMarkdown = w.LatestOutputPath(kind, ".md")
+		paths.TimestampedMarkdown = w.TimestampedOutputPath(kind, ".md", now)
+		if err := w.writeWorkspaceText(paths.LatestMarkdown, content); err != nil {
+			return UserOutputPaths{}, err
+		}
+		if err := w.writeWorkspaceText(paths.TimestampedMarkdown, content); err != nil {
+			return UserOutputPaths{}, err
+		}
+	}
+	if len(jsonContent) > 0 {
+		content := append(trimTrailingNewlines(jsonContent), '\n')
+		paths.LatestJSON = w.LatestOutputPath(kind, ".json")
+		paths.TimestampedJSON = w.TimestampedOutputPath(kind, ".json", now)
+		if err := w.writeWorkspaceBytes(paths.LatestJSON, content); err != nil {
+			return UserOutputPaths{}, err
+		}
+		if err := w.writeWorkspaceBytes(paths.TimestampedJSON, content); err != nil {
+			return UserOutputPaths{}, err
+		}
+	}
+	return paths, nil
+}
+
 func artifactDestination(kind string) (string, string) {
 	switch kind {
 	case "project-pitch":
@@ -490,16 +554,17 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 		}
 	}
 	metadata := WorkspaceItemMetadata{
-		ID:            id,
-		Title:         title,
-		Type:          itemType,
-		CreatedAt:     now,
-		Source:        filepath.ToSlash(sourceRel),
-		Original:      filepath.ToSlash(originalRel),
-		Extractor:     input.Extractor,
-		MIMEType:      input.MIMEType,
-		ExtractStatus: normalizeExtractStatus(input.ExtractStatus),
-		ExtractError:  strings.TrimSpace(input.ExtractError),
+		ID:             id,
+		Title:          title,
+		Type:           itemType,
+		CreatedAt:      now,
+		Source:         filepath.ToSlash(sourceRel),
+		Original:       filepath.ToSlash(originalRel),
+		ExternalSource: filepath.Clean(strings.TrimSpace(input.OriginalPath)),
+		Extractor:      input.Extractor,
+		MIMEType:       input.MIMEType,
+		ExtractStatus:  normalizeExtractStatus(input.ExtractStatus),
+		ExtractError:   strings.TrimSpace(input.ExtractError),
 	}
 	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
 		return WorkspaceItem{}, err
@@ -748,14 +813,45 @@ func (w *Workspace) writeJSON(path string, value any) error {
 }
 
 func (w *Workspace) writeWorkspaceText(relPath string, content string) error {
+	return w.writeWorkspaceBytes(relPath, []byte(strings.TrimSpace(content)+"\n"))
+}
+
+func (w *Workspace) writeWorkspaceBytes(relPath string, content []byte) error {
 	abs := filepath.Join(w.Root, filepath.FromSlash(relPath))
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return fmt.Errorf("create workspace text parent: %w", err)
 	}
-	if err := os.WriteFile(abs, []byte(strings.TrimSpace(content)+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(abs, content, 0o644); err != nil {
 		return fmt.Errorf("write workspace text %q: %w", relPath, err)
 	}
 	return nil
+}
+
+func latestOutputName(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "report", "career-report", "analyze":
+		return "latest-report"
+	case "resume-review", "resume_review":
+		return "latest-resume-review"
+	case "interview-brief", "interview_brief":
+		return "latest-interview-brief"
+	case "gap-plan", "gap_plan":
+		return "latest-gap-plan"
+	case "interview-review", "interview_review":
+		return "latest-interview-review"
+	case "jd-match":
+		return "latest-jd-match"
+	case "project-pitch":
+		return "latest-project-pitch"
+	case "review-material":
+		return "latest-review-material"
+	default:
+		return "latest-" + slug(kind)
+	}
+}
+
+func trimTrailingNewlines(data []byte) []byte {
+	return []byte(strings.TrimRight(string(data), "\n"))
 }
 
 func (w *Workspace) readJSON(path string, dest any) error {

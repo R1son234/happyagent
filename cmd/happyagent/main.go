@@ -73,17 +73,13 @@ func main() {
 	if err != nil {
 		exitf("load config: %v", err)
 	}
-	if isCareerCommand(os.Args[1:]) {
-		cfg.Tools.RootDir = careerRepoArg(os.Args[1:], cfg.Tools.RootDir)
-		if cfg.Engine.LoopMaxSteps < career.MinAnalyzeLoopSteps {
-			cfg.Engine.LoopMaxSteps = career.MinAnalyzeLoopSteps
-		}
-		if cfg.Engine.RunTimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
-			cfg.Engine.RunTimeoutSeconds = career.MinAnalyzeTimeoutSeconds
-		}
-		if cfg.LLM.TimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
-			cfg.LLM.TimeoutSeconds = career.MinAnalyzeTimeoutSeconds
-		}
+	args := os.Args[1:]
+	careerCommand := isCareerCommand(args)
+	defaultCareer := !careerCommand && shouldLaunchCareerByDefault(args)
+	if careerCommand {
+		prepareCareerConfig(&cfg, args)
+	} else if defaultCareer {
+		prepareCareerConfig(&cfg, []string{"career"})
 	}
 
 	rt, err := runtime.NewBuilder().Build(cfg)
@@ -100,15 +96,16 @@ func main() {
 	if err != nil {
 		exitf("build app: %v", err)
 	}
-	if isCareerCommand(os.Args[1:]) {
+	if careerCommand {
 		ctx, cancel := career.ContextWithConfiguredTimeout(context.Background(), cfg)
 		defer cancel()
-		if err := career.RunCLI(ctx, os.Args[2:], career.Dependencies{
-			App:    application,
-			Config: cfg,
-			Stdin:  os.Stdin,
-			Stdout: os.Stdout,
-			Stderr: os.Stderr,
+		if err := career.RunCLI(ctx, args[1:], career.Dependencies{
+			App:           application,
+			Config:        cfg,
+			Stdin:         os.Stdin,
+			Stdout:        os.Stdout,
+			Stderr:        os.Stderr,
+			WorkspaceRoot: career.DefaultWorkspaceRoot,
 		}); err != nil {
 			exitf("career: %v", err)
 		}
@@ -165,6 +162,19 @@ func main() {
 	}
 
 	if prompt == "" {
+		if defaultCareer {
+			if err := career.RunInteractive(career.Dependencies{
+				App:           application,
+				Config:        cfg,
+				Stdin:         os.Stdin,
+				Stdout:        os.Stdout,
+				Stderr:        os.Stderr,
+				WorkspaceRoot: career.DefaultWorkspaceRoot,
+			}); err != nil {
+				exitf("career: %v", err)
+			}
+			return
+		}
 		fmt.Fprintf(os.Stdout, readyMessageFormat, cfg.LLM.Model, cfg.Engine.LoopMaxSteps)
 		if logSession != nil {
 			fmt.Fprintf(os.Stdout, "run log: %s\n", logSession.Path())
@@ -264,6 +274,26 @@ func careerRepoArg(args []string, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func prepareCareerConfig(cfg *config.Config, args []string) {
+	cfg.Tools.RootDir = careerRepoArg(args, cfg.Tools.RootDir)
+	if cfg.Engine.LoopMaxSteps < career.MinAnalyzeLoopSteps {
+		cfg.Engine.LoopMaxSteps = career.MinAnalyzeLoopSteps
+	}
+	if cfg.Engine.RunTimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
+		cfg.Engine.RunTimeoutSeconds = career.MinAnalyzeTimeoutSeconds
+	}
+	if cfg.LLM.TimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
+		cfg.LLM.TimeoutSeconds = career.MinAnalyzeTimeoutSeconds
+	}
+}
+
+func shouldLaunchCareerByDefault(args []string) bool {
+	if len(args) != 0 {
+		return false
+	}
+	return true
 }
 
 func resolveSession(application sessionApplication, sessionID string, profileName string, sessionMode bool) (string, bool, error) {

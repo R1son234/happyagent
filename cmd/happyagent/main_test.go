@@ -131,3 +131,27 @@ func TestCareerRepoArgParsesAnalyzeRepo(t *testing.T) {
 		t.Fatalf("unexpected repo arg for transform: %q", got)
 	}
 }
+
+func TestShouldLaunchCareerByDefault(t *testing.T) {
+	if !shouldLaunchCareerByDefault(nil) {
+		t.Fatalf("expected default startup with no args to launch career mode")
+	}
+	if shouldLaunchCareerByDefault([]string{"--profile", "general-assistant"}) {
+		t.Fatalf("did not expect explicit args to launch career mode by default")
+	}
+}
+
+func TestPrepareCareerConfigRaisesTimeoutsBeforeRuntimeBuild(t *testing.T) {
+	cfg := config.Default()
+	cfg.Engine.RunTimeoutSeconds = 1
+	cfg.LLM.TimeoutSeconds = 1
+
+	prepareCareerConfig(&cfg, []string{"career"})
+
+	if cfg.Engine.RunTimeoutSeconds < 180 {
+		t.Fatalf("expected run timeout to be raised for career mode, got %d", cfg.Engine.RunTimeoutSeconds)
+	}
+	if cfg.LLM.TimeoutSeconds < 180 {
+		t.Fatalf("expected llm timeout to be raised for career mode, got %d", cfg.LLM.TimeoutSeconds)
+	}
+}

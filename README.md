@@ -14,38 +14,6 @@
 - Eval runner for smoke, profile, and Career Copilot scenarios.
 - Career Copilot CLI for maintaining a local interview library of resumes, JDs, public interview experience, project preparation, real interview records, and operation records.
 
-## Repository Layout
-
-```text
-cmd/
-  happyagent/        Main CLI entrypoint.
-  happyagent-eval/   Eval runner.
-  mcpdemo/           Small local MCP server for integration checks.
-internal/
-  app/               Session-oriented application layer.
-  career/            Career Copilot workspace, prompts, ingestion, and generated records.
-  config/            JSON config loading and environment overrides.
-  engine/            Agent loop and action execution.
-  eval/              Eval case runner.
-  llm/               Chat model interface and Eino/OpenAI adapter.
-  mcp/               MCP client, manager, tools, and resources.
-  runtime/           Runtime assembly for profiles, tools, MCP, skills, and engine.
-  tools/             Built-in local tools and safety boundaries.
-docs/                Architecture, usage, and eval documentation.
-examples/career/    Synthetic inputs for Career Copilot evals.
-profiles/           Runtime profile definitions.
-skills/             Local skills available to the runtime.
-```
-
-Generated local state is ignored by Git:
-
-- `happyagent.local.json`
-- `.happyagent/`
-- `bin/`
-- `logs/`
-- `.gocache/`
-- `.gomodcache/`
-
 ## Setup
 
 Copy the config template:
@@ -97,10 +65,17 @@ Exit interactive mode with `/exit` or `Ctrl-D`.
 Start the Career Copilot workspace:
 
 ```bash
-./bin/happyagent career
+./bin/happyagent
 ```
 
-The command creates `.happyagent/career/` and keeps all workspace material local. In the interactive prompt:
+By default the CLI now opens the local Career Copilot workspace at `career-workspace/`. Put your prepared material into `career-workspace/inbox/`, then talk to it in natural language. Inbox scans copy recognized material into the typed workspace library and keep the original inbox files in place:
+
+- `我把简历和 JD 放进 inbox 了，帮我分析一下`
+- `帮我针对当前岗位优化简历`
+- `帮我生成面试准备材料`
+- `我刚面完，帮我复盘一下`
+
+The interactive workspace keeps material local. Advanced commands are still available in the prompt:
 
 - `/status` shows workspace counts and active pointers.
 - `/add <type>` archives material.
@@ -120,12 +95,14 @@ Supported material types:
 The workspace creates this user-facing layout:
 
 ```text
-.happyagent/career/
+career-workspace/
+  inbox/
   resume/
   jd/
   experiences/
   prepare/
   my-interviews/
+  outputs/
   record/
   workspace.json
   index.json
@@ -154,8 +131,8 @@ Batch analysis is available through `career analyze`:
   --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
   --target examples/career/real-world-anonymized/target.md \
   --repo . \
-  --out outputs/career-report.md \
-  --json outputs/career-report.json \
+  --out career-workspace/outputs/latest-report.md \
+  --json career-workspace/outputs/latest-report.json \
   --trace-json logs/career/latest-trace.json
 ```
 
@@ -181,6 +158,38 @@ Report transforms can be generated from the structured report:
 ./bin/happyagent career interview-brief --report outputs/career-report.json --out outputs/interview-brief.md
 ./bin/happyagent career gap-plan --report outputs/career-report.json --out outputs/project-gap-plan.md
 ```
+
+## Repository Layout
+
+```text
+cmd/
+  happyagent/        Main CLI entrypoint.
+  happyagent-eval/   Eval runner.
+  mcpdemo/           Small local MCP server for integration checks.
+internal/
+  app/               Session-oriented application layer.
+  career/            Career Copilot workspace, prompts, ingestion, and generated records.
+  config/            JSON config loading and environment overrides.
+  engine/            Agent loop and action execution.
+  eval/              Eval case runner.
+  llm/               Chat model interface and Eino/OpenAI adapter.
+  mcp/               MCP client, manager, tools, and resources.
+  runtime/           Runtime assembly for profiles, tools, MCP, skills, and engine.
+  tools/             Built-in local tools and safety boundaries.
+docs/                Architecture, usage, and eval documentation.
+examples/career/    Synthetic inputs for Career Copilot evals.
+profiles/           Runtime profile definitions.
+skills/             Local skills available to the runtime.
+```
+
+Generated local state is ignored by Git:
+
+- `happyagent.local.json`
+- `.happyagent/`
+- `bin/`
+- `logs/`
+- `.gocache/`
+- `.gomodcache/`
 
 ## Profiles
 

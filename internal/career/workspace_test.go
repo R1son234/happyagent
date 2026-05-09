@@ -22,11 +22,14 @@ func TestOpenWorkspaceCreatesCareerDirsAndFiles(t *testing.T) {
 	for _, rel := range []string{
 		"workspace.json",
 		"index.json",
+		"inbox",
 		"resume",
 		"jd",
 		"experiences",
 		"prepare",
 		"my-interviews",
+		"outputs",
+		"outputs/runs",
 		"record",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
@@ -133,8 +136,7 @@ func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	legacyResumeDir := filepath.Join(root, "resumes", "versions", "resume-old")
 	legacyJDDir := filepath.Join(root, "jds", "jd-old")
-	legacyInboxDir := filepath.Join(root, "inbox")
-	for _, dir := range []string{legacyResumeDir, legacyJDDir, legacyInboxDir} {
+	for _, dir := range []string{legacyResumeDir, legacyJDDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatalf("mkdir legacy dir: %v", err)
 		}
@@ -145,10 +147,6 @@ func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(legacyJDDir, "extracted.md"), []byte("legacy jd\n"), 0o644); err != nil {
 		t.Fatalf("write legacy jd: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(legacyInboxDir, "unknown.md"), []byte("unknown\n"), 0o644); err != nil {
-		t.Fatalf("write legacy inbox: %v", err)
-	}
-
 	ws, err := OpenWorkspace(root, time.Date(2026, 5, 9, 20, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
@@ -156,7 +154,6 @@ func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
 	for _, rel := range []string{
 		"resume/versions/resume-old/extracted.md",
 		"jd/jd-old/extracted.md",
-		"record/unclassified/inbox/unknown.md",
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("migrated file missing %s: %v", rel, err)
@@ -169,6 +166,33 @@ func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected one migration record, got %d", len(entries))
+	}
+}
+
+func TestWriteUserOutputCreatesLatestAndTimestampedFiles(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+
+	paths, err := ws.WriteUserOutput("report", "完整匹配报告", "这里是报告内容。", []byte("{\"ok\":true}"), now)
+	if err != nil {
+		t.Fatalf("WriteUserOutput() error = %v", err)
+	}
+	for _, rel := range []string{
+		paths.LatestMarkdown,
+		paths.TimestampedMarkdown,
+		paths.LatestJSON,
+		paths.TimestampedJSON,
+	} {
+		if rel == "" {
+			t.Fatalf("expected output path to be set")
+		}
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
+			t.Fatalf("expected output file %s: %v", rel, err)
+		}
 	}
 }
 

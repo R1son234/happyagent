@@ -154,3 +154,32 @@ func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
 		t.Fatalf("expected jd type, got %+v", result)
 	}
 }
+
+func TestIngestInboxArchivesFilesAndPreservesInboxCopies(t *testing.T) {
+	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	resumePath := filepath.Join(ws.Root, "inbox", "resume.md")
+	jdPath := filepath.Join(ws.Root, "inbox", "jd.txt")
+	if err := os.WriteFile(resumePath, []byte("# Resume\n简历：项目增长复盘。"), 0o644); err != nil {
+		t.Fatalf("write resume: %v", err)
+	}
+	if err := os.WriteFile(jdPath, []byte("# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+
+	result, err := IngestInbox(context.Background(), ws, time.Now())
+	if err != nil {
+		t.Fatalf("IngestInbox() error = %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("expected 2 ingested items, got %+v", result.Items)
+	}
+	if _, err := os.Stat(resumePath); err != nil {
+		t.Fatalf("expected resume inbox copy to be preserved, err=%v", err)
+	}
+	if _, err := os.Stat(jdPath); err != nil {
+		t.Fatalf("expected jd inbox copy to be preserved, err=%v", err)
+	}
+}

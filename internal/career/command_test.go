@@ -60,7 +60,7 @@ func TestRunInteractiveCreatesWorkspaceAndHandlesStatus(t *testing.T) {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
 	output := stdout.String()
-	for _, expected := range []string{"Career Copilot", "智能求职助手", "Workspace Status", "Session: session-career"} {
+	for _, expected := range []string{"Career Copilot", "请把你准备好的内容放到", "工作区状态", "会话：session-career"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("output missing %q:\n%s", expected, output)
 		}
@@ -90,9 +90,6 @@ func TestRunInteractiveIngestsJDWithoutModelTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 0 {
-		t.Fatalf("JD ingestion should not call model, got %d calls", len(app.appendRequests))
-	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
@@ -106,6 +103,9 @@ func TestRunInteractiveIngestsJDWithoutModelTurn(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "已识别并归档为 JD") {
 		t.Fatalf("missing JD confirmation:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "当前简历和 JD 都已就绪") && !strings.Contains(stdout.String(), "请继续把你准备好的内容放到") {
+		t.Fatalf("expected ingest summary after JD import:\n%s", stdout.String())
 	}
 }
 
@@ -265,15 +265,83 @@ func TestRunInteractiveRecordsClassificationEventForModelTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected missing-resume request to avoid model turn, got %d", len(app.appendRequests))
+	}
+}
+
+func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "这是一份分析结果。"}},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "resume.md"), []byte("# Resume\n简历：项目增长复盘。"), 0o644); err != nil {
+		t.Fatalf("write resume: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.txt"), []byte("# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("我把简历和 JD 放进 inbox 了，帮我分析一下\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
 	if len(app.appendRequests) != 1 {
 		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
 	}
-	events := app.appendRequests[0].Events
-	if len(events) != 1 {
-		t.Fatalf("expected one classification event, got %+v", events)
+	for _, rel := range []string{"outputs/latest-report.md", "outputs/latest-report.json"} {
+		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); err != nil {
+			t.Fatalf("expected output file %s: %v", rel, err)
+		}
 	}
-	if events[0].Type != "career_input_classified" || events[0].Data["type"] != WorkspaceTypeResume {
-		t.Fatalf("unexpected classification event: %+v", events[0])
+	if !strings.Contains(stdout.String(), "完成：完整匹配报告") {
+		t.Fatalf("expected completion summary, got:\n%s", stdout.String())
+	}
+}
+
+func TestRunInteractiveAnalyzeIntentExplainsMissingMaterials(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	var stdout bytes.Buffer
+	workspaceRoot := t.TempDir()
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("帮我分析一下匹配度\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected no model turns when materials are missing, got %d", len(app.appendRequests))
+	}
+	if !strings.Contains(stdout.String(), "现在还缺少简历和 JD") {
+		t.Fatalf("expected missing materials hint, got:\n%s", stdout.String())
 	}
 }
 
@@ -305,14 +373,14 @@ func TestRunInteractiveAutoArchivesReferencedJDFileBeforeModelTurn(t *testing.T)
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 1 {
-		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
-	}
-	if !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
-		t.Fatalf("expected auto-saved prompt context, got:\n%s", app.appendRequests[0].Input)
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected no model turn when only JD is available, got %d", len(app.appendRequests))
 	}
 	if !strings.Contains(stdout.String(), "已自动归档 JD") {
 		t.Fatalf("expected auto-archive confirmation, got:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "现在还缺少简历") {
+		t.Fatalf("expected missing resume hint, got:\n%s", stdout.String())
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
@@ -557,8 +625,8 @@ func TestRunInteractiveAutoArchivesReferencedDOCXResumeWithoutSavingPromptText(t
 	if !strings.Contains(text, "Sample Backend Engineer") {
 		t.Fatalf("expected docx content in extracted text: %s", text)
 	}
-	if !strings.Contains(stdout.String(), "已保存本轮分析报告") {
-		t.Fatalf("expected report confirmation, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "完成：简历优化建议") {
+		t.Fatalf("expected resume review completion, got:\n%s", stdout.String())
 	}
 }
 
@@ -589,11 +657,8 @@ func TestRunInteractiveAutoArchivesResumeFromReferencedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 1 {
-		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
-	}
-	if !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
-		t.Fatalf("expected auto-saved prompt context, got:\n%s", app.appendRequests[0].Input)
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected no model turn without JD, got %d", len(app.appendRequests))
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
@@ -625,6 +690,9 @@ func TestRunInteractiveAutoArchivesResumeFromReferencedDirectory(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "已自动归档 简历") {
 		t.Fatalf("expected auto-archive confirmation, got:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "现在还缺少 JD") {
+		t.Fatalf("expected missing JD hint, got:\n%s", stdout.String())
 	}
 }
 
@@ -669,22 +737,25 @@ func TestRunInteractiveAutoArchivesResumeAndJDInSameTurn(t *testing.T) {
 	if meta.CurrentResume == "" || meta.ActiveJD == "" {
 		t.Fatalf("expected resume and jd pointers, got %+v", meta)
 	}
-	if len(index.Items) < 3 {
-		t.Fatalf("expected archived assets and report, got %+v", index.Items)
+	if len(index.Items) < 2 {
+		t.Fatalf("expected archived assets, got %+v", index.Items)
 	}
-	var hasResume, hasJD, hasReport bool
+	var hasResume, hasJD bool
 	for _, item := range index.Items {
 		switch item.Type {
 		case WorkspaceTypeResume:
 			hasResume = true
 		case WorkspaceTypeJD:
 			hasJD = true
-		case WorkspaceTypeRecord:
-			hasReport = true
 		}
 	}
-	if !hasResume || !hasJD || !hasReport {
-		t.Fatalf("expected resume, jd, and report items, got %+v", index.Items)
+	if !hasResume || !hasJD {
+		t.Fatalf("expected resume and jd items, got %+v", index.Items)
+	}
+	for _, rel := range []string{"outputs/latest-report.md", "outputs/latest-report.json"} {
+		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); err != nil {
+			t.Fatalf("expected generated output %s: %v", rel, err)
+		}
 	}
 }
 
@@ -711,28 +782,11 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "已生成并沉淀 Review Material") {
+	if !strings.Contains(output, "已生成并保存 Review Material") {
 		t.Fatalf("unexpected output:\n%s", output)
 	}
-	ws, err := OpenWorkspace(workspaceRoot, time.Now())
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	_, index, err := ws.Status()
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	var hasRecord bool
-	for _, item := range index.Items {
-		if item.Type == WorkspaceTypeRecord {
-			hasRecord = true
-			if strings.HasPrefix(item.Path, "exports/") || strings.HasPrefix(item.Path, "reports/") {
-				t.Fatalf("generated artifact should not use legacy dir: %+v", item)
-			}
-		}
-	}
-	if !hasRecord {
-		t.Fatalf("expected record item: %+v", index.Items)
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "outputs", "latest-review-material.md")); err != nil {
+		t.Fatalf("expected latest review material output: %v", err)
 	}
 }
 

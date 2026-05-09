@@ -89,22 +89,21 @@ Expected signals:
 Start the interactive workspace:
 
 ```bash
-./bin/happyagent career
+./bin/happyagent
 ```
 
-Archive sample materials:
+Put sample materials into the visible inbox:
 
-```text
-/add jd ./examples/career/real-world-anonymized/jd-marketing-growth.md
-/add resume ./examples/career/real-world-anonymized/resume-marketing-anonymized.md
-/add project ./README.md
-/status
+```bash
+mkdir -p career-workspace/inbox
+cp ./examples/career/real-world-anonymized/jd-marketing-growth.md career-workspace/inbox/
+cp ./examples/career/real-world-anonymized/resume-marketing-anonymized.md career-workspace/inbox/
 ```
 
-Generate an artifact:
+Then ask in natural language:
 
 ```text
-/export jd-match
+我把简历和 JD 放进 inbox 了，帮我分析一下
 ```
 
 Run the batch flow:
@@ -115,8 +114,8 @@ Run the batch flow:
   --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
   --target examples/career/real-world-anonymized/target.md \
   --repo . \
-  --out outputs/career-report.md \
-  --json outputs/career-report.json \
+  --out career-workspace/outputs/latest-report.md \
+  --json career-workspace/outputs/latest-report.json \
   --trace-json logs/career/latest-trace.json
 ```
 
@@ -135,8 +134,8 @@ Run the anonymized real-world resume demo:
 
 Expected outputs:
 
-- Markdown report at `outputs/career-report.md`.
-- Structured JSON report at `outputs/career-report.json`.
+- Markdown report at `career-workspace/outputs/latest-report.md`.
+- Structured JSON report at `career-workspace/outputs/latest-report.json`.
 - Runtime trace at `logs/career/latest-trace.json`.
 - For the anonymized demo, checked-in example reports are available at `outputs/demo-career-report.md` and `outputs/demo-career-report.json`.
 

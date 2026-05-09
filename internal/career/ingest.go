@@ -37,6 +37,11 @@ type ExtractedDocument struct {
 	ExtractError  string
 }
 
+type InboxIngestResult struct {
+	Items    []WorkspaceItem
+	Warnings []string
+}
+
 func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestResult, error) {
 	path := strings.TrimSpace(req.Path)
 	if path == "" {
@@ -108,6 +113,49 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 		ExtractedRel: item.Metadata.Source,
 		ItemType:     item.Type,
 	}, nil
+}
+
+func DiscoverInboxFiles(workspace *Workspace) ([]string, error) {
+	if workspace == nil {
+		return nil, fmt.Errorf("workspace must not be nil")
+	}
+	inboxRoot := filepath.Join(workspace.Root, "inbox")
+	entries, err := os.ReadDir(inboxRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read inbox: %w", err)
+	}
+	var paths []string
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		paths = append(paths, filepath.Join(inboxRoot, entry.Name()))
+	}
+	return paths, nil
+}
+
+func IngestInbox(ctx context.Context, workspace *Workspace, now time.Time) (InboxIngestResult, error) {
+	paths, err := DiscoverInboxFiles(workspace)
+	if err != nil {
+		return InboxIngestResult{}, err
+	}
+	result := InboxIngestResult{}
+	for _, path := range paths {
+		ingested, ingestErr := IngestFile(ctx, workspace, IngestRequest{
+			Path:      path,
+			UserInput: filepath.Base(path),
+			Now:       now,
+		})
+		if ingestErr != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", path, ingestErr))
+			continue
+		}
+		result.Items = append(result.Items, ingested.Item)
+	}
+	return result, nil
 }
 
 func inferIngestItemType(hintType string, path string, userInput string, content string) string {
