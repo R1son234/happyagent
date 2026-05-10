@@ -27,36 +27,8 @@ var workspaceDirs = []string{
 	"outputs/runs",
 	"record",
 	"record/imports",
-	"record/migrations",
 	"record/unclassified",
 	"record/generated",
-}
-
-var legacyWorkspaceDirs = []string{
-	"jds",
-	"resumes",
-	"projects",
-	"interview_experience",
-	"interview_records",
-	"review_notes",
-	"reports",
-	"exports",
-	"search_sources",
-}
-
-var legacyPathPrefixes = []struct {
-	old string
-	new string
-}{
-	{"resumes/", "resume/"},
-	{"jds/", "jd/"},
-	{"projects/", "prepare/"},
-	{"interview_experience/", "experiences/"},
-	{"interview_records/", "my-interviews/"},
-	{"review_notes/", "record/unclassified/review_notes/"},
-	{"search_sources/", "experiences/sources/"},
-	{"reports/", "record/generated/reports/"},
-	{"exports/", "record/generated/exports/"},
 }
 
 type Workspace struct {
@@ -156,204 +128,7 @@ func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
 			return nil, err
 		}
 	}
-	if err := ws.MigrateLegacyLayout(now); err != nil {
-		return nil, err
-	}
 	return ws, nil
-}
-
-func (w *Workspace) MigrateLegacyLayout(now time.Time) error {
-	if now.IsZero() {
-		now = time.Now()
-	}
-	var existing []string
-	for _, dir := range legacyWorkspaceDirs {
-		if info, err := os.Stat(filepath.Join(w.Root, dir)); err == nil && info.IsDir() {
-			existing = append(existing, dir)
-		} else if err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("stat legacy workspace dir %q: %w", dir, err)
-		}
-	}
-	if len(existing) == 0 {
-		return nil
-	}
-	for _, dir := range workspaceDirs {
-		if err := os.MkdirAll(filepath.Join(w.Root, dir), 0o755); err != nil {
-			return fmt.Errorf("create career workspace dir %q: %w", dir, err)
-		}
-	}
-	var logLines []string
-	logLines = append(logLines, "# Legacy Career Workspace Migration", "", fmt.Sprintf("- time: %s", now.Format(time.RFC3339)), "")
-	moveRules := []struct {
-		old string
-		new string
-	}{
-		{"resumes", "resume"},
-		{"jds", "jd"},
-		{"projects", "prepare"},
-		{"interview_experience", "experiences"},
-		{"interview_records", "my-interviews"},
-		{"review_notes", filepath.Join("record", "unclassified", "review_notes")},
-		{"search_sources", filepath.Join("experiences", "sources")},
-		{"reports", filepath.Join("record", "generated", "reports")},
-		{"exports", filepath.Join("record", "generated", "exports")},
-	}
-	for _, rule := range moveRules {
-		moved, err := w.moveLegacyDir(rule.old, rule.new)
-		if err != nil {
-			return err
-		}
-		if moved > 0 {
-			logLines = append(logLines, fmt.Sprintf("- moved `%s/` -> `%s/` (%d entries)", rule.old, filepath.ToSlash(rule.new), moved))
-		}
-	}
-	if err := w.rewriteLegacyIndexAndMetadata(now); err != nil {
-		return err
-	}
-	for _, dir := range legacyWorkspaceDirs {
-		abs := filepath.Join(w.Root, dir)
-		empty, err := isDirEmpty(abs)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return fmt.Errorf("check legacy workspace dir %q: %w", dir, err)
-		}
-		if empty {
-			if err := os.Remove(abs); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("remove empty legacy workspace dir %q: %w", dir, err)
-			}
-			continue
-		}
-		logLines = append(logLines, fmt.Sprintf("- left non-empty legacy directory for manual review: `%s/`", dir))
-	}
-	if len(logLines) <= 4 {
-		return nil
-	}
-	name := fmt.Sprintf("%s-legacy-layout.md", now.Format("20060102-150405"))
-	path := filepath.Join(w.Root, "record", "migrations", name)
-	if err := os.WriteFile(path, []byte(strings.Join(logLines, "\n")+"\n"), 0o644); err != nil {
-		return fmt.Errorf("write migration record: %w", err)
-	}
-	return nil
-}
-
-func (w *Workspace) moveLegacyDir(oldDir string, newDir string) (int, error) {
-	oldAbs := filepath.Join(w.Root, oldDir)
-	entries, err := os.ReadDir(oldAbs)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return 0, nil
-		}
-		return 0, fmt.Errorf("read legacy workspace dir %q: %w", oldDir, err)
-	}
-	if len(entries) == 0 {
-		return 0, nil
-	}
-	newAbs := filepath.Join(w.Root, newDir)
-	if err := os.MkdirAll(newAbs, 0o755); err != nil {
-		return 0, fmt.Errorf("create migration destination %q: %w", newDir, err)
-	}
-	moved := 0
-	for _, entry := range entries {
-		src := filepath.Join(oldAbs, entry.Name())
-		dst := filepath.Join(newAbs, entry.Name())
-		if _, err := os.Stat(dst); err == nil {
-			dst = filepath.Join(newAbs, fmt.Sprintf("%s-from-%s", entry.Name(), oldDir))
-		} else if err != nil && !os.IsNotExist(err) {
-			return moved, fmt.Errorf("stat migration destination %q: %w", dst, err)
-		}
-		if err := os.Rename(src, dst); err != nil {
-			return moved, fmt.Errorf("move %q to %q: %w", src, dst, err)
-		}
-		moved++
-	}
-	return moved, nil
-}
-
-func (w *Workspace) rewriteLegacyIndexAndMetadata(now time.Time) error {
-	meta, err := w.ReadMetadata()
-	if err != nil {
-		return err
-	}
-	meta.CurrentResume = rewriteLegacyRelPath(meta.CurrentResume)
-	meta.ActiveJD = rewriteLegacyRelPath(meta.ActiveJD)
-	meta.ActiveProject = rewriteLegacyRelPath(meta.ActiveProject)
-	meta.UpdatedAt = now
-	if err := w.writeJSON(w.metadataPath(), meta); err != nil {
-		return err
-	}
-	index, err := w.ReadIndex()
-	if err != nil {
-		return err
-	}
-	for i := range index.Items {
-		index.Items[i].Type = normalizeLegacyWorkspaceItemType(index.Items[i].Type)
-		index.Items[i].Path = rewriteLegacyRelPath(index.Items[i].Path)
-		index.Items[i].Metadata.Type = normalizeLegacyWorkspaceItemType(index.Items[i].Metadata.Type)
-		index.Items[i].Metadata.Source = rewriteLegacyRelPath(index.Items[i].Metadata.Source)
-		index.Items[i].Metadata.Original = rewriteLegacyRelPath(index.Items[i].Metadata.Original)
-	}
-	if err := w.writeJSON(w.indexPath(), index); err != nil {
-		return err
-	}
-	return w.rewriteLegacyMetadataFiles()
-}
-
-func (w *Workspace) rewriteLegacyMetadataFiles() error {
-	return filepath.WalkDir(w.Root, func(path string, entry os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() || entry.Name() != "metadata.json" {
-			return nil
-		}
-		var metadata WorkspaceItemMetadata
-		if err := w.readJSON(path, &metadata); err != nil {
-			return err
-		}
-		metadata.Type = normalizeLegacyWorkspaceItemType(metadata.Type)
-		metadata.Source = rewriteLegacyRelPath(metadata.Source)
-		metadata.Original = rewriteLegacyRelPath(metadata.Original)
-		return w.writeJSON(path, metadata)
-	})
-}
-
-func normalizeLegacyWorkspaceItemType(itemType string) string {
-	// Used only while migrating old workspace indexes and metadata into the new layout.
-	switch strings.ToLower(strings.TrimSpace(itemType)) {
-	case "project":
-		return WorkspaceTypePrepare
-	case "interview_experience":
-		return WorkspaceTypeExperiences
-	case "interview_record":
-		return WorkspaceTypeMyInterviews
-	case "review_note":
-		return WorkspaceTypeRecord
-	default:
-		return strings.ToLower(strings.TrimSpace(itemType))
-	}
-}
-
-func rewriteLegacyRelPath(path string) string {
-	path = filepath.ToSlash(strings.TrimSpace(path))
-	if path == "" {
-		return ""
-	}
-	for _, prefix := range legacyPathPrefixes {
-		if strings.HasPrefix(path, prefix.old) {
-			return prefix.new + strings.TrimPrefix(path, prefix.old)
-		}
-	}
-	return path
-}
-
-func isDirEmpty(path string) (bool, error) {
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return false, err
-	}
-	return len(entries) == 0, nil
 }
 
 func (w *Workspace) WriteArtifact(kind string, title string, content string, now time.Time) (string, error) {
@@ -529,11 +304,8 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 	if title == "" {
 		title = inferMaterialTitle(itemType, content)
 	}
-	id := fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
-	relDir := filepath.Join(workspaceTypeDir(itemType), id)
-	if itemType == WorkspaceTypeResume {
-		relDir = filepath.Join("resume", "versions", id)
-	}
+	id := materialID(itemType, title, now)
+	relDir := materialRelDir(itemType, id)
 	absDir := filepath.Join(w.Root, relDir)
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
@@ -582,7 +354,7 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 	if err := w.upsertIndexItem(item); err != nil {
 		return WorkspaceItem{}, err
 	}
-	if err := w.updateActivePointers(itemType, relDir, sourceRel, now); err != nil {
+	if err := w.updateActivePointers(itemType, sourceRel, now); err != nil {
 		return WorkspaceItem{}, err
 	}
 	return item, nil
@@ -663,13 +435,9 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 		now = time.Now()
 	}
 	title := inferMaterialTitle(itemType, content)
-	id := fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
-	relDir := filepath.Join(workspaceTypeDir(itemType), id)
+	id := materialID(itemType, title, now)
+	relDir := materialRelDir(itemType, id)
 	absDir := filepath.Join(w.Root, relDir)
-	if itemType == WorkspaceTypeResume {
-		relDir = filepath.Join("resume", "versions", id)
-		absDir = filepath.Join(w.Root, relDir)
-	}
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
 		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
 	}
@@ -705,13 +473,13 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 	if err := w.upsertIndexItem(item); err != nil {
 		return WorkspaceItem{}, err
 	}
-	if err := w.updateActivePointers(itemType, relDir, sourceRel, now); err != nil {
+	if err := w.updateActivePointers(itemType, sourceRel, now); err != nil {
 		return WorkspaceItem{}, err
 	}
 	return item, nil
 }
 
-func (w *Workspace) updateActivePointers(itemType string, relDir string, sourceRel string, now time.Time) error {
+func (w *Workspace) updateActivePointers(itemType string, sourceRel string, now time.Time) error {
 	meta, err := w.ReadMetadata()
 	if err != nil {
 		return err
@@ -924,11 +692,7 @@ func inferMaterialTags(itemType string, content string) []string {
 	tags = append(tags, itemType)
 	for _, candidate := range candidates {
 		if strings.Contains(lower, candidate) && !seen[candidate] {
-			tag := candidate
-			if !seen[tag] {
-				tags = append(tags, tag)
-				seen[tag] = true
-			}
+			tags = append(tags, candidate)
 			seen[candidate] = true
 		}
 	}
@@ -960,6 +724,17 @@ func workspaceTypeDir(itemType string) string {
 	default:
 		return filepath.Join("record", "unclassified")
 	}
+}
+
+func materialID(itemType string, title string, now time.Time) string {
+	return fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
+}
+
+func materialRelDir(itemType string, id string) string {
+	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeResume {
+		return filepath.Join("resume", "versions", id)
+	}
+	return filepath.Join(workspaceTypeDir(itemType), id)
 }
 
 func itemIDPrefix(itemType string) string {

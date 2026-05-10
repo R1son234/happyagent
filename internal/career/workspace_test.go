@@ -36,13 +36,6 @@ func TestOpenWorkspaceCreatesCareerDirsAndFiles(t *testing.T) {
 			t.Fatalf("workspace missing %s: %v", rel, err)
 		}
 	}
-	for _, rel := range legacyWorkspaceDirs {
-		if _, err := os.Stat(filepath.Join(root, rel)); err == nil {
-			t.Fatalf("workspace should not create legacy dir %s", rel)
-		} else if !os.IsNotExist(err) {
-			t.Fatalf("stat legacy dir %s: %v", rel, err)
-		}
-	}
 	meta, index, err := ws.Status()
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
@@ -129,43 +122,6 @@ func TestAddMaterialSavesResumeVersionAndUpdatesCurrentResume(t *testing.T) {
 	}
 	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeResume {
 		t.Fatalf("index not updated: %+v", index.Items)
-	}
-}
-
-func TestOpenWorkspaceMigratesLegacyLayout(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "career")
-	legacyResumeDir := filepath.Join(root, "resumes", "versions", "resume-old")
-	legacyJDDir := filepath.Join(root, "jds", "jd-old")
-	for _, dir := range []string{legacyResumeDir, legacyJDDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir legacy dir: %v", err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(legacyResumeDir, "extracted.md"), []byte("legacy resume\n"), 0o644); err != nil {
-		t.Fatalf("write legacy resume: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(legacyJDDir, "extracted.md"), []byte("legacy jd\n"), 0o644); err != nil {
-		t.Fatalf("write legacy jd: %v", err)
-	}
-	ws, err := OpenWorkspace(root, time.Date(2026, 5, 9, 20, 30, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	for _, rel := range []string{
-		"resume/versions/resume-old/extracted.md",
-		"jd/jd-old/extracted.md",
-	} {
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
-			t.Fatalf("migrated file missing %s: %v", rel, err)
-		}
-	}
-	migrationDir := filepath.Join(ws.Root, "record", "migrations")
-	entries, err := os.ReadDir(migrationDir)
-	if err != nil {
-		t.Fatalf("read migration dir: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected one migration record, got %d", len(entries))
 	}
 }
 

@@ -108,7 +108,7 @@ career-workspace/
   index.json
 ```
 
-`record/` stores import logs, migration notes, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library.
+`record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library.
 
 Examples:
 
@@ -120,8 +120,6 @@ Examples:
 ```
 
 The workspace also accepts natural-language references to local `.md`, `.txt`, `.docx`, and `.pdf` files. Markdown and text are extracted directly. DOCX and PDF ingestion use the repository's document extraction path and preserve the original file with extracted text in the workspace.
-
-When an existing workspace still has legacy directories such as `jds/`, `resumes/`, `projects/`, `interview_experience/`, `interview_records/`, `review_notes/`, `reports/`, `exports/`, `search_sources/`, or `inbox/`, Career Copilot migrates recognizable content into the new layout and writes a migration note under `record/migrations/`. Unclassified legacy material is preserved under `record/unclassified/`.
 
 Batch analysis is available through `career analyze`:
 

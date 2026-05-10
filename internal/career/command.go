@@ -261,9 +261,14 @@ func autoArchiveReferencedFiles(ctx context.Context, output io.Writer, workspace
 	for _, path := range paths {
 		explicitPaths[path] = true
 	}
+	seenPaths := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		seenPaths[path] = true
+	}
 	for _, path := range discoverFilesInReferencedDirectories(input) {
-		if !containsString(paths, path) {
+		if !seenPaths[path] {
 			paths = append(paths, path)
+			seenPaths[path] = true
 		}
 	}
 	if len(paths) == 0 {
@@ -299,33 +304,8 @@ func autoArchiveReferencedFiles(ctx context.Context, output io.Writer, workspace
 	return archived, ingestErrors, nil
 }
 
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
-		}
-	}
-	return false
-}
-
 func detectWorkspaceTypeHint(input string) string {
-	normalized := strings.ToLower(input)
-	switch {
-	case strings.Contains(normalized, "jd"), strings.Contains(normalized, "job description"), strings.Contains(input, "职位"), strings.Contains(input, "岗位"):
-		return WorkspaceTypeJD
-	case strings.Contains(normalized, "resume"), strings.Contains(normalized, "cv"), strings.Contains(input, "简历"):
-		return WorkspaceTypeResume
-	case strings.Contains(normalized, "project"), strings.Contains(input, "项目"):
-		return WorkspaceTypePrepare
-	case strings.Contains(normalized, "interview experience"), strings.Contains(input, "面经"):
-		return WorkspaceTypeExperiences
-	case strings.Contains(normalized, "interview record"), strings.Contains(input, "面试记录"), strings.Contains(input, "复盘"):
-		return WorkspaceTypeMyInterviews
-	case strings.Contains(normalized, "review note"), strings.Contains(normalized, "study note"), strings.Contains(input, "笔记"), strings.Contains(input, "复习"):
-		return WorkspaceTypeRecord
-	default:
-		return ""
-	}
+	return detectWorkspaceTypeBySignals(input)
 }
 
 func detectWorkspaceTypeHintNearPath(input string, path string) string {
@@ -1033,41 +1013,11 @@ func classificationEvent(classification InputClassification) observe.Event {
 }
 
 func normalizeWorkspaceType(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "jd", "job", "job_description", "job-description", "岗位":
-		return WorkspaceTypeJD
-	case "resume", "cv", "简历":
-		return WorkspaceTypeResume
-	case "prepare", "项目准备":
-		return WorkspaceTypePrepare
-	case "experiences", "面经":
-		return WorkspaceTypeExperiences
-	case "my-interviews", "面试记录":
-		return WorkspaceTypeMyInterviews
-	case "record", "记录":
-		return WorkspaceTypeRecord
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func displayWorkspaceType(itemType string) string {
-	switch itemType {
-	case WorkspaceTypeJD:
-		return "JD"
-	case WorkspaceTypeResume:
-		return "简历"
-	case WorkspaceTypePrepare:
-		return "项目素材"
-	case WorkspaceTypeExperiences:
-		return "面经"
-	case WorkspaceTypeMyInterviews:
-		return "面试记录"
-	case WorkspaceTypeRecord:
-		return "复习笔记"
-	default:
-		return itemType
-	}
+	return workspaceTypeDisplayName(itemType)
 }
 
 func BuildAnalyzePrompt(options AnalyzeOptions) string {

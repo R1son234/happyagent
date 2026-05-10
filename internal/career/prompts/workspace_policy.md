@@ -6,7 +6,7 @@ Career workspace policy:
 - Save public interview experience, common questions, reusable QA, and source material under `experiences/`.
 - Save personal project preparation, project deep-dive QA, evidence wording, and talk tracks under `prepare/`.
 - Save company or role preparation pages, the user's real interview records, and interview retrospectives under `my-interviews/`.
-- Save operation history, import logs, migration logs, generated process artifacts, and unclassified material under `record/`.
+- Save operation history, import logs, generated process artifacts, and unclassified material under `record/`.
 - Treat `record/` as the operation trail and generated-process area, not the main business QA library.
 - Use neutral placeholders in examples unless a fixture or user-provided material explicitly needs a concrete role or domain.
 - Update `index.json` whenever material is saved.

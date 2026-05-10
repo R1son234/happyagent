@@ -561,36 +561,36 @@ func scoreReferencedDirectoryCandidate(hintType string, name string, ext string,
 		if ext == ".docx" || ext == ".pdf" {
 			score += 20
 		}
-		if strings.Contains(lowerName, "resume") || strings.Contains(lowerName, "cv") || strings.Contains(name, "简历") {
+		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
 			score += 40
 		}
 	case WorkspaceTypeJD:
-		if strings.Contains(lowerName, "jd") || strings.Contains(lowerName, "job") || strings.Contains(name, "岗位") || strings.Contains(name, "职位") {
+		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
 			score += 40
 		}
 	case WorkspaceTypePrepare:
-		if strings.Contains(lowerName, "project") || strings.Contains(lowerName, "portfolio") || strings.Contains(name, "项目") {
+		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
 			score += 40
 		}
 	case WorkspaceTypeExperiences:
 		if ext == ".md" || ext == ".txt" {
 			score += 20
 		}
-		if strings.Contains(lowerName, "interview") || strings.Contains(lowerName, "experience") || strings.Contains(name, "面经") || strings.Contains(name, "面试题") {
+		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
 			score += 40
 		}
 	case WorkspaceTypeMyInterviews:
 		if ext == ".md" || ext == ".txt" {
 			score += 20
 		}
-		if strings.Contains(lowerName, "interview") || strings.Contains(lowerName, "record") || strings.Contains(name, "面试记录") || strings.Contains(name, "复盘") {
+		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
 			score += 40
 		}
 	}
-	if strings.Contains(lowerName, "resume") || strings.Contains(lowerName, "cv") || strings.Contains(name, "简历") {
+	if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(WorkspaceTypeResume)) {
 		score += 25
 	}
-	if strings.Contains(lowerName, "jd") || strings.Contains(lowerName, "job") || strings.Contains(name, "岗位") || strings.Contains(name, "职位") {
+	if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(WorkspaceTypeJD)) {
 		score += 25
 	}
 	return score

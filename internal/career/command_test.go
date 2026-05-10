@@ -790,7 +790,7 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveRejectsLegacyAddAlias(t *testing.T) {
+func TestRunInteractiveRejectsUnsupportedAddType(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
 			ID:        "session-career",
@@ -814,7 +814,7 @@ func TestRunInteractiveRejectsLegacyAddAlias(t *testing.T) {
 	}
 	output := stdout.String()
 	if !strings.Contains(output, `暂不支持归档类型 "project"`) {
-		t.Fatalf("expected legacy alias rejection, got:\n%s", output)
+		t.Fatalf("expected unsupported type rejection, got:\n%s", output)
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
@@ -825,7 +825,7 @@ func TestRunInteractiveRejectsLegacyAddAlias(t *testing.T) {
 		t.Fatalf("Status() error = %v", err)
 	}
 	if len(index.Items) != 0 {
-		t.Fatalf("legacy alias should not archive material: %+v", index.Items)
+		t.Fatalf("unsupported type should not archive material: %+v", index.Items)
 	}
 }
 
