@@ -238,20 +238,46 @@ func saveMaterialAndPrint(output io.Writer, workspace *Workspace, itemType strin
 		fmt.Fprintf(output, "assistant> %s，并保存到 %s；已同步沉淀到 %s，并记录导入流程 %s。\n", prefix, result.ExperienceItem.Path, result.MyInterviewRel, result.RecordRel)
 		return nil
 	}
-	item, err := workspace.AddMaterial(itemType, content, time.Now())
+	guide, err := workspace.LoadGuide()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "assistant> %s，并保存到 %s。我已经更新工作区索引，可以基于这些资料做匹配分析、简历优化和面试准备。\n", prefix, item.Path)
+	classification := ClassifyInputWithGuide(content, guide)
+	classification.Type = itemType
+	classification.ShouldSave = true
+	classification.Reason = "explicit add command"
+	classification.RulePath = classificationRulePath(guide, itemType)
+	result, err := workspace.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       itemType,
+		Classification: classification,
+		Content:        content,
+		SourceLabel:    "/add " + itemType,
+		Now:            time.Now(),
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(output, "assistant> %s，并保存到 %s；分类记录写入 %s。我已经更新工作区索引，可以基于这些资料做匹配分析、简历优化和面试准备。\n", prefix, result.Item.Path, result.RecordRel)
 	return nil
 }
 
 func saveMaterialFileAndPrint(output io.Writer, workspace *Workspace, input WorkspaceFileInput, prefix string) error {
-	item, err := workspace.AddMaterialFromFile(input)
+	guide, err := workspace.LoadGuide()
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "assistant> %s，并保存到 %s。我已经更新工作区索引，可以基于这些资料做匹配分析、简历优化和面试准备。\n", prefix, item.Path)
+	classification := ClassifyInputWithSignals(input.Text, guide, input.OriginalName, input.ItemType, "")
+	result, err := workspace.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       input.ItemType,
+		Classification: classification,
+		SourceLabel:    input.OriginalPath,
+		Now:            input.Now,
+		File:           input,
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(output, "assistant> %s，并保存到 %s；分类记录写入 %s。我已经更新工作区索引，可以基于这些资料做匹配分析、简历优化和面试准备。\n", prefix, result.Item.Path, result.RecordRel)
 	return nil
 }
 
@@ -309,8 +335,12 @@ func detectWorkspaceTypeHint(input string) string {
 }
 
 func detectWorkspaceTypeHintNearPath(input string, path string) string {
+	return detectWorkspaceTypeHintNearPathWithGuide(input, path, DefaultWorkspaceGuide())
+}
+
+func detectWorkspaceTypeHintNearPathWithGuide(input string, path string, guide WorkspaceGuide) string {
 	if strings.TrimSpace(path) == "" {
-		return detectWorkspaceTypeHint(input)
+		return detectWorkspaceTypeBySignalsWithGuide(input, guide)
 	}
 	index := strings.Index(input, path)
 	if index < 0 {
@@ -333,10 +363,10 @@ func detectWorkspaceTypeHintNearPath(input string, path string) string {
 		end = len(input)
 	}
 	window := input[start:end]
-	if hinted := detectWorkspaceTypeHint(window); hinted != "" {
+	if hinted := detectWorkspaceTypeBySignalsWithGuide(window, guide); hinted != "" {
 		return hinted
 	}
-	return detectWorkspaceTypeHint(input)
+	return detectWorkspaceTypeBySignalsWithGuide(input, guide)
 }
 
 func Analyze(ctx context.Context, options AnalyzeOptions, deps Dependencies) error {
@@ -484,6 +514,10 @@ func BuildInteractivePrompt(input string, classification InputClassification) st
 }
 
 func BuildInteractivePromptWithAutoSaved(input string, classification InputClassification, autoSaved []WorkspaceItem, ingestErrors []string, meta WorkspaceMetadata, analysisRequested bool, workspaceRoot string) string {
+	return BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoSaved, ingestErrors, meta, analysisRequested, workspaceRoot, DefaultWorkspaceGuide())
+}
+
+func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification InputClassification, autoSaved []WorkspaceItem, ingestErrors []string, meta WorkspaceMetadata, analysisRequested bool, workspaceRoot string, guide WorkspaceGuide) string {
 	autoSavedSection := ""
 	if len(autoSaved) > 0 {
 		var lines []string
@@ -504,6 +538,7 @@ func BuildInteractivePromptWithAutoSaved(input string, classification InputClass
 	if analysisRequested {
 		analysisSection = "\n\nAnalysis priority:\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read all listed stored_path and current workspace pointer files directly, preferably in one multi-tool step when more than one file is needed.\n- Do not call file_list or file_search to rediscover files that are already listed in this prompt.\n- Do not inspect record directories just to verify saving; the application layer saves generated analysis artifacts after the model response.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- Keep user-provided facts separate from suggestions."
 	}
+	guideSection := "\n\n" + guide.PromptSummary()
 	return fmt.Sprintf(`You are running inside the Career Copilot continuous conversation workspace.
 
 Input classification:
@@ -512,7 +547,7 @@ Input classification:
 - signals: %s
 
 User input:
-%s%s%s%s%s`, classification.Type, classification.Confidence, strings.Join(classification.Signals, ", "), input, autoSavedSection, ingestErrorSection, workspaceSection, analysisSection)
+%s%s%s%s%s%s`, classification.Type, classification.Confidence, strings.Join(classification.Signals, ", "), input, guideSection, autoSavedSection, ingestErrorSection, workspaceSection, analysisSection)
 }
 
 func promptWorkspacePath(workspaceRoot string, storedPath string) string {
@@ -529,7 +564,11 @@ func promptWorkspacePath(workspaceRoot string, storedPath string) string {
 
 func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
 	intent := ClassifyIntent(input)
-	classification := ClassifyInput(input)
+	guide, err := workspace.LoadGuide()
+	if err != nil {
+		return err
+	}
+	classification := ClassifyInputWithGuide(input, guide)
 	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(context.Background(), deps.Stdout, workspace, input)
 	if err != nil {
 		return err
@@ -585,7 +624,24 @@ func saveMaterial(workspace *Workspace, itemType string, content string) (Worksp
 		}
 		return result.ExperienceItem, nil
 	}
-	return workspace.AddMaterial(itemType, content, time.Now())
+	guide, err := workspace.LoadGuide()
+	if err != nil {
+		return WorkspaceItem{}, err
+	}
+	classification := ClassifyInputWithGuide(content, guide)
+	classification.Type = itemType
+	classification.RulePath = classificationRulePath(guide, itemType)
+	result, err := workspace.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       itemType,
+		Classification: classification,
+		Content:        content,
+		SourceLabel:    "natural_language_input",
+		Now:            time.Now(),
+	})
+	if err != nil {
+		return WorkspaceItem{}, err
+	}
+	return result.Item, nil
 }
 
 func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) error {
@@ -597,7 +653,11 @@ func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionI
 		fmt.Fprintln(deps.Stdout, message)
 		return nil
 	}
-	record, err := runCareerTurn(deps, sessionID, BuildInteractivePromptWithAutoSaved(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root), classification)
+	guide, err := workspace.LoadGuide()
+	if err != nil {
+		return err
+	}
+	record, err := runCareerTurn(deps, sessionID, BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root, guide), classification)
 	if err != nil {
 		if record.ID != "" {
 			fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)

@@ -62,56 +62,81 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 	if now.IsZero() {
 		now = time.Now()
 	}
+	guide, err := ws.LoadGuide()
+	if err != nil {
+		return IngestResult{}, err
+	}
 	extracted, err := extractDocument(ctx, absPath)
 	if err != nil {
 		ext := strings.ToLower(filepath.Ext(absPath))
 		extractor, mimeType := extractorInfoForExt(ext)
-		itemType := inferIngestItemType(req.HintType, absPath, req.UserInput, "")
+		classification := inferIngestClassification(guide, req.HintType, absPath, req.UserInput, "")
+		itemType := classification.Type
 		if !IsSupportedWorkspaceType(itemType) {
-			itemType = WorkspaceTypeGeneral
+			itemType = WorkspaceTypeRecord
 		}
-		item, archiveErr := ws.AddMaterialFromFile(WorkspaceFileInput{
-			ItemType:      itemType,
-			OriginalPath:  absPath,
-			OriginalName:  filepath.Base(absPath),
-			Now:           now,
-			Extractor:     extractor,
-			MIMEType:      mimeType,
-			ExtractStatus: "failed",
-			ExtractError:  err.Error(),
+		result, archiveErr := ws.AddGuidedMaterial(GuidedMaterialInput{
+			ItemType:       itemType,
+			Classification: classification,
+			SourceLabel:    absPath,
+			Now:            now,
+			File: WorkspaceFileInput{
+				ItemType:      itemType,
+				OriginalPath:  absPath,
+				OriginalName:  filepath.Base(absPath),
+				Now:           now,
+				Extractor:     extractor,
+				MIMEType:      mimeType,
+				ExtractStatus: "failed",
+				ExtractError:  err.Error(),
+			},
 		})
 		if archiveErr != nil {
 			return IngestResult{}, archiveErr
 		}
 		return IngestResult{
-			Item:        item,
-			OriginalRel: item.Metadata.Original,
-			ItemType:    item.Type,
+			Item:        result.Item,
+			OriginalRel: result.Item.Metadata.Original,
+			ItemType:    result.Item.Type,
 		}, err
 	}
-	itemType := inferIngestItemType(req.HintType, absPath, req.UserInput, extracted.Text)
+	classification := inferIngestClassification(guide, req.HintType, absPath, req.UserInput, extracted.Text)
+	itemType := classification.Type
 	if !IsSupportedWorkspaceType(itemType) {
 		return IngestResult{}, fmt.Errorf("unable to classify referenced file %q", absPath)
 	}
-	item, err := ws.AddMaterialFromFile(WorkspaceFileInput{
-		ItemType:      itemType,
-		Text:          extracted.Text,
-		OriginalPath:  absPath,
-		OriginalName:  filepath.Base(absPath),
-		Now:           now,
-		Extractor:     extracted.Extractor,
-		MIMEType:      extracted.MIMEType,
-		ExtractStatus: extracted.ExtractStatus,
-		ExtractError:  extracted.ExtractError,
+	if itemType == WorkspaceTypeGeneral || !classification.ShouldSave {
+		itemType = WorkspaceTypeRecord
+		classification.Type = WorkspaceTypeRecord
+		if classification.Reason == "" || classification.Type == WorkspaceTypeGeneral {
+			classification.Reason = "low confidence classification saved as record"
+		}
+	}
+	result, err := ws.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       itemType,
+		Classification: classification,
+		SourceLabel:    absPath,
+		Now:            now,
+		File: WorkspaceFileInput{
+			ItemType:      itemType,
+			Text:          extracted.Text,
+			OriginalPath:  absPath,
+			OriginalName:  filepath.Base(absPath),
+			Now:           now,
+			Extractor:     extracted.Extractor,
+			MIMEType:      extracted.MIMEType,
+			ExtractStatus: extracted.ExtractStatus,
+			ExtractError:  extracted.ExtractError,
+		},
 	})
 	if err != nil {
 		return IngestResult{}, err
 	}
 	return IngestResult{
-		Item:         item,
-		OriginalRel:  item.Metadata.Original,
-		ExtractedRel: item.Metadata.Source,
-		ItemType:     item.Type,
+		Item:         result.Item,
+		OriginalRel:  result.Item.Metadata.Original,
+		ExtractedRel: result.Item.Metadata.Source,
+		ItemType:     result.Item.Type,
 	}, nil
 }
 
@@ -159,21 +184,22 @@ func IngestInbox(ctx context.Context, workspace *Workspace, now time.Time) (Inbo
 }
 
 func inferIngestItemType(hintType string, path string, userInput string, content string) string {
-	if IsSupportedWorkspaceType(hintType) {
-		return strings.ToLower(strings.TrimSpace(hintType))
-	}
-	if hinted := detectWorkspaceTypeHintNearPath(userInput, path); hinted != "" {
-		return hinted
-	}
-	nameHint := detectWorkspaceTypeHint(filepath.Base(path))
-	if nameHint != "" {
-		return nameHint
-	}
-	classification := ClassifyInput(content)
+	classification := inferIngestClassification(DefaultWorkspaceGuide(), hintType, path, userInput, content)
 	if IsSupportedWorkspaceType(classification.Type) {
 		return classification.Type
 	}
 	return ""
+}
+
+func inferIngestClassification(guide WorkspaceGuide, hintType string, path string, userInput string, content string) InputClassification {
+	nearHint := ""
+	if hinted := detectWorkspaceTypeHintNearPathWithGuide(userInput, path, guide); hinted != "" {
+		nearHint = hinted
+	}
+	if nearHint != "" && strings.TrimSpace(hintType) == "" {
+		hintType = nearHint
+	}
+	return ClassifyInputWithSignals(content, guide, filepath.Base(path), hintType, "")
 }
 
 func extractDocument(ctx context.Context, path string) (ExtractedDocument, error) {

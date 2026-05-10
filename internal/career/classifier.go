@@ -1,6 +1,7 @@
 package career
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -20,6 +21,8 @@ type InputClassification struct {
 	Confidence float64  `json:"confidence"`
 	Signals    []string `json:"signals,omitempty"`
 	ShouldSave bool     `json:"should_save"`
+	Reason     string   `json:"reason,omitempty"`
+	RulePath   string   `json:"rule_path,omitempty"`
 }
 
 type workspaceTypeDefinition struct {
@@ -76,16 +79,26 @@ var workspaceTypeDefinitions = []workspaceTypeDefinition{
 }
 
 func ClassifyInput(content string) InputClassification {
+	return ClassifyInputWithGuide(content, DefaultWorkspaceGuide())
+}
+
+func ClassifyInputWithGuide(content string, guide WorkspaceGuide) InputClassification {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return InputClassification{Type: WorkspaceTypeGeneral}
 	}
 	if LooksLikeJD(content) {
+		rulePath := ""
+		if rule, ok := guide.Directory(WorkspaceTypeJD); ok {
+			rulePath = rule.Path
+		}
 		return InputClassification{
 			Type:       WorkspaceTypeJD,
 			Confidence: 0.9,
 			Signals:    []string{"jd_signals"},
 			ShouldSave: true,
+			Reason:     "content matched JD structure",
+			RulePath:   filepath.ToSlash(rulePath),
 		}
 	}
 	lower := strings.ToLower(content)
@@ -100,9 +113,9 @@ func ClassifyInput(content string) InputClassification {
 		}
 	}
 
-	for _, definition := range workspaceTypeDefinitions {
-		if definition.Type != WorkspaceTypeJD {
-			addSignals(definition.Type, definition.ClassificationSignals)
+	for _, rule := range guide.Directories {
+		if rule.Type != WorkspaceTypeJD {
+			addSignals(rule.Type, rule.Signals)
 		}
 	}
 
@@ -119,7 +132,7 @@ func ClassifyInput(content string) InputClassification {
 	best := typeOrder[0]
 	score := scores[best]
 	if score == 0 {
-		return InputClassification{Type: WorkspaceTypeGeneral, Confidence: 0.2}
+		return InputClassification{Type: WorkspaceTypeGeneral, Confidence: 0.2, Reason: "no guide signals matched"}
 	}
 	confidence := 0.45 + float64(score)*0.15
 	if len([]rune(content)) > 120 {
@@ -133,7 +146,51 @@ func ClassifyInput(content string) InputClassification {
 		Confidence: confidence,
 		Signals:    signals[best],
 		ShouldSave: confidence >= 0.65,
+		Reason:     "content matched guide signals",
+		RulePath:   classificationRulePath(guide, best),
 	}
+}
+
+func ClassifyInputWithSignals(content string, guide WorkspaceGuide, filename string, hintType string, userInput string) InputClassification {
+	if IsSupportedWorkspaceType(hintType) && strings.ToLower(strings.TrimSpace(hintType)) != WorkspaceTypeGeneral {
+		itemType := strings.ToLower(strings.TrimSpace(hintType))
+		return InputClassification{
+			Type:       itemType,
+			Confidence: 0.98,
+			Signals:    []string{"explicit_type:" + itemType},
+			ShouldSave: true,
+			Reason:     "explicit user type",
+			RulePath:   classificationRulePath(guide, itemType),
+		}
+	}
+	if hinted := detectWorkspaceTypeBySignalsWithGuide(userInput, guide); hinted != "" {
+		return InputClassification{
+			Type:       hinted,
+			Confidence: 0.9,
+			Signals:    []string{"user_hint:" + hinted},
+			ShouldSave: true,
+			Reason:     "nearby user hint matched guide signals",
+			RulePath:   classificationRulePath(guide, hinted),
+		}
+	}
+	if strings.TrimSpace(filename) != "" {
+		name := filepath.Base(filename)
+		normalized := strings.ToLower(name)
+		for _, rule := range guide.Directories {
+			if matchesAnySignal(normalized, name, rule.FilenameSignals) {
+				itemType := strings.ToLower(strings.TrimSpace(rule.Type))
+				return InputClassification{
+					Type:       itemType,
+					Confidence: 0.82,
+					Signals:    []string{"filename:" + name},
+					ShouldSave: true,
+					Reason:     "filename matched guide signals",
+					RulePath:   filepath.ToSlash(rule.Path),
+				}
+			}
+		}
+	}
+	return ClassifyInputWithGuide(content, guide)
 }
 
 func IsSupportedWorkspaceType(itemType string) bool {
@@ -159,22 +216,68 @@ func workspaceTypeDisplayName(itemType string) string {
 }
 
 func detectWorkspaceTypeBySignals(input string) string {
+	return detectWorkspaceTypeBySignalsWithGuide(input, DefaultWorkspaceGuide())
+}
+
+func detectWorkspaceTypeBySignalsWithGuide(input string, guide WorkspaceGuide) string {
 	normalized := strings.ToLower(input)
-	for _, definition := range workspaceTypeDefinitions {
-		if matchesAnySignal(normalized, input, definition.HintSignals) {
-			return definition.Type
+	bestType := ""
+	bestScore := 0
+	bestPriority := 999
+	for _, rule := range guide.Directories {
+		score := 0
+		for _, signal := range rule.HintSignals {
+			if containsSignal(normalized, input, signal) {
+				score++
+			}
 		}
+		if score == 0 {
+			continue
+		}
+		priority := hintTypePriority(rule.Type)
+		if score > bestScore || (score == bestScore && priority < bestPriority) {
+			bestType = rule.Type
+			bestScore = score
+			bestPriority = priority
+		}
+	}
+	return bestType
+}
+
+func workspaceTypeFilenameSignals(itemType string) []string {
+	guide := DefaultWorkspaceGuide()
+	for _, rule := range guide.Directories {
+		if rule.Type == itemType {
+			return rule.FilenameSignals
+		}
+	}
+	return nil
+}
+
+func classificationRulePath(guide WorkspaceGuide, itemType string) string {
+	if rule, ok := guide.Directory(itemType); ok {
+		return filepath.ToSlash(rule.Path)
 	}
 	return ""
 }
 
-func workspaceTypeFilenameSignals(itemType string) []string {
-	for _, definition := range workspaceTypeDefinitions {
-		if definition.Type == itemType {
-			return definition.FilenameSignals
-		}
+func hintTypePriority(itemType string) int {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case WorkspaceTypeMyInterviews:
+		return 0
+	case WorkspaceTypeJD:
+		return 1
+	case WorkspaceTypeResume:
+		return 2
+	case WorkspaceTypeExperiences:
+		return 3
+	case WorkspaceTypePrepare:
+		return 4
+	case WorkspaceTypeRecord:
+		return 5
+	default:
+		return 99
 	}
-	return nil
 }
 
 func matchesAnySignal(normalized string, original string, signals []string) bool {

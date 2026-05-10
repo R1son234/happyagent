@@ -6,9 +6,9 @@
     "timeout_seconds": 60
   },
   "engine": {
-    "loop_max_steps": 8,
+    "loop_max_steps": 50,
     "max_observation_bytes": 8192,
-    "run_timeout_seconds": 60,
+    "run_timeout_seconds": 600,
     "system_prompt": "You are a local coding agent. Reply with a JSON action. Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done, or {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool."
   },
   "tools": {

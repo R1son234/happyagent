@@ -87,6 +87,20 @@ type WorkspaceFileInput struct {
 	ExtractError  string
 }
 
+type GuidedMaterialInput struct {
+	ItemType       string
+	Classification InputClassification
+	Content        string
+	File           WorkspaceFileInput
+	SourceLabel    string
+	Now            time.Time
+}
+
+type GuidedMaterialResult struct {
+	Item      WorkspaceItem
+	RecordRel string
+}
+
 type PublicInterviewArchiveResult struct {
 	ExperienceItem WorkspaceItem
 	PrepareItem    WorkspaceItem
@@ -125,6 +139,14 @@ func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
 			return nil, fmt.Errorf("stat workspace index: %w", err)
 		}
 		if err := ws.writeJSON(ws.indexPath(), WorkspaceIndex{Items: []WorkspaceItem{}}); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := os.Stat(ws.guidePath()); err != nil {
+		if !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stat workspace guide: %w", err)
+		}
+		if err := ws.writeJSON(ws.guidePath(), DefaultWorkspaceGuide()); err != nil {
 			return nil, err
 		}
 	}
@@ -360,6 +382,48 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 	return item, nil
 }
 
+func (w *Workspace) AddGuidedMaterial(input GuidedMaterialInput) (GuidedMaterialResult, error) {
+	now := input.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+	itemType := strings.ToLower(strings.TrimSpace(input.ItemType))
+	if itemType == "" {
+		itemType = strings.ToLower(strings.TrimSpace(input.Classification.Type))
+	}
+	if itemType == "" || itemType == WorkspaceTypeGeneral {
+		itemType = WorkspaceTypeRecord
+	}
+	classification := input.Classification
+	if classification.Type == "" {
+		classification.Type = itemType
+	}
+	if classification.RulePath == "" {
+		guide, err := w.LoadGuide()
+		if err == nil {
+			classification.RulePath = classificationRulePath(guide, itemType)
+		}
+	}
+	var item WorkspaceItem
+	var err error
+	if strings.TrimSpace(input.File.OriginalPath) != "" || strings.TrimSpace(input.File.Text) != "" {
+		fileInput := input.File
+		fileInput.ItemType = itemType
+		fileInput.Now = now
+		item, err = w.AddMaterialFromFile(fileInput)
+	} else {
+		item, err = w.AddMaterial(itemType, input.Content, now)
+	}
+	if err != nil {
+		return GuidedMaterialResult{}, err
+	}
+	recordRel, err := w.writeClassificationRecord(item, classification, input.SourceLabel, now, nil)
+	if err != nil {
+		return GuidedMaterialResult{}, err
+	}
+	return GuidedMaterialResult{Item: item, RecordRel: recordRel}, nil
+}
+
 func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Time) (PublicInterviewArchiveResult, error) {
 	content = strings.TrimSpace(content)
 	if content == "" {
@@ -413,6 +477,48 @@ func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Ti
 		return PublicInterviewArchiveResult{}, err
 	}
 	return result, nil
+}
+
+func (w *Workspace) writeClassificationRecord(item WorkspaceItem, classification InputClassification, sourceLabel string, now time.Time, syncActions []string) (string, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	name := fmt.Sprintf("%s-classification-%s.md", now.Format("20060102-150405"), slug(item.ID))
+	rel := filepath.Join("record", "imports", name)
+	var b strings.Builder
+	b.WriteString("# Classification Record\n\n")
+	if strings.TrimSpace(sourceLabel) != "" {
+		b.WriteString(fmt.Sprintf("- input: %s\n", sourceLabel))
+	}
+	b.WriteString(fmt.Sprintf("- classified_type: %s\n", item.Type))
+	b.WriteString(fmt.Sprintf("- confidence: %.2f\n", classification.Confidence))
+	if classification.Reason != "" {
+		b.WriteString(fmt.Sprintf("- reason: %s\n", classification.Reason))
+	}
+	if classification.RulePath != "" {
+		b.WriteString(fmt.Sprintf("- rule_path: %s\n", classification.RulePath))
+	}
+	if len(classification.Signals) > 0 {
+		b.WriteString(fmt.Sprintf("- matched_signals: %s\n", strings.Join(classification.Signals, ", ")))
+	}
+	b.WriteString(fmt.Sprintf("- destination: %s\n", item.Path))
+	if item.Metadata.Original != "" {
+		b.WriteString(fmt.Sprintf("- original: %s\n", item.Metadata.Original))
+	}
+	if pointer := activePointerName(item.Type); pointer != "" {
+		b.WriteString(fmt.Sprintf("- active_pointer_updated: %s\n", pointer))
+	} else {
+		b.WriteString("- active_pointer_updated: none\n")
+	}
+	if len(syncActions) == 0 {
+		b.WriteString("- sync_actions: none\n")
+	} else {
+		b.WriteString(fmt.Sprintf("- sync_actions: %s\n", strings.Join(syncActions, ", ")))
+	}
+	if err := w.writeWorkspaceText(rel, b.String()); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 func containsPrepareSignals(content string) bool {
@@ -496,6 +602,19 @@ func (w *Workspace) updateActivePointers(itemType string, sourceRel string, now 
 	return w.writeJSON(w.metadataPath(), meta)
 }
 
+func activePointerName(itemType string) string {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case WorkspaceTypeJD:
+		return "active_jd"
+	case WorkspaceTypeResume:
+		return "current_resume"
+	case WorkspaceTypePrepare:
+		return "active_project"
+	default:
+		return ""
+	}
+}
+
 func normalizeExtractStatus(status string) string {
 	status = strings.TrimSpace(status)
 	if status == "" {
@@ -566,6 +685,10 @@ func (w *Workspace) metadataPath() string {
 
 func (w *Workspace) indexPath() string {
 	return filepath.Join(w.Root, "index.json")
+}
+
+func (w *Workspace) guidePath() string {
+	return filepath.Join(w.Root, WorkspaceGuideFileName)
 }
 
 func (w *Workspace) writeJSON(path string, value any) error {

@@ -315,6 +315,129 @@ func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveIdentifyInboxScansInboxWithoutModelGuessing(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 高德地图 AI Coding 工程师\n岗位职责：负责 AI Coding 工具建设。\n任职要求：熟悉后端工程和 LLM 应用。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("帮我识别下inbox的内容\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "已整理 inbox 文件到 JD") || !strings.Contains(output, "已整理这些资料") {
+		t.Fatalf("expected deterministic inbox ingest summary, got:\n%s", output)
+	}
+}
+
+func TestRunInteractiveMentionWorkspaceInboxScansInbox(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "resume.md"), []byte("# Resume\n简历：工作经历和项目经历。"), 0o644); err != nil {
+		t.Fatalf("write resume: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("我放到career-workspace/inbox/这里了啊\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected inbox placement note to avoid model turn, got %d", len(app.appendRequests))
+	}
+	if !strings.Contains(stdout.String(), "已整理 inbox 文件到 简历") {
+		t.Fatalf("expected inbox scan confirmation, got:\n%s", stdout.String())
+	}
+}
+
+func TestRunInteractiveSaveConfirmationScansInboxWithoutModelTurn(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "gaode.md"), []byte("岗位描述\n1.深度运用 AI Coding 工具进行日常研发。\n岗位要求\n1.熟悉 Go、Java、Python 和 LLM 应用。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("存下来吧\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected save confirmation to avoid model turn, got %d", len(app.appendRequests))
+	}
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	meta, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if meta.ActiveJD == "" {
+		t.Fatalf("expected active JD to be updated")
+	}
+	if len(index.Items) == 0 || index.Items[0].Type != WorkspaceTypeJD {
+		t.Fatalf("expected JD item, got %+v", index.Items)
+	}
+	if !strings.Contains(stdout.String(), "已整理 inbox 文件到 JD") {
+		t.Fatalf("expected inbox scan confirmation, got:\n%s", stdout.String())
+	}
+}
+
 func TestRunInteractiveAnalyzeIntentExplainsMissingMaterials(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
@@ -896,6 +1019,8 @@ func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *te
 	)
 	for _, expected := range []string{
 		".happyagent/career/resume/versions/resume-20260501-143151-resume-sample/extracted.md",
+		"Workspace directory guide",
+		"Sync rules",
 		"preferably in one multi-tool step",
 		"Do not call file_list or file_search to rediscover files",
 		"Do not inspect record directories just to verify saving",

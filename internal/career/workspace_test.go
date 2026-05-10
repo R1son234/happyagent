@@ -188,6 +188,46 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	}
 }
 
+func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 10, 20, 15, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	classification := InputClassification{
+		Type:       WorkspaceTypeJD,
+		Confidence: 0.9,
+		Signals:    []string{"岗位职责", "任职要求"},
+		ShouldSave: true,
+		Reason:     "test classification",
+		RulePath:   "jd",
+	}
+	result, err := ws.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       WorkspaceTypeJD,
+		Classification: classification,
+		Content:        "# Sample Role\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。",
+		SourceLabel:    "inbox/jd.md",
+		Now:            now,
+	})
+	if err != nil {
+		t.Fatalf("AddGuidedMaterial() error = %v", err)
+	}
+	if result.Item.Type != WorkspaceTypeJD || result.RecordRel == "" {
+		t.Fatalf("unexpected guided result: %+v", result)
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(result.RecordRel)))
+	if err != nil {
+		t.Fatalf("read classification record: %v", err)
+	}
+	record := string(data)
+	for _, expected := range []string{"classified_type: jd", "confidence: 0.90", "matched_signals: 岗位职责, 任职要求", "destination:", "active_pointer_updated: active_jd"} {
+		if !strings.Contains(record, expected) {
+			t.Fatalf("classification record missing %q:\n%s", expected, record)
+		}
+	}
+}
+
 func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC)
