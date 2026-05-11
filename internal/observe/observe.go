@@ -61,6 +61,17 @@ type Metrics struct {
 	ErrorCategories   map[string]int `json:"error_categories"`
 }
 
+type MetricsSnapshot struct {
+	RunsTotal         int            `json:"runs_total"`
+	RunSuccessTotal   int            `json:"run_success_total"`
+	RunFailureTotal   int            `json:"run_failure_total"`
+	StepsTotal        int            `json:"steps_total"`
+	ToolCallsTotal    int            `json:"tool_calls_total"`
+	ToolFailuresTotal int            `json:"tool_failures_total"`
+	TokensTotal       int            `json:"tokens_total"`
+	ErrorCategories   map[string]int `json:"error_categories"`
+}
+
 func NewMetrics() *Metrics {
 	return &Metrics{ErrorCategories: map[string]int{}}
 }
@@ -94,13 +105,13 @@ func (m *Metrics) RecordToolFailure() {
 	m.ToolFailuresTotal++
 }
 
-func (m *Metrics) Snapshot() Metrics {
+func (m *Metrics) Snapshot() MetricsSnapshot {
 	if m == nil {
-		return Metrics{ErrorCategories: map[string]int{}}
+		return MetricsSnapshot{ErrorCategories: map[string]int{}}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	snapshot := Metrics{
+	snapshot := MetricsSnapshot{
 		RunsTotal:         m.RunsTotal,
 		RunSuccessTotal:   m.RunSuccessTotal,
 		RunFailureTotal:   m.RunFailureTotal,
@@ -116,7 +127,7 @@ func (m *Metrics) Snapshot() Metrics {
 	return snapshot
 }
 
-func (m Metrics) PrometheusText() string {
+func (m MetricsSnapshot) PrometheusText() string {
 	return fmt.Sprintf(
 		"happyagent_runs_total %d\nhappyagent_run_success_total %d\nhappyagent_run_failure_total %d\nhappyagent_steps_total %d\nhappyagent_tool_calls_total %d\nhappyagent_tool_failures_total %d\nhappyagent_tokens_total %d\n",
 		m.RunsTotal,

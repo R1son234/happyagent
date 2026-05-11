@@ -63,7 +63,7 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 			return RunResult{
 				Output: result.Output,
 				Steps:  state.Steps,
-				Trace:  buildRunTrace(startedAt, finishedAt, state.Steps, "completed"),
+				Trace:  buildRunTrace(startedAt, finishedAt, state.Steps, protocol.RunStatusCompleted),
 			}, nil
 		}
 	}
@@ -95,11 +95,11 @@ func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord
 			trace.ToolCallsByName[action.ToolName]++
 		}
 		for _, toolCall := range step.ToolCalls {
-			if toolCall.Status == toolCallStatusFailed || toolCall.Status == toolCallStatusSucceeded {
+			if toolCall.Status == protocol.ToolCallStatusFailed || toolCall.Status == protocol.ToolCallStatusSucceeded {
 				trace.ExecutedToolCallCount++
 				trace.ExecutedToolCallsByName[toolCall.ToolName]++
 			}
-			if toolCall.Status == toolCallStatusSucceeded {
+			if toolCall.Status == protocol.ToolCallStatusSucceeded {
 				trace.SuccessfulToolCallCount++
 				trace.SuccessfulToolCallsByName[toolCall.ToolName]++
 			}

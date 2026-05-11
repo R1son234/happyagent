@@ -34,7 +34,7 @@ func NewToolAdapter(client *Client, tool *sdk.Tool) (*ToolAdapter, error) {
 			Name:        client.name + "__" + tool.Name,
 			Description: tool.Description,
 			InputSchema: string(schemaBytes),
-			Dangerous:   false,
+			Dangerous:   client.toolDangerous(tool.Name),
 		},
 	}, nil
 }

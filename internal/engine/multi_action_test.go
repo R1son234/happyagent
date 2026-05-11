@@ -206,3 +206,50 @@ func TestRunnerCarriesActivateSkillObservationIntoNextModelTurn(t *testing.T) {
 		t.Fatalf("unexpected tool observation: %+v", toolMessage)
 	}
 }
+
+func TestValidateStepActionsRejectsFinalAnswerWithOtherActions(t *testing.T) {
+	err := validateStepActions([]Action{
+		{Type: protocol.ActionToolCall, ToolName: tools.FinalAnswerToolName},
+		{Type: protocol.ActionToolCall, ToolName: "file_list"},
+	})
+	if err == nil {
+		t.Fatal("expected final_answer multi-action validation error")
+	}
+	if !strings.Contains(err.Error(), "final_answer tool must be the only action") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunnerInvalidPlainTextResponseReturnsObservation(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: "plain text is not a JSON action",
+				},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"done"}`,
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, tools.NewRegistry(), 3)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "finish",
+		SystemPrompt: "base prompt",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != "done" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(result.Steps) < 1 || !strings.Contains(result.Steps[0].Observation, "format error") {
+		t.Fatalf("expected invalid response observation, got %+v", result.Steps)
+	}
+}

@@ -57,6 +57,7 @@ func parseSkillMarkdown(path string, data []byte) (Metadata, error) {
 }
 
 func splitFrontmatter(data []byte) ([]byte, string, bool) {
+	data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
 	if !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil, "", false
 	}

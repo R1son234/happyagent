@@ -41,11 +41,12 @@ type MCPConfig struct {
 }
 
 type MCPServerConfig struct {
-	Name    string            `json:"name"`
-	Command string            `json:"command"`
-	Args    []string          `json:"args"`
-	Env     map[string]string `json:"env"`
-	Enabled bool              `json:"enabled"`
+	Name      string            `json:"name"`
+	Command   string            `json:"command"`
+	Args      []string          `json:"args"`
+	Env       map[string]string `json:"env"`
+	Enabled   bool              `json:"enabled"`
+	SafeTools []string          `json:"safe_tools,omitempty"`
 }
 
 type SkillsConfig struct {

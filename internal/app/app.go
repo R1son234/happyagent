@@ -9,6 +9,7 @@ import (
 
 	"happyagent/internal/memory"
 	"happyagent/internal/observe"
+	"happyagent/internal/protocol"
 	"happyagent/internal/runtime"
 	"happyagent/internal/store"
 )
@@ -61,8 +62,7 @@ func (a *Application) CreateSession(profileName string) (store.SessionRecord, er
 }
 
 func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest) (store.RunRecord, error) {
-	session, err := a.store.GetSession(req.SessionID)
-	if err != nil {
+	if _, err := a.store.GetSession(req.SessionID); err != nil {
 		return store.RunRecord{}, err
 	}
 	historyRuns, err := a.store.ListRuns(req.SessionID)
@@ -94,33 +94,22 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		Events:       appendEvents(req.Events, result.Events),
 	}
 	if runErr != nil {
-		record.Status = "failed"
+		record.Status = protocol.RunStatusFailed
 		record.TerminationReason = "runtime_error"
 		record.ErrorCategory = observe.ClassifyError(runErr)
 		record.ErrorMessage = runErr.Error()
 		a.metrics.RecordRun(false, record.Trace.StepCount, record.Trace.SuccessfulToolCallCount, record.Trace.TotalTokens, record.ErrorCategory)
-		if err := a.store.SaveRun(record); err != nil {
-			return store.RunRecord{}, err
-		}
-		session.RunIDs = append(session.RunIDs, record.ID)
-		session.UpdatedAt = time.Now()
-		if err := a.store.SaveSession(session); err != nil {
+		if err := a.store.SaveRunAndAppendSession(record); err != nil {
 			return store.RunRecord{}, err
 		}
 		return record, runErr
 	}
 
 	record.Output = result.Output
-	record.Status = "completed"
+	record.Status = protocol.RunStatusCompleted
 	record.TerminationReason = result.Trace.TerminationReason
 	a.metrics.RecordRun(true, record.Trace.StepCount, record.Trace.SuccessfulToolCallCount, record.Trace.TotalTokens, "")
-	if err := a.store.SaveRun(record); err != nil {
-		return store.RunRecord{}, err
-	}
-
-	session.RunIDs = append(session.RunIDs, record.ID)
-	session.UpdatedAt = time.Now()
-	if err := a.store.SaveSession(session); err != nil {
+	if err := a.store.SaveRunAndAppendSession(record); err != nil {
 		return store.RunRecord{}, err
 	}
 	return record, nil
@@ -146,18 +135,18 @@ func (a *Application) ReplayRun(id string) (store.RunRecord, error) {
 	return a.store.GetRun(id)
 }
 
-func (a *Application) Metrics() observe.Metrics {
+func (a *Application) Metrics() observe.MetricsSnapshot {
 	return a.metrics.Snapshot()
 }
 
-func (a *Application) HistoricalMetrics() (observe.Metrics, error) {
+func (a *Application) HistoricalMetrics() (observe.MetricsSnapshot, error) {
 	runs, err := a.store.ListAllRuns()
 	if err != nil {
-		return observe.Metrics{}, err
+		return observe.MetricsSnapshot{}, err
 	}
 	metrics := observe.NewMetrics()
 	for _, run := range runs {
-		metrics.RecordRun(run.Status == "completed", run.Trace.StepCount, run.Trace.SuccessfulToolCallCount, run.Trace.TotalTokens, run.ErrorCategory)
+		metrics.RecordRun(run.Status == protocol.RunStatusCompleted, run.Trace.StepCount, run.Trace.SuccessfulToolCallCount, run.Trace.TotalTokens, run.ErrorCategory)
 	}
 	return metrics.Snapshot(), nil
 }

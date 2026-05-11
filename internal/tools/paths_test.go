@@ -67,3 +67,33 @@ func TestRootedPathResolverAllowsRegularChildPath(t *testing.T) {
 		t.Fatalf("unexpected path: got %q want %q", resolved, expected)
 	}
 }
+
+func TestRootedPathResolverAllowsSymlinkStayingInsideRoot(t *testing.T) {
+	root := t.TempDir()
+	realDir := filepath.Join(root, "real")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("mkdir real dir: %v", err)
+	}
+	linkPath := filepath.Join(root, "link")
+	if err := os.Symlink(realDir, linkPath); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+
+	resolver, err := NewRootedPathResolver(root)
+	if err != nil {
+		t.Fatalf("NewRootedPathResolver() error = %v", err)
+	}
+
+	resolved, err := resolver.Resolve(filepath.Join("link", "file.txt"))
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	expectedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatalf("EvalSymlinks() error = %v", err)
+	}
+	expected := filepath.Join(expectedRoot, "real", "file.txt")
+	if resolved != expected {
+		t.Fatalf("unexpected path: got %q want %q", resolved, expected)
+	}
+}

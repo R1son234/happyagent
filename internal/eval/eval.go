@@ -10,6 +10,7 @@ import (
 
 	"happyagent/internal/engine"
 	"happyagent/internal/observe"
+	"happyagent/internal/protocol"
 	"happyagent/internal/report"
 )
 
@@ -30,7 +31,7 @@ type Case struct {
 	MaxSteps               int      `json:"max_steps,omitempty"`
 }
 
-type Runner interface {
+type CaseRunner interface {
 	Run(ctx context.Context, req RunRequest) (RunResult, error)
 }
 
@@ -102,7 +103,7 @@ func LoadSuite(path string) (Suite, error) {
 	return suite, nil
 }
 
-func RunSuite(ctx context.Context, runner Runner, suite Suite, defaultSystemPrompt string) (SuiteResult, error) {
+func RunSuite(ctx context.Context, runner CaseRunner, suite Suite, defaultSystemPrompt string) (SuiteResult, error) {
 	startedAt := time.Now()
 	results := make([]CaseResult, 0, len(suite.Cases))
 	summary := SuiteResult{
@@ -176,7 +177,7 @@ func BuildCaseReport(model string, testCase Case, defaultSystemPrompt string, re
 		Model:         model,
 		Input:         testCase.Prompt,
 		Output:        result.Output,
-		Status:        map[bool]string{true: "completed", false: "failed"}[result.Success],
+		Status:        map[bool]string{true: protocol.RunStatusCompleted, false: protocol.RunStatusFailed}[result.Success],
 		ErrorCategory: result.ErrorCategory,
 		Trace:         result.Trace,
 		Steps:         result.Steps,
@@ -205,7 +206,7 @@ func validateSuite(suite Suite) error {
 	return nil
 }
 
-func runCase(ctx context.Context, runner Runner, testCase Case, defaultSystemPrompt string) CaseResult {
+func runCase(ctx context.Context, runner CaseRunner, testCase Case, defaultSystemPrompt string) CaseResult {
 	startedAt := time.Now()
 	caseCtx := ctx
 	cancel := func() {}
@@ -280,7 +281,7 @@ func collectSuccessfulToolUsage(steps []engine.StepRecord) map[string]int {
 	usage := make(map[string]int)
 	for _, step := range steps {
 		for _, toolCall := range step.ToolCalls {
-			if toolCall.Status != "succeeded" {
+			if toolCall.Status != protocol.ToolCallStatusSucceeded {
 				continue
 			}
 			usage[toolCall.ToolName]++

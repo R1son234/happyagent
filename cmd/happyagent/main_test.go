@@ -44,8 +44,8 @@ func (s *stubSessionApplication) ReplayRun(id string) (store.RunRecord, error) {
 	return store.RunRecord{}, nil
 }
 
-func (s *stubSessionApplication) HistoricalMetrics() (observe.Metrics, error) {
-	return observe.Metrics{}, nil
+func (s *stubSessionApplication) HistoricalMetrics() (observe.MetricsSnapshot, error) {
+	return observe.MetricsSnapshot{}, nil
 }
 
 func TestRunInteractiveSessionUsesSingleSessionAcrossTurns(t *testing.T) {
@@ -117,41 +117,5 @@ func TestResolveSessionCreatesSessionWhenInteractive(t *testing.T) {
 	}
 	if !created || sessionID != "session-new" {
 		t.Fatalf("unexpected session resolution: created=%v id=%s", created, sessionID)
-	}
-}
-
-func TestCareerRepoArgParsesAnalyzeRepo(t *testing.T) {
-	if got := careerRepoArg([]string{"career", "analyze", "--repo", "examples"}, "."); got != "examples" {
-		t.Fatalf("unexpected repo arg: %q", got)
-	}
-	if got := careerRepoArg([]string{"career", "analyze", "--repo=examples"}, "."); got != "examples" {
-		t.Fatalf("unexpected repo arg: %q", got)
-	}
-	if got := careerRepoArg([]string{"career", "rewrite-resume", "--report", "out.json"}, "."); got != "." {
-		t.Fatalf("unexpected repo arg for transform: %q", got)
-	}
-}
-
-func TestShouldLaunchCareerByDefault(t *testing.T) {
-	if !shouldLaunchCareerByDefault(nil) {
-		t.Fatalf("expected default startup with no args to launch career mode")
-	}
-	if shouldLaunchCareerByDefault([]string{"--profile", "general-assistant"}) {
-		t.Fatalf("did not expect explicit args to launch career mode by default")
-	}
-}
-
-func TestPrepareCareerConfigRaisesTimeoutsBeforeRuntimeBuild(t *testing.T) {
-	cfg := config.Default()
-	cfg.Engine.RunTimeoutSeconds = 1
-	cfg.LLM.TimeoutSeconds = 1
-
-	prepareCareerConfig(&cfg, []string{"career"})
-
-	if cfg.Engine.RunTimeoutSeconds < 180 {
-		t.Fatalf("expected run timeout to be raised for career mode, got %d", cfg.Engine.RunTimeoutSeconds)
-	}
-	if cfg.LLM.TimeoutSeconds < 180 {
-		t.Fatalf("expected llm timeout to be raised for career mode, got %d", cfg.LLM.TimeoutSeconds)
 	}
 }

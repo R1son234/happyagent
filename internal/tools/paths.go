@@ -83,7 +83,3 @@ func (r *RootedPathResolver) resolveSymlinksWithinRoot(target string) (string, e
 		current = filepath.Dir(current)
 	}
 }
-
-func ext(path string) string {
-	return filepath.Ext(path)
-}

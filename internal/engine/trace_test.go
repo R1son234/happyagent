@@ -20,8 +20,8 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 				{Type: protocol.ActionToolCall, ToolName: "file_read"},
 			},
 			ToolCalls: []ToolCallRecord{
-				{ToolName: "file_list", Status: toolCallStatusSucceeded},
-				{ToolName: "file_read", Status: toolCallStatusFailed},
+				{ToolName: "file_list", Status: protocol.ToolCallStatusSucceeded},
+				{ToolName: "file_read", Status: protocol.ToolCallStatusFailed},
 			},
 			ModelUsage: llm.TokenUsage{
 				PromptTokens:     10,
@@ -40,7 +40,7 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 				TotalTokens:      12,
 			},
 		},
-	}, "completed")
+	}, protocol.RunStatusCompleted)
 
 	if trace.DurationMillis != 2500 {
 		t.Fatalf("unexpected duration: %+v", trace)
@@ -63,7 +63,7 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 	if trace.PromptTokens != 18 || trace.CompletionTokens != 9 || trace.TotalTokens != 27 {
 		t.Fatalf("unexpected token usage: %+v", trace)
 	}
-	if trace.TerminationReason != "completed" {
+	if trace.TerminationReason != protocol.RunStatusCompleted {
 		t.Fatalf("unexpected termination reason: %+v", trace)
 	}
 }

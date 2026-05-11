@@ -48,10 +48,13 @@ func Build(turns []Turn, strategy Strategy) BuildResult {
 
 	text := strings.TrimSpace(builder.String())
 	trimmed := false
-	if strategy.MaxChars > 0 && len(text) > strategy.MaxChars {
-		text = text[:strategy.MaxChars]
-		text = strings.TrimSpace(text) + "\n...[memory truncated]"
-		trimmed = true
+	if strategy.MaxChars > 0 {
+		runes := []rune(text)
+		if len(runes) > strategy.MaxChars {
+			text = string(runes[:strategy.MaxChars])
+			text = strings.TrimSpace(text) + "\n...[memory truncated]"
+			trimmed = true
+		}
 	}
 
 	return BuildResult{

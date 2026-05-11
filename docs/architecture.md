@@ -40,6 +40,31 @@
 10. `internal/career`
    - Implements the Career Copilot workspace, ingestion, report schema, rendering, and interactive commands.
 
+## Dependency Boundaries
+
+```mermaid
+flowchart TD
+  CLI["cmd/happyagent"] --> Config["internal/config"]
+  CLI --> App["internal/app"]
+  CLI --> Career["internal/career"]
+  App --> Runtime["internal/runtime"]
+  App --> Store["internal/store"]
+  Runtime --> Profile["internal/profile"]
+  Runtime --> LLM["internal/llm"]
+  Runtime --> Tools["internal/tools"]
+  Runtime --> MCP["internal/mcp"]
+  Runtime --> Skills["internal/skills"]
+  Runtime --> Memory["internal/memory"]
+  Runtime --> Policy["internal/policy"]
+  Runtime --> Engine["internal/engine"]
+  Engine --> Protocol["internal/protocol"]
+  Engine --> Tools
+  Career --> App
+  Career --> Store
+```
+
+The generic runtime path is `config -> runtime -> engine/tools/mcp/skills/profile/llm`. The session application path is `app -> runtime -> store`, and it owns persisted sessions and runs. Career Copilot is an application package on top of that shared app/runtime path; Career-specific CLI defaults, workspace prompts, rendering, and report behavior live under `internal/career` instead of the generic CLI entrypoint.
+
 ## Runtime Flow
 
 1. CLI reads config and selected profile.

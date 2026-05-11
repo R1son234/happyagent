@@ -6,6 +6,7 @@ import (
 
 	"happyagent/internal/engine"
 	"happyagent/internal/observe"
+	"happyagent/internal/protocol"
 	"happyagent/internal/runtime"
 	"happyagent/internal/store"
 )
@@ -32,7 +33,7 @@ func TestApplicationCreateSessionAndAppendTurn(t *testing.T) {
 				StepCount:         1,
 				ToolCallCount:     1,
 				TotalTokens:       3,
-				TerminationReason: "completed",
+				TerminationReason: protocol.RunStatusCompleted,
 			},
 			Events: []observe.Event{{Type: "run"}},
 		},
@@ -55,7 +56,7 @@ func TestApplicationCreateSessionAndAppendTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AppendUserTurn() error = %v", err)
 	}
-	if run.Status != "completed" || run.Output != "done" {
+	if run.Status != protocol.RunStatusCompleted || run.Output != "done" {
 		t.Fatalf("unexpected run: %+v", run)
 	}
 	if app.Metrics().RunsTotal != 1 {

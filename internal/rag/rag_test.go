@@ -85,3 +85,26 @@ func TestScopedIndexerRejectsEscapingPath(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestIndexerSearchMatchesChineseQuery(t *testing.T) {
+	root := t.TempDir()
+	docsDir := filepath.Join(root, "docs")
+	if err := os.MkdirAll(docsDir, 0o755); err != nil {
+		t.Fatalf("mkdir docs: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(docsDir, "career.md"), []byte("岗位职责：负责增长分析和内容策略。\n"), 0o644); err != nil {
+		t.Fatalf("write docs: %v", err)
+	}
+
+	indexer := NewScopedIndexer(root, []string{"docs"})
+	result, err := indexer.SearchWithLimit("增长分析", 1)
+	if err != nil {
+		t.Fatalf("SearchWithLimit() error = %v", err)
+	}
+	if len(result.Citations) != 1 {
+		t.Fatalf("expected one citation, got %+v", result.Citations)
+	}
+	if !strings.Contains(result.Text, "增长分析") {
+		t.Fatalf("expected Chinese query match in result, got %q", result.Text)
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"happyagent/internal/jsonfile"
 )
 
 const DefaultWorkspaceRoot = "career-workspace"
@@ -697,10 +699,7 @@ func (w *Workspace) writeJSON(path string, value any) error {
 		return fmt.Errorf("marshal %q: %w", path, err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %q: %w", path, err)
-	}
-	return nil
+	return jsonfile.WriteBytes(path, data, 0o644)
 }
 
 func (w *Workspace) writeWorkspaceText(relPath string, content string) error {

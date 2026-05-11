@@ -43,7 +43,7 @@ func TestRunSuiteMarksSuccessfulCase(t *testing.T) {
 						{Type: protocol.ActionToolCall, ToolName: "file_list"},
 					},
 					ToolCalls: []engine.ToolCallRecord{
-						{ToolName: "file_list", Status: "succeeded"},
+						{ToolName: "file_list", Status: protocol.ToolCallStatusSucceeded},
 					},
 				},
 			},
@@ -95,7 +95,7 @@ func TestRunSuiteMarksMissingOutputAndTools(t *testing.T) {
 						{Type: protocol.ActionToolCall, ToolName: "file_search"},
 					},
 					ToolCalls: []engine.ToolCallRecord{
-						{ToolName: "file_search", Status: "failed"},
+						{ToolName: "file_search", Status: protocol.ToolCallStatusFailed},
 					},
 				},
 			},

@@ -38,6 +38,9 @@ func TestManagerRegistersToolsAndReadsResources(t *testing.T) {
 	if len(defs) != 1 || defs[0].Name != "helper__repeat" {
 		t.Fatalf("unexpected tool defs: %+v", defs)
 	}
+	if !defs[0].Dangerous {
+		t.Fatalf("expected remote MCP tool to be dangerous by default: %+v", defs[0])
+	}
 
 	result, err := registry.Execute(ctx, tools.Call{
 		Name:      "helper__repeat",
@@ -56,6 +59,36 @@ func TestManagerRegistersToolsAndReadsResources(t *testing.T) {
 	}
 	if resource == "" {
 		t.Fatalf("expected non-empty resource content")
+	}
+}
+
+func TestManagerCanMarkMCPToolsSafe(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	server := helperServerConfig(t, "helper")
+	server.SafeTools = []string{"repeat"}
+	manager, err := NewManager(ctx, config.MCPConfig{
+		ConnectTimeoutSeconds: 5,
+		MaxListedResources:    10,
+		MaxResourceBytes:      256,
+		Servers:               []config.MCPServerConfig{server},
+	})
+	if err != nil {
+		t.Fatalf("NewManager() error = %v", err)
+	}
+	defer manager.Close()
+
+	registry := tools.NewRegistry()
+	defs, err := manager.RegisterTools(registry)
+	if err != nil {
+		t.Fatalf("RegisterTools() error = %v", err)
+	}
+	if len(defs) != 1 {
+		t.Fatalf("unexpected tool defs: %+v", defs)
+	}
+	if defs[0].Dangerous {
+		t.Fatalf("expected configured safe MCP tool to be non-dangerous: %+v", defs[0])
 	}
 }
 

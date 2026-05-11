@@ -7,10 +7,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
+
+	"happyagent/internal/jsonfile"
 )
 
 type Store struct {
 	root string
+	mu   sync.Mutex
 }
 
 func New(root string) (*Store, error) {
@@ -27,14 +32,39 @@ func New(root string) (*Store, error) {
 }
 
 func (s *Store) SaveSession(record SessionRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.writeJSON(filepath.Join(s.root, "sessions", record.ID+".json"), record)
 }
 
 func (s *Store) SaveRun(record RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.writeJSON(filepath.Join(s.root, "runs", record.ID+".json"), record)
 }
 
+func (s *Store) SaveRunAndAppendSession(record RunRecord) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sessionPath := filepath.Join(s.root, "sessions", record.SessionID+".json")
+	var session SessionRecord
+	if err := s.readJSON(sessionPath, &session); err != nil {
+		return err
+	}
+	if err := s.writeJSON(filepath.Join(s.root, "runs", record.ID+".json"), record); err != nil {
+		return err
+	}
+	if !containsString(session.RunIDs, record.ID) {
+		session.RunIDs = append(session.RunIDs, record.ID)
+	}
+	session.UpdatedAt = time.Now()
+	return s.writeJSON(sessionPath, session)
+}
+
 func (s *Store) GetSession(id string) (SessionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var record SessionRecord
 	if err := s.readJSON(filepath.Join(s.root, "sessions", id+".json"), &record); err != nil {
 		return SessionRecord{}, err
@@ -43,6 +73,8 @@ func (s *Store) GetSession(id string) (SessionRecord, error) {
 }
 
 func (s *Store) GetRun(id string) (RunRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var record RunRecord
 	if err := s.readJSON(filepath.Join(s.root, "runs", id+".json"), &record); err != nil {
 		return RunRecord{}, err
@@ -95,14 +127,7 @@ func (s *Store) ListAllRuns() ([]RunRecord, error) {
 }
 
 func (s *Store) writeJSON(path string, value any) error {
-	data, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal %q: %w", path, err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write %q: %w", path, err)
-	}
-	return nil
+	return jsonfile.Write(path, value)
 }
 
 func (s *Store) readJSON(path string, dest any) error {
@@ -114,4 +139,13 @@ func (s *Store) readJSON(path string, dest any) error {
 		return fmt.Errorf("parse %q: %w", path, err)
 	}
 	return nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

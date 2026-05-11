@@ -21,13 +21,6 @@ const actionInvalidResponse = "invalid_response"
 const invalidResponseMessage = "format error: return exactly one JSON action object or native tool call response; do not answer with plain text, markdown, or explanations"
 const defaultMaxObservationBytes = 8 * 1024
 
-const (
-	toolCallStatusUnavailable = "unavailable"
-	toolCallStatusBlocked     = "blocked"
-	toolCallStatusFailed      = "failed"
-	toolCallStatusSucceeded   = "succeeded"
-)
-
 func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopState) (PlanStepResult, error) {
 	startedAt := time.Now()
 	resp, err := r.client.Chat(ctx, llm.ChatRequest{
@@ -113,7 +106,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		}
 		toolCalls = append(toolCalls, outcome.ToolCall)
 		if action.ToolName == tools.FinalAnswerToolName {
-			if outcome.ToolCall.Status != toolCallStatusSucceeded {
+			if outcome.ToolCall.Status != protocol.ToolCallStatusSucceeded {
 				return StepResult{
 					Observation: outcome.Observation,
 					ToolCalls:   toolCalls,
@@ -162,7 +155,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		appendToolObservation(state, action, observation)
 		return toolCallOutcome{
 			Observation: observation,
-			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusUnavailable},
+			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusUnavailable},
 		}, nil
 	}
 	if input.BeforeToolCall != nil {
@@ -175,7 +168,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
 				Observation: observation,
-				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusBlocked},
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
 			}, nil
 		}
 	}
@@ -189,7 +182,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		appendToolObservation(state, action, observation)
 		return toolCallOutcome{
 			Observation: observation,
-			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusFailed},
+			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
 		}, nil
 	}
 	if input.AfterToolCall != nil {
@@ -206,14 +199,14 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
 				Observation: observation,
-				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusFailed},
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
 			}, nil
 		}
 	}
 	return toolCallOutcome{
 		Observation: observation,
 		Output:      rawOutput,
-		ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: toolCallStatusSucceeded},
+		ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded},
 	}, nil
 }
 

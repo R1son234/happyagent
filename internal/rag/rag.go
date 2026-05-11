@@ -190,7 +190,7 @@ func collectFileMatches(root string, path string, terms []string, results *[]Sea
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil
+		return fmt.Errorf("read %q: %w", path, err)
 	}
 	rel, _ := filepath.Rel(root, path)
 	for _, chunk := range chunkText(string(data), defaultChunkLines, defaultChunkOverlap) {
@@ -283,20 +283,39 @@ func extractSnippet(content string, terms []string) string {
 		if idx < 0 {
 			continue
 		}
-		start := idx - 60
-		if start < 0 {
-			start = 0
-		}
-		end := idx + 160
-		if end > len(content) {
-			end = len(content)
-		}
-		return strings.ReplaceAll(strings.TrimSpace(content[start:end]), "\n", " ")
+		return strings.ReplaceAll(strings.TrimSpace(byteWindow(content, idx, 60, 160)), "\n", " ")
 	}
-	if len(content) > 160 {
-		return strings.ReplaceAll(strings.TrimSpace(content[:160]), "\n", " ")
+	runes := []rune(content)
+	if len(runes) > 160 {
+		return strings.ReplaceAll(strings.TrimSpace(string(runes[:160])), "\n", " ")
 	}
 	return strings.ReplaceAll(strings.TrimSpace(content), "\n", " ")
+}
+
+func byteWindow(content string, byteIndex int, before int, after int) string {
+	startByte := byteIndex - before
+	if startByte < 0 {
+		startByte = 0
+	}
+	endByte := byteIndex + after
+	if endByte > len(content) {
+		endByte = len(content)
+	}
+
+	start := 0
+	end := len([]rune(content))
+	runeOffset := 0
+	for idx := range content {
+		if idx <= startByte {
+			start = runeOffset
+		}
+		if idx <= endByte {
+			end = runeOffset + 1
+		}
+		runeOffset++
+	}
+	runes := []rune(content)
+	return string(runes[start:end])
 }
 
 func formatCitation(result SearchResult) string {

@@ -34,7 +34,7 @@ type sessionApplication interface {
 	GetSession(id string) (store.SessionRecord, error)
 	GetRun(id string) (store.RunRecord, error)
 	ReplayRun(id string) (store.RunRecord, error)
-	HistoricalMetrics() (observe.Metrics, error)
+	HistoricalMetrics() (observe.MetricsSnapshot, error)
 }
 
 func main() {
@@ -74,12 +74,12 @@ func main() {
 		exitf("load config: %v", err)
 	}
 	args := os.Args[1:]
-	careerCommand := isCareerCommand(args)
-	defaultCareer := !careerCommand && shouldLaunchCareerByDefault(args)
+	careerCommand := career.IsCommand(args)
+	defaultCareer := !careerCommand && career.ShouldLaunchByDefault(args)
 	if careerCommand {
-		prepareCareerConfig(&cfg, args)
+		career.PrepareConfig(&cfg, args)
 	} else if defaultCareer {
-		prepareCareerConfig(&cfg, []string{"career"})
+		career.PrepareConfig(&cfg, []string{"career"})
 	}
 
 	rt, err := runtime.NewBuilder().Build(cfg)
@@ -255,45 +255,6 @@ func buildApplication(rt *runtime.Runtime) (*app.Application, error) {
 		return nil, err
 	}
 	return app.New(rt, dataStore, observe.NewMetrics())
-}
-
-func isCareerCommand(args []string) bool {
-	return len(args) > 0 && args[0] == "career"
-}
-
-func careerRepoArg(args []string, fallback string) string {
-	if len(args) < 2 || args[1] != "analyze" {
-		return fallback
-	}
-	for i := 2; i < len(args); i++ {
-		if args[i] == "--repo" && i+1 < len(args) {
-			return args[i+1]
-		}
-		if strings.HasPrefix(args[i], "--repo=") {
-			return strings.TrimPrefix(args[i], "--repo=")
-		}
-	}
-	return fallback
-}
-
-func prepareCareerConfig(cfg *config.Config, args []string) {
-	cfg.Tools.RootDir = careerRepoArg(args, cfg.Tools.RootDir)
-	if cfg.Engine.LoopMaxSteps < career.MinAnalyzeLoopSteps {
-		cfg.Engine.LoopMaxSteps = career.MinAnalyzeLoopSteps
-	}
-	if cfg.Engine.RunTimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
-		cfg.Engine.RunTimeoutSeconds = career.MinAnalyzeTimeoutSeconds
-	}
-	if cfg.LLM.TimeoutSeconds < career.MinAnalyzeTimeoutSeconds {
-		cfg.LLM.TimeoutSeconds = career.MinAnalyzeTimeoutSeconds
-	}
-}
-
-func shouldLaunchCareerByDefault(args []string) bool {
-	if len(args) != 0 {
-		return false
-	}
-	return true
 }
 
 func resolveSession(application sessionApplication, sessionID string, profileName string, sessionMode bool) (string, bool, error) {

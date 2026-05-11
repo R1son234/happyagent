@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 
 	"happyagent/internal/config"
 
@@ -11,8 +12,9 @@ import (
 )
 
 type Client struct {
-	name    string
-	session *sdk.ClientSession
+	name      string
+	session   *sdk.ClientSession
+	safeTools map[string]struct{}
 }
 
 func NewClient(ctx context.Context, cfg config.MCPServerConfig) (*Client, error) {
@@ -36,8 +38,9 @@ func NewClient(ctx context.Context, cfg config.MCPServerConfig) (*Client, error)
 	}
 
 	return &Client{
-		name:    cfg.Name,
-		session: session,
+		name:      cfg.Name,
+		session:   session,
+		safeTools: safeToolSet(cfg.Name, cfg.SafeTools),
 	}, nil
 }
 
@@ -46,4 +49,29 @@ func (c *Client) Close() error {
 		return nil
 	}
 	return c.session.Close()
+}
+
+func (c *Client) toolDangerous(remoteName string) bool {
+	if c == nil {
+		return true
+	}
+	_, safeByRemoteName := c.safeTools[remoteName]
+	_, safeByQualifiedName := c.safeTools[c.name+"__"+remoteName]
+	return !safeByRemoteName && !safeByQualifiedName
+}
+
+func safeToolSet(serverName string, values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		set[value] = struct{}{}
+		if strings.Contains(value, "__") {
+			continue
+		}
+		set[serverName+"__"+value] = struct{}{}
+	}
+	return set
 }

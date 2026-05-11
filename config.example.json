@@ -25,7 +25,16 @@
     "connect_timeout_seconds": 15,
     "max_listed_resources": 100,
     "max_resource_bytes": 8192,
-    "servers": []
+    "servers": [
+      {
+        "name": "example",
+        "command": "",
+        "args": [],
+        "env": {},
+        "enabled": false,
+        "safe_tools": []
+      }
+    ]
   },
   "skills": {
     "dir": "skills"

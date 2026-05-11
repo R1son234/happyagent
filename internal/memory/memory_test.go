@@ -1,6 +1,9 @@
 package memory
 
-import "testing"
+import (
+	"testing"
+	"unicode/utf8"
+)
 
 func TestBuildUsesRecentTurnsAndTruncates(t *testing.T) {
 	result := Build([]Turn{
@@ -17,5 +20,18 @@ func TestBuildUsesRecentTurnsAndTruncates(t *testing.T) {
 	}
 	if !result.Trimmed {
 		t.Fatalf("expected truncated memory")
+	}
+}
+
+func TestBuildTruncatesChineseTextOnRuneBoundary(t *testing.T) {
+	result := Build([]Turn{
+		{Role: "user", Content: "简历项目增长分析复盘"},
+	}, Strategy{Enabled: true, MaxTurns: 1, MaxChars: 14})
+
+	if !result.Trimmed {
+		t.Fatalf("expected truncated memory")
+	}
+	if !utf8.ValidString(result.Text) {
+		t.Fatalf("expected valid UTF-8, got %q", result.Text)
 	}
 }
