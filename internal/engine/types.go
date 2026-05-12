@@ -9,16 +9,24 @@ import (
 	"happyagent/internal/tools"
 )
 
-type RunInput struct {
-	Input               string
-	SystemPrompt        string
-	RuntimeContext      string
-	ToolDefs            []tools.Definition
+type RunConfig struct {
 	MaxObservationBytes int
 	Offload             OffloadConfig
+}
+
+type RunHooks struct {
 	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
 	AfterToolCall       func(ctx context.Context, toolName string, callErr error, input *RunInput) error
 	ValidateFinalAnswer func(content string) error
+}
+
+type RunInput struct {
+	Input          string
+	SystemPrompt   string
+	RuntimeContext string
+	ToolDefs       []tools.Definition
+	Config         RunConfig
+	Hooks          RunHooks
 }
 
 type OffloadConfig struct {

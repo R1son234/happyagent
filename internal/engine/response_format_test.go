@@ -140,11 +140,13 @@ func TestRunnerRetriesFinalAnswerToolAfterValidationFailure(t *testing.T) {
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
-		ValidateFinalAnswer: func(content string) error {
-			if content != "valid" {
-				return fmt.Errorf("invalid final answer")
-			}
-			return nil
+		Hooks: RunHooks{
+			ValidateFinalAnswer: func(content string) error {
+				if content != "valid" {
+					return fmt.Errorf("invalid final answer")
+				}
+				return nil
+			},
 		},
 	})
 	if err != nil {
@@ -259,9 +261,11 @@ func TestRunnerTruncatesToolObservations(t *testing.T) {
 
 	runner := NewRunner(client, registry, 4)
 	result, err := runner.Run(context.Background(), RunInput{
-		Input:               "read file",
-		SystemPrompt:        "reply with JSON action",
-		MaxObservationBytes: 48,
+		Input:        "read file",
+		SystemPrompt: "reply with JSON action",
+		Config: RunConfig{
+			MaxObservationBytes: 48,
+		},
 		ToolDefs: []tools.Definition{
 			{Name: "file_read"},
 		},
@@ -310,9 +314,11 @@ func TestRunnerDoesNotTruncateFinalAnswerToolOutput(t *testing.T) {
 
 	runner := NewRunner(client, registry, 4)
 	result, err := runner.Run(context.Background(), RunInput{
-		Input:               "finish",
-		SystemPrompt:        "reply with tool call",
-		MaxObservationBytes: 512,
+		Input:        "finish",
+		SystemPrompt: "reply with tool call",
+		Config: RunConfig{
+			MaxObservationBytes: 512,
+		},
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
@@ -369,15 +375,17 @@ func TestRunnerOffloadsLargeToolObservation(t *testing.T) {
 
 	runner := NewRunner(client, registry, 4)
 	result, err := runner.Run(context.Background(), RunInput{
-		Input:               "run shell",
-		SystemPrompt:        "reply with JSON action",
-		MaxObservationBytes: 512,
-		Offload: OffloadConfig{
-			Enabled:  true,
-			MinBytes: 32,
-			Dir:      ".happyagent/offload",
-			RootDir:  root,
-			RunID:    "run-1",
+		Input:        "run shell",
+		SystemPrompt: "reply with JSON action",
+		Config: RunConfig{
+			MaxObservationBytes: 512,
+			Offload: OffloadConfig{
+				Enabled:  true,
+				MinBytes: 32,
+				Dir:      ".happyagent/offload",
+				RootDir:  root,
+				RunID:    "run-1",
+			},
 		},
 		ToolDefs: []tools.Definition{{Name: "shell"}},
 	})
@@ -437,15 +445,17 @@ func TestRunnerFallsBackToTruncationWhenOffloadFails(t *testing.T) {
 
 	runner := NewRunner(client, registry, 4)
 	result, err := runner.Run(context.Background(), RunInput{
-		Input:               "run shell",
-		SystemPrompt:        "reply with JSON action",
-		MaxObservationBytes: 48,
-		Offload: OffloadConfig{
-			Enabled:  true,
-			MinBytes: 32,
-			Dir:      "../outside",
-			RootDir:  t.TempDir(),
-			RunID:    "run-1",
+		Input:        "run shell",
+		SystemPrompt: "reply with JSON action",
+		Config: RunConfig{
+			MaxObservationBytes: 48,
+			Offload: OffloadConfig{
+				Enabled:  true,
+				MinBytes: 32,
+				Dir:      "../outside",
+				RootDir:  t.TempDir(),
+				RunID:    "run-1",
+			},
 		},
 		ToolDefs: []tools.Definition{{Name: "shell"}},
 	})
@@ -559,11 +569,13 @@ func TestFinalAnswerValidationFailureDoesNotDoubleAppendMessage(t *testing.T) {
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
-		ValidateFinalAnswer: func(content string) error {
-			if content != "valid" {
-				return fmt.Errorf("validation failed")
-			}
-			return nil
+		Hooks: RunHooks{
+			ValidateFinalAnswer: func(content string) error {
+				if content != "valid" {
+					return fmt.Errorf("validation failed")
+				}
+				return nil
+			},
 		},
 	})
 	if err != nil {
@@ -583,5 +595,81 @@ func TestFinalAnswerValidationFailureDoesNotDoubleAppendMessage(t *testing.T) {
 	}
 	if toolMsgCount != 1 {
 		t.Fatalf("expected exactly 1 tool message for call_1, got %d", toolMsgCount)
+	}
+}
+
+func TestRunnerUnsupportedActionTypeReturnsError(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{Type: "unknown_type", ToolCallID: "call_1", ToolName: "foo"},
+					},
+				},
+				Actions: []protocol.Action{
+					{Type: "unknown_type", ToolCallID: "call_1", ToolName: "foo"},
+				},
+			},
+		},
+	}
+	runner := NewRunner(client, tools.NewRegistry(), 4)
+	_, err := runner.Run(context.Background(), RunInput{
+		Input:        "do something",
+		SystemPrompt: "test",
+		ToolDefs:     []tools.Definition{{Name: "foo"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for unsupported action type")
+	}
+	if !strings.Contains(err.Error(), "unsupported action type") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBeforeToolCallErrorPropagates(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "file_read"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: "content"}, nil
+		},
+	})
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   "file_read",
+						Arguments:  []byte(`{"path":"x"}`),
+					}},
+				},
+				Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "file_read",
+					Arguments:  []byte(`{"path":"x"}`),
+				}},
+			},
+		},
+	}
+	runner := NewRunner(client, registry, 4)
+	expectedErr := fmt.Errorf("before tool call failed")
+	_, err := runner.Run(context.Background(), RunInput{
+		Input:        "read file",
+		SystemPrompt: "test",
+		ToolDefs:     []tools.Definition{{Name: "file_read"}},
+		Hooks: RunHooks{
+			BeforeToolCall: func(ctx context.Context, action Action, input *RunInput) (string, bool, error) {
+				return "", false, expectedErr
+			},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected BeforeToolCall error to propagate")
 	}
 }

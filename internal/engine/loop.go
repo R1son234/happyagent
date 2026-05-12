@@ -69,9 +69,9 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	if len(actions) == 1 && actions[0].Type == protocol.ActionFinalAnswer {
-		if input.ValidateFinalAnswer != nil {
-			if err := input.ValidateFinalAnswer(actions[0].Content); err != nil {
-				observation := truncateObservation(err.Error(), input.MaxObservationBytes)
+		if input.Hooks.ValidateFinalAnswer != nil {
+			if err := input.Hooks.ValidateFinalAnswer(actions[0].Content); err != nil {
+				observation := truncateObservation(err.Error(), input.Config.MaxObservationBytes)
 				state.Messages = append(state.Messages, MessageEnvelope{
 					Role:    protocol.RoleUser,
 					Content: observation,
@@ -85,7 +85,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		}, nil
 	}
 	if len(actions) == 1 && actions[0].Type == actionInvalidResponse {
-		observation := truncateObservation(actions[0].Content, input.MaxObservationBytes)
+		observation := truncateObservation(actions[0].Content, input.Config.MaxObservationBytes)
 		state.Messages = append(state.Messages, MessageEnvelope{
 			Role:    protocol.RoleUser,
 			Content: observation,
@@ -122,7 +122,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	return StepResult{
-		Observation: truncateObservation(strings.Join(observations, "\n\n"), input.MaxObservationBytes),
+		Observation: truncateObservation(strings.Join(observations, "\n\n"), input.Config.MaxObservationBytes),
 		ToolCalls:   toolCalls,
 	}, nil
 }
@@ -151,20 +151,20 @@ type toolCallOutcome struct {
 
 func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action, stepIndex int) (toolCallOutcome, error) {
 	if !toolAllowed(input.ToolDefs, action.ToolName) {
-		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.MaxObservationBytes)
+		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		return toolCallOutcome{
 			Observation: observation,
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusUnavailable},
 		}, nil
 	}
-	if input.BeforeToolCall != nil {
-		observation, handled, err := input.BeforeToolCall(ctx, action, input)
+	if input.Hooks.BeforeToolCall != nil {
+		observation, handled, err := input.Hooks.BeforeToolCall(ctx, action, input)
 		if err != nil {
 			return toolCallOutcome{}, err
 		}
 		if handled {
-			observation = truncateObservation(observation, input.MaxObservationBytes)
+			observation = truncateObservation(observation, input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
 				Observation: observation,
@@ -178,15 +178,15 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		Arguments: action.Arguments,
 	})
 	if err != nil {
-		observation := truncateObservation("tool error: "+err.Error(), input.MaxObservationBytes)
+		observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		return toolCallOutcome{
 			Observation: observation,
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
 		}, nil
 	}
-	if input.AfterToolCall != nil {
-		if err := input.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {
+	if input.Hooks.AfterToolCall != nil {
+		if err := input.Hooks.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {
 			return toolCallOutcome{}, err
 		}
 	}
@@ -194,22 +194,22 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	observation := rawOutput
 	toolCall := ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded}
 	if action.ToolName != tools.FinalAnswerToolName {
-		offloaded, err := maybeOffloadObservation(input.Offload, action.ToolName, stepIndex, rawOutput)
+		offloaded, err := maybeOffloadObservation(input.Config.Offload, action.ToolName, stepIndex, rawOutput)
 		if err != nil {
 			toolCall.OffloadError = err.Error()
-			observation = truncateObservation(rawOutput, input.MaxObservationBytes)
+			observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
 		} else if offloaded.Offloaded {
 			observation = offloaded.Observation
 			toolCall.Offloaded = true
 			toolCall.OffloadPath = offloaded.Path
 			toolCall.OffloadedBytes = offloaded.Bytes
 		} else {
-			observation = truncateObservation(rawOutput, input.MaxObservationBytes)
+			observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
 		}
 	}
-	if action.ToolName == tools.FinalAnswerToolName && input.ValidateFinalAnswer != nil {
-		if err := input.ValidateFinalAnswer(rawOutput); err != nil {
-			observation = truncateObservation(err.Error(), input.MaxObservationBytes)
+	if action.ToolName == tools.FinalAnswerToolName && input.Hooks.ValidateFinalAnswer != nil {
+		if err := input.Hooks.ValidateFinalAnswer(rawOutput); err != nil {
+			observation = truncateObservation(err.Error(), input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
 				Observation: observation,

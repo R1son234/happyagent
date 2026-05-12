@@ -71,14 +71,18 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	}
 
 	result, err := r.runner.Run(ctx, engine.RunInput{
-		Input:               req.Input,
-		SystemPrompt:        skillSession.SystemPrompt(),
-		RuntimeContext:      prepared.runtimeContext,
-		ToolDefs:            toolDefs,
-		MaxObservationBytes: r.maxObservationBytes,
-		Offload:             prepared.offload,
-		BeforeToolCall:      prepared.beforeToolCall(recorder),
-		ValidateFinalAnswer: prepared.validateFinalAnswer(recorder),
+		Input:          req.Input,
+		SystemPrompt:   skillSession.SystemPrompt(),
+		RuntimeContext: prepared.runtimeContext,
+		ToolDefs:       toolDefs,
+		Config: engine.RunConfig{
+			MaxObservationBytes: r.maxObservationBytes,
+			Offload:             prepared.offload,
+		},
+		Hooks: engine.RunHooks{
+			BeforeToolCall:      prepared.beforeToolCall(recorder),
+			ValidateFinalAnswer: prepared.validateFinalAnswer(recorder),
+		},
 	})
 	if err != nil {
 		recorder.Add("run_error", err.Error(), map[string]string{

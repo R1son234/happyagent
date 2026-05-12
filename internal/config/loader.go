@@ -12,9 +12,13 @@ import (
 const configPath = "happyagent.local.json"
 
 func Load() (Config, error) {
+	return LoadFromPath(configPath)
+}
+
+func LoadFromPath(path string) (Config, error) {
 	cfg := Default()
 
-	if err := loadFromFile(configPath, &cfg); err != nil {
+	if err := loadFromFile(path, &cfg); err != nil {
 		return Config{}, err
 	}
 

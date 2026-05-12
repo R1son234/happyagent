@@ -15,6 +15,10 @@ type SessionRecord struct {
 	RunIDs    []string  `json:"run_ids"`
 }
 
+// RunRecord stores the complete result of a single agent run.
+// Trace and Steps reference engine types directly so that the stored
+// JSON matches the engine's output format exactly. This is intentional:
+// the store is a persistence layer for engine data, not an independent schema.
 type RunRecord struct {
 	ID                string              `json:"id"`
 	SessionID         string              `json:"session_id"`
