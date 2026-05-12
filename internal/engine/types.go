@@ -15,9 +15,18 @@ type RunInput struct {
 	RuntimeContext      string
 	ToolDefs            []tools.Definition
 	MaxObservationBytes int
+	Offload             OffloadConfig
 	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
 	AfterToolCall       func(ctx context.Context, toolName string, callErr error, input *RunInput) error
 	ValidateFinalAnswer func(content string) error
+}
+
+type OffloadConfig struct {
+	Enabled  bool
+	MinBytes int
+	Dir      string
+	RootDir  string
+	RunID    string
 }
 
 type RunResult struct {
@@ -37,8 +46,12 @@ type StepRecord struct {
 }
 
 type ToolCallRecord struct {
-	ToolName string `json:"tool_name"`
-	Status   string `json:"status"`
+	ToolName       string `json:"tool_name"`
+	Status         string `json:"status"`
+	Offloaded      bool   `json:"offloaded,omitempty"`
+	OffloadPath    string `json:"offload_path,omitempty"`
+	OffloadedBytes int    `json:"offloaded_bytes,omitempty"`
+	OffloadError   string `json:"offload_error,omitempty"`
 }
 
 type Action = protocol.Action
@@ -62,21 +75,24 @@ type PlanStepResult struct {
 }
 
 type RunTrace struct {
-	StartedAt                 time.Time      `json:"started_at"`
-	FinishedAt                time.Time      `json:"finished_at"`
-	DurationMillis            int64          `json:"duration_millis"`
-	TerminationReason         string         `json:"termination_reason,omitempty"`
-	ErrorCategory             string         `json:"error_category,omitempty"`
-	StepCount                 int            `json:"step_count"`
-	ToolCallCount             int            `json:"tool_call_count"`
-	ToolCallsByName           map[string]int `json:"tool_calls_by_name"`
-	ExecutedToolCallCount     int            `json:"executed_tool_call_count"`
-	ExecutedToolCallsByName   map[string]int `json:"executed_tool_calls_by_name"`
-	SuccessfulToolCallCount   int            `json:"successful_tool_call_count"`
-	SuccessfulToolCallsByName map[string]int `json:"successful_tool_calls_by_name"`
-	PromptTokens              int            `json:"prompt_tokens"`
-	CompletionTokens          int            `json:"completion_tokens"`
-	TotalTokens               int            `json:"total_tokens"`
+	StartedAt                  time.Time      `json:"started_at"`
+	FinishedAt                 time.Time      `json:"finished_at"`
+	DurationMillis             int64          `json:"duration_millis"`
+	TerminationReason          string         `json:"termination_reason,omitempty"`
+	ErrorCategory              string         `json:"error_category,omitempty"`
+	StepCount                  int            `json:"step_count"`
+	ToolCallCount              int            `json:"tool_call_count"`
+	ToolCallsByName            map[string]int `json:"tool_calls_by_name"`
+	ExecutedToolCallCount      int            `json:"executed_tool_call_count"`
+	ExecutedToolCallsByName    map[string]int `json:"executed_tool_calls_by_name"`
+	SuccessfulToolCallCount    int            `json:"successful_tool_call_count"`
+	SuccessfulToolCallsByName  map[string]int `json:"successful_tool_calls_by_name"`
+	OffloadedToolResultCount   int            `json:"offloaded_tool_result_count,omitempty"`
+	OffloadedToolResultBytes   int            `json:"offloaded_tool_result_bytes,omitempty"`
+	OffloadedToolResultsByName map[string]int `json:"offloaded_tool_results_by_name,omitempty"`
+	PromptTokens               int            `json:"prompt_tokens"`
+	CompletionTokens           int            `json:"completion_tokens"`
+	TotalTokens                int            `json:"total_tokens"`
 }
 
 type MessageEnvelope struct {

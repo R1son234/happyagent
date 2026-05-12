@@ -48,6 +48,7 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_LLM_API_KEY", &cfg.LLM.APIKey)
 	overrideString("HAPPYAGENT_LLM_BASE_URL", &cfg.LLM.BaseURL)
 	overrideString("HAPPYAGENT_SYSTEM_PROMPT", &cfg.Engine.SystemPrompt)
+	overrideString("HAPPYAGENT_OFFLOAD_DIR", &cfg.Engine.OffloadDir)
 	overrideString("HAPPYAGENT_ROOT_DIR", &cfg.Tools.RootDir)
 	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
 
@@ -55,12 +56,14 @@ func applyEnv(cfg *Config) {
 	overrideInt("HAPPYAGENT_LLM_TIMEOUT_SECONDS", &cfg.LLM.TimeoutSeconds)
 	overrideInt("HAPPYAGENT_MAX_OBSERVATION_BYTES", &cfg.Engine.MaxObservationBytes)
 	overrideInt("HAPPYAGENT_RUN_TIMEOUT_SECONDS", &cfg.Engine.RunTimeoutSeconds)
+	overrideInt("HAPPYAGENT_OFFLOAD_MIN_BYTES", &cfg.Engine.OffloadMinBytes)
 	overrideInt("HAPPYAGENT_MCP_CONNECT_TIMEOUT_SECONDS", &cfg.MCP.ConnectTimeoutSeconds)
 	overrideInt("HAPPYAGENT_MCP_MAX_LISTED_RESOURCES", &cfg.MCP.MaxListedResources)
 	overrideInt("HAPPYAGENT_MCP_MAX_RESOURCE_BYTES", &cfg.MCP.MaxResourceBytes)
 	overrideInt("HAPPYAGENT_WRITE_MAX_BYTES", &cfg.Tools.WriteMaxBytes)
 
 	overrideBool("HAPPYAGENT_SHELL_ENABLED", &cfg.Tools.ShellEnabled)
+	overrideBool("HAPPYAGENT_OFFLOAD_ENABLED", &cfg.Engine.OffloadEnabled)
 	overrideBool("HAPPYAGENT_WRITE_ENABLED", &cfg.Tools.WriteEnabled)
 	overrideBool("HAPPYAGENT_WRITE_REQUIRE_OVERWRITE", &cfg.Tools.WriteRequireOverwrite)
 	overrideBool("HAPPYAGENT_DELETE_ENABLED", &cfg.Tools.DeleteEnabled)
@@ -77,6 +80,14 @@ func validate(cfg Config) error {
 	}
 	if cfg.Engine.RunTimeoutSeconds <= 0 {
 		return fmt.Errorf("engine.run_timeout_seconds must be greater than zero")
+	}
+	if cfg.Engine.OffloadEnabled {
+		if cfg.Engine.OffloadMinBytes <= 0 {
+			return fmt.Errorf("engine.offload_min_bytes must be greater than zero when offload is enabled")
+		}
+		if strings.TrimSpace(cfg.Engine.OffloadDir) == "" {
+			return fmt.Errorf("engine.offload_dir must not be empty when offload is enabled")
+		}
 	}
 	if cfg.LLM.Model == "" {
 		return fmt.Errorf("llm.model must not be empty")

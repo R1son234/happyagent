@@ -60,7 +60,7 @@ func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopSt
 	}, nil
 }
 
-func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *RunInput, actions []Action) (StepResult, error) {
+func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *RunInput, actions []Action, stepIndex int) (StepResult, error) {
 	if len(actions) == 0 {
 		return StepResult{}, fmt.Errorf("step requires at least one action")
 	}
@@ -100,7 +100,7 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 			return StepResult{}, fmt.Errorf("unsupported action type %q in multi-action step", action.Type)
 		}
 
-		outcome, err := r.executeToolCall(ctx, state, input, action)
+		outcome, err := r.executeToolCall(ctx, state, input, action, stepIndex)
 		if err != nil {
 			return StepResult{}, err
 		}
@@ -149,7 +149,7 @@ type toolCallOutcome struct {
 	ToolCall    ToolCallRecord
 }
 
-func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action) (toolCallOutcome, error) {
+func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, input *RunInput, action Action, stepIndex int) (toolCallOutcome, error) {
 	if !toolAllowed(input.ToolDefs, action.ToolName) {
 		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
@@ -191,7 +191,22 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}
 	}
 	rawOutput := result.Output
-	observation := truncateObservation(rawOutput, input.MaxObservationBytes)
+	observation := rawOutput
+	toolCall := ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded}
+	if action.ToolName != tools.FinalAnswerToolName {
+		offloaded, err := maybeOffloadObservation(input.Offload, action.ToolName, stepIndex, rawOutput)
+		if err != nil {
+			toolCall.OffloadError = err.Error()
+			observation = truncateObservation(rawOutput, input.MaxObservationBytes)
+		} else if offloaded.Offloaded {
+			observation = offloaded.Observation
+			toolCall.Offloaded = true
+			toolCall.OffloadPath = offloaded.Path
+			toolCall.OffloadedBytes = offloaded.Bytes
+		} else {
+			observation = truncateObservation(rawOutput, input.MaxObservationBytes)
+		}
+	}
 	appendToolObservation(state, action, observation)
 	if action.ToolName == tools.FinalAnswerToolName && input.ValidateFinalAnswer != nil {
 		if err := input.ValidateFinalAnswer(rawOutput); err != nil {
@@ -206,7 +221,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	return toolCallOutcome{
 		Observation: observation,
 		Output:      rawOutput,
-		ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded},
+		ToolCall:    toolCall,
 	}, nil
 }
 

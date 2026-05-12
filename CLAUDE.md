@@ -51,6 +51,14 @@ Before making changes, at minimum understand:
 - How to verify the result
 - What risks exist and rollback options
 
+## Change Planning Requirement
+
+For any logic change, behavior change, data structure change, config format change, persistence change, agent loop change, MCP/skill integration change, memory/compression change, or tool protocol change, write a concrete implementation spec under `spec/` and wait for user confirmation before editing implementation code.
+
+The spec must cover goal, non-goals, current context, affected files, implementation steps, behavior changes, compatibility and risks, validation plan, and acceptance criteria.
+
+Only skip the `spec/` document when the user explicitly asks for direct implementation, or when the change is purely documentation, spelling, formatting, or comments with no runtime behavior impact.
+
 ## Agent Loop Behavior
 
 1. Model receives a compact prompt with available tools/skills

@@ -20,6 +20,9 @@ type EngineConfig struct {
 	MaxObservationBytes int    `json:"max_observation_bytes"`
 	RunTimeoutSeconds   int    `json:"run_timeout_seconds"`
 	SystemPrompt        string `json:"system_prompt"`
+	OffloadEnabled      bool   `json:"offload_enabled"`
+	OffloadMinBytes     int    `json:"offload_min_bytes"`
+	OffloadDir          string `json:"offload_dir"`
 }
 
 type ToolsConfig struct {
@@ -68,6 +71,9 @@ func Default() Config {
 				"When you need to act, respond with " +
 				"{\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} " +
 				"using only tool names that appear in the provided tool list.",
+			OffloadEnabled:  false,
+			OffloadMinBytes: 12 * 1024,
+			OffloadDir:      ".happyagent/offload",
 		},
 		Tools: ToolsConfig{
 			RootDir:                   ".",

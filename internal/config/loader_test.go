@@ -23,3 +23,22 @@ func TestValidateRejectsNonPositiveWriteLimit(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidateRejectsInvalidOffloadConfigWhenEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.APIKey = "test-key"
+	cfg.Engine.OffloadEnabled = true
+	cfg.Engine.OffloadMinBytes = 0
+
+	err := validate(cfg)
+	if err == nil || err.Error() != "engine.offload_min_bytes must be greater than zero when offload is enabled" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	cfg.Engine.OffloadMinBytes = 1024
+	cfg.Engine.OffloadDir = " "
+	err = validate(cfg)
+	if err == nil || err.Error() != "engine.offload_dir must not be empty when offload is enabled" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

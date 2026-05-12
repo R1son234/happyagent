@@ -169,7 +169,7 @@ func TestPrepareRunAddsMemoryToRuntimeContext(t *testing.T) {
 	if prepared.systemPrompt != "general prompt" {
 		t.Fatalf("unexpected system prompt: %q", prepared.systemPrompt)
 	}
-	if !strings.Contains(prepared.runtimeContext, "Recent session memory") {
+	if !strings.Contains(prepared.runtimeContext, "Recent session turns") {
 		t.Fatalf("expected memory in runtime context: %q", prepared.runtimeContext)
 	}
 }

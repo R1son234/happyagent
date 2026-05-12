@@ -7,8 +7,7 @@
     "file_read",
     "file_search",
     "search_docs",
-    "file_list",
-    "minimax-token-plan__understand_image"
+    "file_list"
   ],
   "enabled_skills": [
     "documents",
@@ -18,7 +17,10 @@
   "memory_strategy": {
     "enabled": true,
     "max_turns": 8,
-    "max_chars": 2400
+    "max_chars": 2400,
+    "summary_enabled": true,
+    "summary_max_chars": 5000,
+    "summary_source_turns": 24
   },
   "output_schema": "",
   "eval_suite": "eval/career_cases.json"

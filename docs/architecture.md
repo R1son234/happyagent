@@ -76,9 +76,14 @@ The generic runtime path is `config -> runtime -> engine/tools/mcp/skills/profil
 7. The model can call `activate_skill` to load skill instructions as an observation.
 8. The engine enters the loop and asks the model for a structured action.
 9. Tool calls are validated and executed by the runtime.
-10. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
-11. The app layer stores session and run records.
-12. Optional trace output writes per-step actions, observations, timing, token usage, and tool-call status.
+10. Large non-final tool results may be offloaded under `.happyagent/offload/<run-id>/`; the model receives a compact `file_read`-compatible reference instead of the full payload.
+11. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
+12. The app layer stores session and run records.
+13. Optional trace output writes per-step actions, observations, timing, token usage, tool-call status, and offload counters.
+
+## Session Memory
+
+Session memory is profile-controlled through `memory_strategy`. The default path keeps recent turns verbatim. Profiles can also enable a deterministic structured summary of older turns, which extracts goals, decisions, file/artifact references, and open items before appending the recent turns. This keeps long sessions useful without adding another LLM call inside the runtime.
 
 ## Local RAG Flow
 
@@ -112,6 +117,7 @@ The batch `career analyze` command follows the same evidence-first behavior with
 - `happyagent.local.json` stores local model configuration and is ignored by Git.
 - `.happyagent/store/` contains local session and run state.
 - `.happyagent/career/` contains local Career Copilot workspace material.
+- `.happyagent/offload/` contains large tool result snapshots referenced from observations and traces.
 - `logs/` contains eval reports and run traces.
 - File tools stay inside the configured root directory and reject symlink escapes.
 - Shell execution is disabled or constrained by config unless approved.

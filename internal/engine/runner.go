@@ -41,7 +41,7 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 		}
 
 		executionStartedAt := time.Now()
-		result, err := r.loop.executeStep(ctx, &state, &currentInput, planResult.Actions)
+		result, err := r.loop.executeStep(ctx, &state, &currentInput, planResult.Actions, step+1)
 		if err != nil {
 			return RunResult{}, err
 		}
@@ -73,14 +73,15 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 
 func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord, terminationReason string) RunTrace {
 	trace := RunTrace{
-		StartedAt:                 startedAt,
-		FinishedAt:                finishedAt,
-		DurationMillis:            finishedAt.Sub(startedAt).Milliseconds(),
-		TerminationReason:         terminationReason,
-		StepCount:                 len(steps),
-		ToolCallsByName:           map[string]int{},
-		ExecutedToolCallsByName:   map[string]int{},
-		SuccessfulToolCallsByName: map[string]int{},
+		StartedAt:                  startedAt,
+		FinishedAt:                 finishedAt,
+		DurationMillis:             finishedAt.Sub(startedAt).Milliseconds(),
+		TerminationReason:          terminationReason,
+		StepCount:                  len(steps),
+		ToolCallsByName:            map[string]int{},
+		ExecutedToolCallsByName:    map[string]int{},
+		SuccessfulToolCallsByName:  map[string]int{},
+		OffloadedToolResultsByName: map[string]int{},
 	}
 
 	for _, step := range steps {
@@ -102,6 +103,11 @@ func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord
 			if toolCall.Status == protocol.ToolCallStatusSucceeded {
 				trace.SuccessfulToolCallCount++
 				trace.SuccessfulToolCallsByName[toolCall.ToolName]++
+			}
+			if toolCall.Offloaded {
+				trace.OffloadedToolResultCount++
+				trace.OffloadedToolResultBytes += toolCall.OffloadedBytes
+				trace.OffloadedToolResultsByName[toolCall.ToolName]++
 			}
 		}
 	}

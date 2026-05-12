@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -310,7 +312,7 @@ func TestRunnerDoesNotTruncateFinalAnswerToolOutput(t *testing.T) {
 	result, err := runner.Run(context.Background(), RunInput{
 		Input:               "finish",
 		SystemPrompt:        "reply with tool call",
-		MaxObservationBytes: 48,
+		MaxObservationBytes: 512,
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
@@ -323,6 +325,139 @@ func TestRunnerDoesNotTruncateFinalAnswerToolOutput(t *testing.T) {
 	}
 	if result.Steps[0].Observation != "" {
 		t.Fatalf("final answer step observation should stay out of trace, got %q", result.Steps[0].Observation)
+	}
+}
+
+func TestRunnerOffloadsLargeToolObservation(t *testing.T) {
+	root := t.TempDir()
+	registry := tools.NewRegistry()
+	largeOutput := strings.Repeat("x", 128)
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "shell"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: largeOutput}, nil
+		},
+	})
+
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   "shell",
+						Arguments:  []byte(`{"argv":["echo","hello"]}`),
+					}},
+				},
+				Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "shell",
+					Arguments:  []byte(`{"argv":["echo","hello"]}`),
+				}},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"done"}`,
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, registry, 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:               "run shell",
+		SystemPrompt:        "reply with JSON action",
+		MaxObservationBytes: 512,
+		Offload: OffloadConfig{
+			Enabled:  true,
+			MinBytes: 32,
+			Dir:      ".happyagent/offload",
+			RootDir:  root,
+			RunID:    "run-1",
+		},
+		ToolDefs: []tools.Definition{{Name: "shell"}},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	observation := result.Steps[0].Observation
+	if !strings.Contains(observation, "[offloaded tool result]") {
+		t.Fatalf("expected offload observation, got %q", observation)
+	}
+	call := result.Steps[0].ToolCalls[0]
+	if !call.Offloaded || call.OffloadedBytes != len(largeOutput) || call.OffloadPath == "" {
+		t.Fatalf("unexpected tool call record: %+v", call)
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(call.OffloadPath)))
+	if err != nil {
+		t.Fatalf("read offloaded output: %v", err)
+	}
+	if string(data) != largeOutput {
+		t.Fatalf("unexpected offloaded data")
+	}
+	if result.Trace.OffloadedToolResultCount != 1 || result.Trace.OffloadedToolResultBytes != len(largeOutput) {
+		t.Fatalf("unexpected trace offload counters: %+v", result.Trace)
+	}
+	if result.Trace.OffloadedToolResultsByName["shell"] != 1 {
+		t.Fatalf("unexpected trace offload by name: %+v", result.Trace.OffloadedToolResultsByName)
+	}
+}
+
+func TestRunnerFallsBackToTruncationWhenOffloadFails(t *testing.T) {
+	registry := tools.NewRegistry()
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "shell"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: strings.Repeat("x", 128)}, nil
+		},
+	})
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{Role: protocol.RoleAssistant, Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "shell",
+					Arguments:  []byte(`{"argv":["echo","hello"]}`),
+				}}},
+				Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "shell",
+					Arguments:  []byte(`{"argv":["echo","hello"]}`),
+				}},
+			},
+			{Message: llm.Message{Role: protocol.RoleAssistant, Content: `{"type":"final_answer","content":"done"}`}},
+		},
+	}
+
+	runner := NewRunner(client, registry, 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:               "run shell",
+		SystemPrompt:        "reply with JSON action",
+		MaxObservationBytes: 48,
+		Offload: OffloadConfig{
+			Enabled:  true,
+			MinBytes: 32,
+			Dir:      "../outside",
+			RootDir:  t.TempDir(),
+			RunID:    "run-1",
+		},
+		ToolDefs: []tools.Definition{{Name: "shell"}},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if !strings.Contains(result.Steps[0].Observation, "[observation truncated]") {
+		t.Fatalf("expected fallback truncation, got %q", result.Steps[0].Observation)
+	}
+	call := result.Steps[0].ToolCalls[0]
+	if call.Status != protocol.ToolCallStatusSucceeded || call.Offloaded || call.OffloadError == "" {
+		t.Fatalf("unexpected tool call record: %+v", call)
 	}
 }
 

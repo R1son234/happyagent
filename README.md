@@ -200,6 +200,19 @@ Profiles live under `profiles/<name>/profile.json`. A profile can configure:
 - `output_schema`
 - `eval_suite`
 
+`memory_strategy` can keep recent turns verbatim and, when enabled, add a deterministic structured summary of older turns:
+
+```json
+{
+  "enabled": true,
+  "max_turns": 6,
+  "max_chars": 2000,
+  "summary_enabled": true,
+  "summary_max_chars": 4000,
+  "summary_source_turns": 20
+}
+```
+
 Included profiles:
 
 - `general-assistant`
@@ -228,6 +241,18 @@ Dangerous tools require explicit approval. For example:
 ```
 
 The `shell` tool only runs configured allowed commands and executes via argv rather than string interpolation.
+
+Large tool results can be offloaded to local files instead of staying in the model context. Configure this under `engine`:
+
+```json
+{
+  "offload_enabled": true,
+  "offload_min_bytes": 12000,
+  "offload_dir": ".happyagent/offload"
+}
+```
+
+When a non-final tool result reaches the threshold, happyagent writes the full output under `.happyagent/offload/<run-id>/` and returns a compact `file_read`-compatible reference in the observation. Offload files are local state under `.happyagent/` and are ignored by Git.
 
 ## MCP
 
@@ -291,6 +316,7 @@ Tool calls in traces are classified as:
 - `attempted`: requested by the model
 - `executed`: run by the runtime
 - `successful`: completed successfully
+- `offloaded`: large result saved under `.happyagent/offload/<run-id>/`
 
 ## Eval
 

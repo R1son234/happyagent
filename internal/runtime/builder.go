@@ -73,9 +73,15 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	rt := &Runtime{
 		tools:               defs,
 		maxObservationBytes: cfg.Engine.MaxObservationBytes,
-		mcpManager:          manager,
-		skillLoader:         skillLoader,
-		profileDir:          b.profileDir,
+		offload: engine.OffloadConfig{
+			Enabled:  cfg.Engine.OffloadEnabled,
+			MinBytes: cfg.Engine.OffloadMinBytes,
+			Dir:      cfg.Engine.OffloadDir,
+			RootDir:  cfg.Tools.RootDir,
+		},
+		mcpManager:  manager,
+		skillLoader: skillLoader,
+		profileDir:  b.profileDir,
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)

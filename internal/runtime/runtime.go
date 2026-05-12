@@ -22,6 +22,7 @@ type RunRequest struct {
 	SystemPrompt  string
 	ProfileName   string
 	SessionID     string
+	RunID         string
 	ApprovedTools []string
 	History       []memory.Turn
 }
@@ -39,6 +40,7 @@ type Runtime struct {
 	runner              engine.Runner
 	tools               []tools.Definition
 	maxObservationBytes int
+	offload             engine.OffloadConfig
 	mcpManager          *mcp.Manager
 	skillLoader         *skills.Loader
 	profileDir          string
@@ -74,6 +76,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		RuntimeContext:      prepared.runtimeContext,
 		ToolDefs:            toolDefs,
 		MaxObservationBytes: r.maxObservationBytes,
+		Offload:             prepared.offload,
 		BeforeToolCall:      prepared.beforeToolCall(recorder),
 		ValidateFinalAnswer: prepared.validateFinalAnswer(recorder),
 	})
@@ -133,6 +136,7 @@ type preparedRun struct {
 	skillLoader    *skills.Loader
 	outputSchema   string
 	policy         *policy.Engine
+	offload        engine.OffloadConfig
 }
 
 func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
@@ -142,7 +146,9 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		toolDefs:     append([]tools.Definition(nil), r.tools...),
 		skillLoader:  baseSkillLoader,
 		policy:       policy.New(req.ApprovedTools, nil),
+		offload:      r.offload,
 	}
+	prepared.offload.RunID = req.RunID
 	if req.ProfileName == "" {
 		prepared.runtimeContext = assembleRuntimeContext(memory.Build(req.History, memory.Strategy{}))
 		return prepared, nil

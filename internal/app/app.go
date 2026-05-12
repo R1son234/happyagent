@@ -77,6 +77,7 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		SystemPrompt:  req.SystemPrompt,
 		ProfileName:   req.ProfileName,
 		SessionID:     req.SessionID,
+		RunID:         runID,
 		ApprovedTools: req.ApprovedTools,
 		History:       buildHistory(historyRuns),
 	})
