@@ -15,6 +15,16 @@ type LLMConfig struct {
 	TimeoutSeconds int    `json:"timeout_seconds"`
 }
 
+func (c LLMConfig) SafeString() string {
+	if c.APIKey == "" {
+		return "(no key)"
+	}
+	if len(c.APIKey) <= 8 {
+		return "****"
+	}
+	return c.APIKey[:4] + "****" + c.APIKey[len(c.APIKey)-4:]
+}
+
 type EngineConfig struct {
 	LoopMaxSteps        int    `json:"loop_max_steps"`
 	MaxObservationBytes int    `json:"max_observation_bytes"`

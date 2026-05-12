@@ -68,7 +68,11 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 		}
 	}
 
-	return RunResult{}, fmt.Errorf("loop stopped after reaching max steps (%d)", r.loop.maxSteps)
+	finishedAt := time.Now()
+	return RunResult{
+		Steps: state.Steps,
+		Trace: buildRunTrace(startedAt, finishedAt, state.Steps, "max_steps_exceeded"),
+	}, fmt.Errorf("loop stopped after reaching max steps (%d)", r.loop.maxSteps)
 }
 
 func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord, terminationReason string) RunTrace {

@@ -1,9 +1,23 @@
 package mcp
 
-import "fmt"
+import (
+	"fmt"
+	"unicode/utf8"
+)
 
 func truncateResourceText(content string, maxBytes int) string {
 	return previewResourceText(content, 0, maxBytes, maxBytes)
+}
+
+func safeByteSlice(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	truncated := s[:maxBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated
 }
 
 func previewResourceText(content string, offsetBytes int, requestedBytes int, hardLimit int) string {
@@ -35,7 +49,7 @@ func previewResourceText(content string, offsetBytes int, requestedBytes int, ha
 	if end > len(content) {
 		end = len(content)
 	}
-	window := content[offsetBytes:end]
+	window := safeByteSlice(content[offsetBytes:], end-offsetBytes)
 	if offsetBytes == 0 && end == len(content) {
 		return window
 	}

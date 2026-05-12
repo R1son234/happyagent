@@ -100,7 +100,7 @@ func buildSearchCommand(searchPath string, query string, glob string, maxResults
 		if glob != "" {
 			args = append(args, "--glob", glob)
 		}
-		args = append(args, query, searchPath)
+		args = append(args, "--", query, searchPath)
 		return "rg", args, nil
 	}
 
@@ -109,7 +109,7 @@ func buildSearchCommand(searchPath string, query string, glob string, maxResults
 		if glob != "" {
 			args = append(args, "--include", glob)
 		}
-		args = append(args, query, searchPath)
+		args = append(args, "--", query, searchPath)
 		return "grep", args, nil
 	}
 

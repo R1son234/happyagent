@@ -202,7 +202,7 @@ func TestRunnerErrorsWhenFinalAnswerToolIsCombinedWithOtherActions(t *testing.T)
 
 	registry := tools.NewRegistry()
 	registry.MustRegister(tools.NewFinalAnswerTool())
-	runner := NewRunner(registryBackedClient(client), registry, 4)
+	runner := NewRunner(client, registry, 4)
 	_, err := runner.Run(context.Background(), RunInput{
 		Input:        "say hello",
 		SystemPrompt: "reply with JSON action",
@@ -461,6 +461,127 @@ func TestRunnerFallsBackToTruncationWhenOffloadFails(t *testing.T) {
 	}
 }
 
-func registryBackedClient(client *stubClient) *stubClient {
-	return client
+func TestRunnerReturnsStepsOnMaxStepsExhaustion(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_1",
+							ToolName:   "file_read",
+							Arguments:  []byte(`{"path":"README.md"}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   "file_read",
+						Arguments:  []byte(`{"path":"README.md"}`),
+					},
+				},
+			},
+			// No final_answer - will exhaust steps
+		},
+	}
+
+	registry := tools.NewRegistry()
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "file_read"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: "file content"}, nil
+		},
+	})
+
+	runner := NewRunner(client, registry, 1)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "read file",
+		SystemPrompt: "reply with JSON action",
+		ToolDefs:     []tools.Definition{{Name: "file_read"}},
+	})
+	if err == nil {
+		t.Fatal("expected error on max steps exhaustion")
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected 1 step in result, got %d", len(result.Steps))
+	}
+	if result.Trace.StepCount != 1 {
+		t.Fatalf("expected trace step count 1, got %d", result.Trace.StepCount)
+	}
+	if result.Trace.TerminationReason != "max_steps_exceeded" {
+		t.Fatalf("unexpected termination reason: %q", result.Trace.TerminationReason)
+	}
+}
+
+func TestFinalAnswerValidationFailureDoesNotDoubleAppendMessage(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{
+						{
+							Type:       protocol.ActionToolCall,
+							ToolCallID: "call_1",
+							ToolName:   tools.FinalAnswerToolName,
+							Arguments:  []byte(`{"content":"bad output"}`),
+						},
+					},
+				},
+				Actions: []protocol.Action{
+					{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_1",
+						ToolName:   tools.FinalAnswerToolName,
+						Arguments:  []byte(`{"content":"bad output"}`),
+					},
+				},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"valid"}`,
+				},
+			},
+		},
+	}
+
+	registry := tools.NewRegistry()
+	registry.MustRegister(tools.NewFinalAnswerTool())
+	runner := NewRunner(client, registry, 3)
+	_, err := runner.Run(context.Background(), RunInput{
+		Input:        "finish",
+		SystemPrompt: "reply with JSON action",
+		ToolDefs: []tools.Definition{
+			tools.NewFinalAnswerTool().Definition(),
+		},
+		ValidateFinalAnswer: func(content string) error {
+			if content != "valid" {
+				return fmt.Errorf("validation failed")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	// Check that the second LLM request has exactly one tool message for call_1
+	if len(client.requests) < 2 {
+		t.Fatalf("expected at least 2 requests, got %d", len(client.requests))
+	}
+	msgs := client.requests[1].Messages
+	toolMsgCount := 0
+	for _, m := range msgs {
+		if m.Role == protocol.RoleTool && m.ToolCallID == "call_1" {
+			toolMsgCount++
+		}
+	}
+	if toolMsgCount != 1 {
+		t.Fatalf("expected exactly 1 tool message for call_1, got %d", toolMsgCount)
+	}
 }

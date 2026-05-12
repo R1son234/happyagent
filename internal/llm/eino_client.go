@@ -108,6 +108,7 @@ func toEinoMessages(messages []Message) []*schema.Message {
 			if len(toolCalls) > 0 {
 				out = append(out, &schema.Message{
 					Role:             schema.Assistant,
+					Content:          message.Content,
 					ReasoningContent: message.ReasoningContent,
 					ToolCalls:        toolCalls,
 				})
@@ -157,6 +158,7 @@ func fromEinoMessage(message *schema.Message) (Message, []protocol.Action, error
 
 		return Message{
 			Role:             protocol.RoleAssistant,
+			Content:          message.Content,
 			ReasoningContent: message.ReasoningContent,
 			Actions:          actions,
 		}, actions, nil

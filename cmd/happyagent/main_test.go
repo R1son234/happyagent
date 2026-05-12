@@ -111,7 +111,7 @@ func TestResolveSessionCreatesSessionWhenInteractive(t *testing.T) {
 		},
 	}
 
-	sessionID, created, err := resolveSession(app, "", "general-assistant", true)
+	sessionID, created, err := resolveSession(app, "", "general-assistant")
 	if err != nil {
 		t.Fatalf("resolveSession() error = %v", err)
 	}

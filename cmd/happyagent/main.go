@@ -40,7 +40,6 @@ type sessionApplication interface {
 func main() {
 	var traceJSONPath string
 	var profileName string
-	var sessionMode bool
 	var interactiveMode bool
 	var sessionID string
 	var showSessionID string
@@ -51,7 +50,6 @@ func main() {
 
 	flag.StringVar(&traceJSONPath, "trace-json", "", "optional path for a structured trace json report")
 	flag.StringVar(&profileName, "profile", "general-assistant", "profile name loaded from profiles/<name>/profile.json")
-	flag.BoolVar(&sessionMode, "session", false, "create or continue a persistent session")
 	flag.BoolVar(&interactiveMode, "interactive", false, "start an interactive multi-turn session")
 	flag.BoolVar(&interactiveMode, "i", false, "shorthand for --interactive")
 	flag.StringVar(&sessionID, "session-id", "", "existing session id to continue")
@@ -151,11 +149,11 @@ func main() {
 		if traceJSONPath != "" {
 			exitf("trace-json is not supported in interactive mode")
 		}
-		resolvedSessionID, createdSession, err := resolveSession(application, sessionID, profileName, true)
+		resolvedSessionID, createdSession, err := resolveSession(application, sessionID, profileName)
 		if err != nil {
 			exitf("resolve session: %v", err)
 		}
-		if err := runInteractiveSession(application, cfg, os.Stdin, os.Stdout, os.Stderr, resolvedSessionID, profileName, parseCSV(approvedToolsCSV), prompt, createdSession, logSession); err != nil {
+		if err := runInteractiveSession(application, cfg, os.Stdin, os.Stdout, os.Stderr, resolvedSessionID, profileName, config.OverrideCSV(approvedToolsCSV), prompt, createdSession, logSession); err != nil {
 			exitf("interactive session: %v", err)
 		}
 		return
@@ -182,7 +180,7 @@ func main() {
 		return
 	}
 
-	resolvedSessionID, createdSession, err := resolveSession(application, sessionID, profileName, sessionMode)
+	resolvedSessionID, createdSession, err := resolveSession(application, sessionID, profileName)
 	if err != nil {
 		exitf("resolve session: %v", err)
 	}
@@ -207,7 +205,7 @@ func main() {
 		ProfileName:   profileName,
 		Input:         prompt,
 		SystemPrompt:  cfg.Engine.SystemPrompt,
-		ApprovedTools: parseCSV(approvedToolsCSV),
+		ApprovedTools: config.OverrideCSV(approvedToolsCSV),
 	})
 	if err != nil {
 		if record.ID != "" {
@@ -257,16 +255,9 @@ func buildApplication(rt *runtime.Runtime) (*app.Application, error) {
 	return app.New(rt, dataStore, observe.NewMetrics())
 }
 
-func resolveSession(application sessionApplication, sessionID string, profileName string, sessionMode bool) (string, bool, error) {
+func resolveSession(application sessionApplication, sessionID string, profileName string) (string, bool, error) {
 	if strings.TrimSpace(sessionID) != "" {
 		return sessionID, false, nil
-	}
-	if !sessionMode {
-		session, err := application.CreateSession(profileName)
-		if err != nil {
-			return "", false, err
-		}
-		return session.ID, true, nil
 	}
 	session, err := application.CreateSession(profileName)
 	if err != nil {
@@ -355,21 +346,6 @@ func runSingleTurn(application sessionApplication, cfg config.Config, sessionID 
 	}
 	runlog.Section("Final Output", record.Output)
 	return record, nil
-}
-
-func parseCSV(value string) []string {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	parts := strings.Split(value, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }
 
 func printJSON(value any) {

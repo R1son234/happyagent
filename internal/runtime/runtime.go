@@ -3,7 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"log"
 	"strings"
 
 	"happyagent/internal/engine"
@@ -84,7 +84,13 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		recorder.Add("run_error", err.Error(), map[string]string{
 			"category": observe.ClassifyError(err),
 		})
-		return RunResult{}, err
+		return RunResult{
+			Steps:        result.Steps,
+			Trace:        result.Trace,
+			SystemPrompt: skillSession.SystemPrompt(),
+			ProfileName:  prepared.profileName,
+			Events:       recorder.Events(),
+		}, err
 	}
 	recorder.Add("run_completed", "run completed", map[string]string{
 		"profile": prepared.profileName,
@@ -119,13 +125,6 @@ func ensureSkillLoader(loader *skills.Loader) *skills.Loader {
 		return loader
 	}
 	return skills.NewLoader("")
-}
-
-func validateSkillDir(dir string) error {
-	if dir == "" {
-		return fmt.Errorf("skills dir must not be empty")
-	}
-	return nil
 }
 
 type preparedRun struct {
@@ -166,6 +165,7 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 	prepared.skillLoader = baseSkillLoader.WithAllowedNames(resolved.EnabledSkills)
 	if len(resolved.OutputSchema) > 0 {
 		if err := json.Unmarshal(resolved.OutputSchema, &prepared.outputSchema); err != nil {
+			log.Printf("WARNING: output_schema is not a JSON string, using raw value: %v", err)
 			prepared.outputSchema = strings.TrimSpace(string(resolved.OutputSchema))
 		}
 	}
@@ -228,6 +228,7 @@ func parseMemoryStrategy(raw json.RawMessage) memory.Strategy {
 	}
 	var strategy memory.Strategy
 	if err := json.Unmarshal(raw, &strategy); err != nil {
+		log.Printf("WARNING: failed to parse memory_strategy JSON, using defaults: %v", err)
 		return memory.Strategy{}
 	}
 	return strategy

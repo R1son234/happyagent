@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -143,9 +144,11 @@ func overrideInt(key string, dest *int) {
 	}
 
 	parsed, err := strconv.Atoi(value)
-	if err == nil {
-		*dest = parsed
+	if err != nil {
+		log.Printf("WARNING: ignoring env %s=%q: %v", key, value, err)
+		return
 	}
+	*dest = parsed
 }
 
 func overrideBool(key string, dest *bool) {
@@ -155,9 +158,11 @@ func overrideBool(key string, dest *bool) {
 	}
 
 	parsed, err := strconv.ParseBool(value)
-	if err == nil {
-		*dest = parsed
+	if err != nil {
+		log.Printf("WARNING: ignoring env %s=%q: %v", key, value, err)
+		return
 	}
+	*dest = parsed
 }
 
 func overrideCSV(key string, dest *[]string) {
@@ -166,6 +171,10 @@ func overrideCSV(key string, dest *[]string) {
 		return
 	}
 
+	*dest = OverrideCSV(value)
+}
+
+func OverrideCSV(value string) []string {
 	parts := strings.Split(value, ",")
 	values := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -175,5 +184,5 @@ func overrideCSV(key string, dest *[]string) {
 		}
 		values = append(values, part)
 	}
-	*dest = values
+	return values
 }

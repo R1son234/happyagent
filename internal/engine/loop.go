@@ -207,7 +207,6 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			observation = truncateObservation(rawOutput, input.MaxObservationBytes)
 		}
 	}
-	appendToolObservation(state, action, observation)
 	if action.ToolName == tools.FinalAnswerToolName && input.ValidateFinalAnswer != nil {
 		if err := input.ValidateFinalAnswer(rawOutput); err != nil {
 			observation = truncateObservation(err.Error(), input.MaxObservationBytes)
@@ -218,6 +217,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}, nil
 		}
 	}
+	appendToolObservation(state, action, observation)
 	return toolCallOutcome{
 		Observation: observation,
 		Output:      rawOutput,
