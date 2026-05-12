@@ -59,6 +59,11 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		}
 		defs = append(defs, mcpDefs...)
 
+		if err := manager.RegisterPromptTool(registry); err != nil {
+			manager.Close()
+			return nil, err
+		}
+
 		readResourceTool := tools.NewMCPReadResourceTool(manager)
 		registry.MustRegister(readResourceTool)
 		defs = append(defs, readResourceTool.Definition())

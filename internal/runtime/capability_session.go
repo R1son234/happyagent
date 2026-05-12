@@ -35,6 +35,8 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 		MCPResources             []mcp.ResourceInfo `json:"mcp_resources"`
 		MCPResourcesTotal        int                `json:"mcp_resources_total"`
 		MCPResourcesTruncated    bool               `json:"mcp_resources_truncated"`
+		MCPPrompts               []mcp.PromptInfo   `json:"mcp_prompts"`
+		MCPPromptsTotal          int                `json:"mcp_prompts_total"`
 	}{
 		AvailableTools: []string{},
 		Skills:         []listedSkill{},
@@ -62,6 +64,10 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 	payload.MCPResourcesTotal = total
 	payload.MCPResourcesTruncated = truncated
 
+	prompts := s.listMCPPrompts()
+	payload.MCPPrompts = prompts
+	payload.MCPPromptsTotal = len(prompts)
+
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {
 		return "", err
@@ -81,6 +87,20 @@ func (s *CapabilitySession) listMCPResources() ([]mcp.ResourceInfo, int, bool) {
 		return resources[i].ServerName < resources[j].ServerName
 	})
 	return resources, total, truncated
+}
+
+func (s *CapabilitySession) listMCPPrompts() []mcp.PromptInfo {
+	if s.mcpManager == nil {
+		return nil
+	}
+	prompts := s.mcpManager.ListPrompts()
+	sort.Slice(prompts, func(i, j int) bool {
+		if prompts[i].ServerName == prompts[j].ServerName {
+			return prompts[i].Name < prompts[j].Name
+		}
+		return prompts[i].ServerName < prompts[j].ServerName
+	})
+	return prompts
 }
 
 func containsString(values []string, target string) bool {

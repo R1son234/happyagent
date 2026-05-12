@@ -37,6 +37,7 @@ type MCPConfig struct {
 	ConnectTimeoutSeconds int               `json:"connect_timeout_seconds"`
 	MaxListedResources    int               `json:"max_listed_resources"`
 	MaxResourceBytes      int               `json:"max_resource_bytes"`
+	MaxPromptArgsBytes    int               `json:"max_prompt_args_bytes"`
 	Servers               []MCPServerConfig `json:"servers"`
 }
 
@@ -82,6 +83,7 @@ func Default() Config {
 			ConnectTimeoutSeconds: 15,
 			MaxListedResources:    100,
 			MaxResourceBytes:      8 * 1024,
+			MaxPromptArgsBytes:    8 * 1024,
 			Servers:               nil,
 		},
 		Skills: SkillsConfig{

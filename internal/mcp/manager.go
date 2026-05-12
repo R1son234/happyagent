@@ -17,19 +17,23 @@ type ResourceInfo struct {
 }
 
 type Manager struct {
-	clients            map[string]*Client
-	maxListedResources int
-	resources          map[string]ResourceInfo
-	tools              []tools.Tool
-	maxResourceBytes   int
+	clients              map[string]*Client
+	maxListedResources   int
+	resources            map[string]ResourceInfo
+	tools                []tools.Tool
+	maxResourceBytes     int
+	prompts              map[string]PromptInfo
+	maxPromptArgsBytes   int
 }
 
 func NewManager(ctx context.Context, cfg config.MCPConfig) (*Manager, error) {
 	manager := &Manager{
-		clients:            make(map[string]*Client),
-		maxListedResources: cfg.MaxListedResources,
-		resources:          make(map[string]ResourceInfo),
-		maxResourceBytes:   cfg.MaxResourceBytes,
+		clients:              make(map[string]*Client),
+		maxListedResources:   cfg.MaxListedResources,
+		resources:           make(map[string]ResourceInfo),
+		maxResourceBytes:     cfg.MaxResourceBytes,
+		prompts:              make(map[string]PromptInfo),
+		maxPromptArgsBytes:   cfg.MaxPromptArgsBytes,
 	}
 
 	for _, server := range cfg.Servers {
@@ -54,6 +58,10 @@ func NewManager(ctx context.Context, cfg config.MCPConfig) (*Manager, error) {
 			return nil, err
 		}
 		if err := manager.loadResources(ctx, client); err != nil {
+			manager.Close()
+			return nil, err
+		}
+		if err := manager.loadPrompts(ctx, client); err != nil {
 			manager.Close()
 			return nil, err
 		}
@@ -89,6 +97,57 @@ func (m *Manager) loadResources(ctx context.Context, client *Client) error {
 			Name:        resource.Name,
 			Description: resource.Description,
 		}
+	}
+	return nil
+}
+
+func (m *Manager) loadPrompts(ctx context.Context, client *Client) error {
+	result, err := client.session.ListPrompts(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("list mcp prompts from server %q: %w", client.name, err)
+	}
+	for _, prompt := range result.Prompts {
+		args := make([]PromptArgument, 0, len(prompt.Arguments))
+		for _, arg := range prompt.Arguments {
+			args = append(args, PromptArgument{
+				Name:        arg.Name,
+				Description: arg.Description,
+				Required:    arg.Required,
+			})
+		}
+		m.prompts[client.name+"__"+prompt.Name] = PromptInfo{
+			ServerName:  client.name,
+			Name:        prompt.Name,
+			Description: prompt.Description,
+			Arguments:   args,
+		}
+	}
+	return nil
+}
+
+func (m *Manager) ListPrompts() []PromptInfo {
+	out := make([]PromptInfo, 0, len(m.prompts))
+	for _, prompt := range m.prompts {
+		out = append(out, prompt)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ServerName == out[j].ServerName {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].ServerName < out[j].ServerName
+	})
+	return out
+}
+
+func (m *Manager) HasPrompt(name string) bool {
+	_, ok := m.prompts[name]
+	return ok
+}
+
+func (m *Manager) RegisterPromptTool(registry *tools.Registry) error {
+	tool := NewMCPPromptTool(m)
+	if err := registry.Register(tool); err != nil {
+		return err
 	}
 	return nil
 }
