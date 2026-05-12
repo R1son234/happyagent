@@ -34,7 +34,7 @@ func ClassifyIntent(input string) IntentClassification {
 		{CareerIntentResumeReview, []string{"优化简历", "改简历", "简历建议", "rewrite my resume", "rewrite resume", "resume review", "给我建议", "看看内容"}},
 		{CareerIntentInterviewBrief, []string{"面试准备", "准备一面", "准备二面", "interview brief", "mock interview", "准备面试", "准备一下面试"}},
 		{CareerIntentGapPlan, []string{"差距", "补什么", "gap", "提升计划", "gap plan"}},
-		{CareerIntentAnalyze, []string{"匹配度", "适合吗", "帮我分析", "分析一下", "match", "analy", "评估"}},
+		{CareerIntentAnalyze, []string{"匹配度", "适合吗", "帮我分析", "帮我记录并分析", "分析一下", "match", "analy", "评估"}},
 		{CareerIntentIngest, []string{"inbox", "放进 inbox", "放进来了", "放到", "看看资料", "整理文件", "识别", "导入", "扫描", "scan", "我放好了", "记录下来", "存下来", "保存", "归档"}},
 		{CareerIntentStatus, []string{"当前资料", "现在有什么资料", "状态", "status"}},
 	}
