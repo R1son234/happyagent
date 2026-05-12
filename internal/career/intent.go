@@ -39,6 +39,8 @@ func ClassifyIntent(input string) IntentClassification {
 		{CareerIntentStatus, []string{"当前资料", "现在有什么资料", "状态", "status"}},
 	}
 	best := IntentClassification{Intent: CareerIntentChat, Confidence: 0.2}
+	var matchedAnalyze []string
+	var matchedIngest []string
 	for _, candidate := range intentSignals {
 		var matched []string
 		for _, signal := range candidate.signals {
@@ -48,6 +50,12 @@ func ClassifyIntent(input string) IntentClassification {
 		}
 		if len(matched) == 0 {
 			continue
+		}
+		switch candidate.intent {
+		case CareerIntentAnalyze:
+			matchedAnalyze = append(matchedAnalyze, matched...)
+		case CareerIntentIngest:
+			matchedIngest = append(matchedIngest, matched...)
 		}
 		confidence := 0.55 + float64(len(matched))*0.1
 		if confidence > 0.95 {
@@ -59,6 +67,13 @@ func ClassifyIntent(input string) IntentClassification {
 				Confidence: confidence,
 				Signals:    matched,
 			}
+		}
+	}
+	if len(matchedAnalyze) > 0 && len(matchedIngest) > 0 {
+		return IntentClassification{
+			Intent:     CareerIntentAnalyze,
+			Confidence: best.Confidence,
+			Signals:    append(matchedAnalyze, matchedIngest...),
 		}
 	}
 	return best

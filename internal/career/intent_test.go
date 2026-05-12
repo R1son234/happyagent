@@ -8,6 +8,7 @@ func TestClassifyIntent(t *testing.T) {
 		want  CareerIntent
 	}{
 		{"我把简历和 JD 放进 inbox 了", CareerIntentIngest},
+		{"我把简历 JD 和面经放到 inbox 了，帮我记录并分析一下", CareerIntentAnalyze},
 		{"帮我看看匹配度", CareerIntentAnalyze},
 		{"优化简历", CareerIntentResumeReview},
 		{"帮我准备一下面试", CareerIntentInterviewBrief},

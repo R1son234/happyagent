@@ -8,7 +8,7 @@
     "file_search",
     "search_docs",
     "file_list",
-    "understand_image"
+    "minimax-token-plan__understand_image"
   ],
   "enabled_skills": [
     "documents",

@@ -294,7 +294,7 @@ func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
 	err := RunInteractive(Dependencies{
 		App:           app,
 		Config:        config.Default(),
-		Stdin:         strings.NewReader("我把简历和 JD 放进 inbox 了，帮我分析一下\n/exit\n"),
+		Stdin:         strings.NewReader("我把简历和 JD 放进 inbox 了，帮我记录并分析一下\n/exit\n"),
 		Stdout:        &stdout,
 		Stderr:        &bytes.Buffer{},
 		WorkspaceRoot: workspaceRoot,
