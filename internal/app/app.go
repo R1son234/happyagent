@@ -44,6 +44,9 @@ type AppendTurnRequest struct {
 	SystemPrompt  string
 	ApprovedTools []string
 	Events        []observe.Event
+	OnStepStart   func(stepIndex int)
+	OnToolCallStart func(toolName string)
+	OnToolCallEnd   func(toolName string, succeeded bool)
 }
 
 func (a *Application) CreateSession(profileName string) (store.SessionRecord, error) {
@@ -73,13 +76,16 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 	runID := newID("run")
 	startedAt := time.Now()
 	result, runErr := a.runner.Run(ctx, runtime.RunRequest{
-		Input:         req.Input,
-		SystemPrompt:  req.SystemPrompt,
-		ProfileName:   req.ProfileName,
-		SessionID:     req.SessionID,
-		RunID:         runID,
-		ApprovedTools: req.ApprovedTools,
-		History:       buildHistory(historyRuns),
+		Input:           req.Input,
+		SystemPrompt:    req.SystemPrompt,
+		ProfileName:     req.ProfileName,
+		SessionID:       req.SessionID,
+		RunID:           runID,
+		ApprovedTools:   req.ApprovedTools,
+		History:         buildHistory(historyRuns),
+		OnStepStart:     req.OnStepStart,
+		OnToolCallStart: req.OnToolCallStart,
+		OnToolCallEnd:   req.OnToolCallEnd,
 	})
 
 	record := store.RunRecord{

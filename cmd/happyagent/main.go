@@ -28,6 +28,32 @@ const (
 	modelAPICallMessage = "calling model API..."
 )
 
+type spinnerHooks struct {
+	OnStepStart     func(stepIndex int)
+	OnToolCallStart func(toolName string)
+	OnToolCallEnd   func(toolName string, succeeded bool)
+	Stop            func()
+}
+
+func newSpinnerHooks(w io.Writer) spinnerHooks {
+	s := terminal.NewSpinner(w)
+	s.Start("Thinking...")
+	return spinnerHooks{
+		OnStepStart: func(stepIndex int) {
+			s.UpdateMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
+		},
+		OnToolCallStart: func(toolName string) {
+			s.UpdateMessage(fmt.Sprintf("Executing %s...", toolName))
+		},
+		OnToolCallEnd: func(toolName string, succeeded bool) {
+			if !succeeded {
+				s.UpdateMessage(fmt.Sprintf("Tool %s failed, thinking...", toolName))
+			}
+		},
+		Stop: func() { s.Stop() },
+	}
+}
+
 type sessionApplication interface {
 	CreateSession(profileName string) (store.SessionRecord, error)
 	AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error)
@@ -200,12 +226,18 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
 	defer cancel()
 
+	spinner := newSpinnerHooks(os.Stderr)
+	defer spinner.Stop()
+
 	record, err := application.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     resolvedSessionID,
-		ProfileName:   profileName,
-		Input:         prompt,
-		SystemPrompt:  cfg.Engine.SystemPrompt,
-		ApprovedTools: config.OverrideCSV(approvedToolsCSV),
+		SessionID:       resolvedSessionID,
+		ProfileName:     profileName,
+		Input:           prompt,
+		SystemPrompt:    cfg.Engine.SystemPrompt,
+		ApprovedTools:   config.OverrideCSV(approvedToolsCSV),
+		OnStepStart:     spinner.OnStepStart,
+		OnToolCallStart: spinner.OnToolCallStart,
+		OnToolCallEnd:   spinner.OnToolCallEnd,
 	})
 	if err != nil {
 		if record.ID != "" {
@@ -334,12 +366,18 @@ func runSingleTurn(application sessionApplication, cfg config.Config, sessionID 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
 	defer cancel()
 
+	spinner := newSpinnerHooks(errorOutput)
+	defer spinner.Stop()
+
 	record, err := application.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     sessionID,
-		ProfileName:   profileName,
-		Input:         prompt,
-		SystemPrompt:  cfg.Engine.SystemPrompt,
-		ApprovedTools: approvedTools,
+		SessionID:       sessionID,
+		ProfileName:     profileName,
+		Input:           prompt,
+		SystemPrompt:    cfg.Engine.SystemPrompt,
+		ApprovedTools:   approvedTools,
+		OnStepStart:     spinner.OnStepStart,
+		OnToolCallStart: spinner.OnToolCallStart,
+		OnToolCallEnd:   spinner.OnToolCallEnd,
 	})
 	if err != nil {
 		return record, err

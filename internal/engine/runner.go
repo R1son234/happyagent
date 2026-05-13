@@ -35,6 +35,9 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 	startedAt := time.Now()
 
 	for step := 0; step < r.loop.maxSteps; step++ {
+		if currentInput.Hooks.OnStepStart != nil {
+			currentInput.Hooks.OnStepStart(step + 1)
+		}
 		planResult, err := r.loop.planStep(ctx, currentInput, &state)
 		if err != nil {
 			return RunResult{}, err

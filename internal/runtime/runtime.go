@@ -18,13 +18,16 @@ import (
 )
 
 type RunRequest struct {
-	Input         string
-	SystemPrompt  string
-	ProfileName   string
-	SessionID     string
-	RunID         string
-	ApprovedTools []string
-	History       []memory.Turn
+	Input           string
+	SystemPrompt    string
+	ProfileName     string
+	SessionID       string
+	RunID           string
+	ApprovedTools   []string
+	History         []memory.Turn
+	OnStepStart     func(stepIndex int)
+	OnToolCallStart func(toolName string)
+	OnToolCallEnd   func(toolName string, succeeded bool)
 }
 
 type RunResult struct {
@@ -82,6 +85,9 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 		Hooks: engine.RunHooks{
 			BeforeToolCall:      prepared.beforeToolCall(recorder),
 			ValidateFinalAnswer: prepared.validateFinalAnswer(recorder),
+			OnStepStart:         req.OnStepStart,
+			OnToolCallStart:     req.OnToolCallStart,
+			OnToolCallEnd:       req.OnToolCallEnd,
 		},
 	})
 	if err != nil {

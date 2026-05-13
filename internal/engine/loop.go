@@ -189,11 +189,17 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}
 	}
 
+	if input.Hooks.OnToolCallStart != nil {
+		input.Hooks.OnToolCallStart(action.ToolName)
+	}
 	result, err := r.registry.Execute(ctx, tools.Call{
 		Name:      action.ToolName,
 		Arguments: action.Arguments,
 	})
 	if err != nil {
+		if input.Hooks.OnToolCallEnd != nil {
+			input.Hooks.OnToolCallEnd(action.ToolName, false)
+		}
 		observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		return toolCallOutcome{
@@ -204,6 +210,9 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	if action.ToolName == tools.WriteTodosToolName {
 		todos, err := tools.DecodeWriteTodosArguments(action.Arguments)
 		if err != nil {
+			if input.Hooks.OnToolCallEnd != nil {
+				input.Hooks.OnToolCallEnd(action.ToolName, false)
+			}
 			observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
@@ -244,6 +253,9 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	}
 	if action.ToolName == tools.FinalAnswerToolName && input.Hooks.ValidateFinalAnswer != nil {
 		if err := input.Hooks.ValidateFinalAnswer(rawOutput); err != nil {
+			if input.Hooks.OnToolCallEnd != nil {
+				input.Hooks.OnToolCallEnd(action.ToolName, false)
+			}
 			observation = truncateObservation(err.Error(), input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
@@ -253,6 +265,9 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}
 	}
 	appendToolObservation(state, action, observation)
+	if input.Hooks.OnToolCallEnd != nil {
+		input.Hooks.OnToolCallEnd(action.ToolName, true)
+	}
 	return toolCallOutcome{
 		Observation: observation,
 		Output:      rawOutput,

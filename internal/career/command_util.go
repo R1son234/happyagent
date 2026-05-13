@@ -15,6 +15,7 @@ import (
 	"happyagent/internal/observe"
 	"happyagent/internal/runlog"
 	"happyagent/internal/store"
+	"happyagent/internal/terminal"
 )
 
 func runCareerTurn(deps Dependencies, sessionID string, prompt string, classification InputClassification) (store.RunRecord, error) {
@@ -30,12 +31,28 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 	runlog.Linef("")
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
+
+	spinner := terminal.NewSpinner(deps.Stderr)
+	spinner.Start("Thinking...")
+	defer spinner.Stop()
+
 	record, err := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
 		SessionID:    sessionID,
 		ProfileName:  ProfileName,
 		Input:        prompt,
 		SystemPrompt: deps.Config.Engine.SystemPrompt,
 		Events:       []observe.Event{classificationEvent(classification)},
+		OnStepStart: func(stepIndex int) {
+			spinner.UpdateMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
+		},
+		OnToolCallStart: func(toolName string) {
+			spinner.UpdateMessage(fmt.Sprintf("Executing %s...", toolName))
+		},
+		OnToolCallEnd: func(toolName string, succeeded bool) {
+			if !succeeded {
+				spinner.UpdateMessage(fmt.Sprintf("Tool %s failed, thinking...", toolName))
+			}
+		},
 	})
 	if err != nil {
 		return record, err

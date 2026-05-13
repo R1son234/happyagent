@@ -18,6 +18,9 @@ type RunHooks struct {
 	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
 	AfterToolCall       func(ctx context.Context, toolName string, callErr error, input *RunInput) error
 	ValidateFinalAnswer func(content string) error
+	OnStepStart         func(stepIndex int)
+	OnToolCallStart     func(toolName string)
+	OnToolCallEnd       func(toolName string, succeeded bool)
 }
 
 type RunInput struct {
