@@ -109,6 +109,38 @@ func TestFileReadToolReadsRequestedLineRange(t *testing.T) {
 	}
 }
 
+func TestFileReadToolTruncatesUTF8WithoutBinaryFalsePositive(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "chinese.md")
+
+	// Build a file where head+tail truncation would split a 3-byte UTF-8 char
+	// without boundary alignment. Each Chinese char is 3 bytes in UTF-8.
+	// 100 Chinese chars = 300 bytes. With max_bytes=256, head=128 bytes = 42 full chars + 2 bytes of a 3-byte char.
+	padding := strings.Repeat("中", 100)
+	if err := os.WriteFile(path, []byte(padding), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	tool, err := NewFileReadTool(root)
+	if err != nil {
+		t.Fatalf("NewFileReadTool() error = %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), Call{
+		Name:      "file_read",
+		Arguments: []byte(`{"path":"chinese.md","max_bytes":256}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Contains(result.Output, "[binary file omitted") {
+		t.Fatalf("UTF-8 file incorrectly detected as binary: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "[file_read truncated") {
+		t.Fatalf("expected truncation marker, got %q", result.Output)
+	}
+}
+
 func TestFileReadToolRejectsInvalidLineRange(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "main.go")

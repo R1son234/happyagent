@@ -7,7 +7,7 @@
   },
   "engine": {
     "loop_max_steps": 50,
-    "max_observation_bytes": 8192,
+    "max_observation_bytes": 32768,
     "run_timeout_seconds": 600,
     "offload_enabled": true,
     "offload_min_bytes": 12000,

@@ -45,6 +45,9 @@ Three core principles:
 - **根因导向**: Fix root causes, don't patch symptoms. Verify before concluding.
 - **最小影响**: Only modify what's necessary. Don't introduce unrelated refactoring.
 
+Communication rule:
+- When you don't know a value, ask the user. Never invent numbers to fill in recommendations.
+
 Before making changes, at minimum understand:
 - What problem is being solved
 - What files are affected

@@ -123,16 +123,29 @@ func readFilePreview(path string, maxBytes int, startLine int, endLine int) (str
 		return "", err
 	}
 
-	tail := make([]byte, tailBytes)
-	if _, err := file.ReadAt(tail, size-int64(tailBytes)); err != nil {
+	// Align head cut to UTF-8 character boundary.
+	headBytes = alignHeadToUTF8(head, headBytes)
+	head = head[:headBytes]
+
+	tailStart := size - int64(tailBytes)
+	tail := make([]byte, size-tailStart)
+	if _, err := file.ReadAt(tail, tailStart); err != nil {
 		return "", err
 	}
 
+	// Align tail start to UTF-8 character boundary: skip continuation bytes
+	// so the tail begins at a valid UTF-8 start byte.
+	tailOffset := 0
+	for tailOffset < len(tail) && (tail[tailOffset]&0xC0) == 0x80 {
+		tailOffset++
+	}
+	tail = tail[tailOffset:]
+
 	data := append(head, tail...)
 	if looksBinary(data) {
-		return fmt.Sprintf("[binary file omitted: size=%d bytes, preview_limit=%d bytes]", size, headBytes+tailBytes), nil
+		return fmt.Sprintf("[binary file omitted: size=%d bytes, preview_limit=%d bytes]", size, len(data)), nil
 	}
-	return renderTruncatedPreview(data[:headBytes], data[headBytes:], int(size)-maxBytes, fmt.Sprintf("%d-byte file", size)), nil
+	return renderTruncatedPreview(head, tail, int(size)-len(data), fmt.Sprintf("%d-byte file", size)), nil
 }
 
 func readFileLineRange(file *os.File, path string, maxBytes int, startLine int, endLine int) (string, error) {
@@ -190,7 +203,17 @@ func renderPartialPreview(data []byte, maxBytes int, scope string) string {
 
 	headBytes := maxBytes / 2
 	tailBytes := maxBytes - headBytes
-	return renderTruncatedPreview(data[:headBytes], data[len(data)-tailBytes:], len(data)-maxBytes, scope)
+
+	// Align head cut to UTF-8 character boundary.
+	headBytes = alignHeadToUTF8(data, headBytes)
+
+	// Align tail start to UTF-8 character boundary.
+	tailStart := len(data) - tailBytes
+	for tailStart < len(data) && (data[tailStart]&0xC0) == 0x80 {
+		tailStart++
+	}
+
+	return renderTruncatedPreview(data[:headBytes], data[tailStart:], len(data)-headBytes-(len(data)-tailStart), scope)
 }
 
 func renderTruncatedPreview(head []byte, tail []byte, omittedBytes int, scope string) string {
@@ -218,4 +241,35 @@ func looksBinary(data []byte) bool {
 		return true
 	}
 	return !utf8.Valid(data)
+}
+
+// utf8SequenceLen returns the number of bytes in the UTF-8 sequence
+// starting with byte b. Returns 1 for ASCII or invalid lead bytes.
+func utf8SequenceLen(b byte) int {
+	if b < 0x80 {
+		return 1
+	}
+	if b < 0xE0 {
+		return 2
+	}
+	if b < 0xF0 {
+		return 3
+	}
+	return 4
+}
+
+// alignHeadToUTF8 adjusts a byte offset to avoid cutting in the middle of a
+// multi-byte UTF-8 sequence. It backs up past continuation bytes, then trims
+// the lead byte if its sequence extends past the cut point.
+func alignHeadToUTF8(data []byte, headBytes int) int {
+	for headBytes > 0 && (data[headBytes-1]&0xC0) == 0x80 {
+		headBytes--
+	}
+	if headBytes > 0 {
+		need := utf8SequenceLen(data[headBytes-1])
+		if headBytes-1+need > len(data) {
+			headBytes--
+		}
+	}
+	return headBytes
 }
