@@ -67,6 +67,7 @@ type Action = protocol.Action
 type LoopState struct {
 	Messages []MessageEnvelope
 	Steps    []StepRecord
+	Todos    []tools.TodoItem
 }
 
 type StepResult struct {

@@ -101,6 +101,10 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	registry.MustRegister(finalAnswer)
 	registered = append(registered, finalAnswer.Definition())
 
+	writeTodos := tools.NewWriteTodosTool()
+	registry.MustRegister(writeTodos)
+	registered = append(registered, writeTodos.Definition())
+
 	fileRead, err := tools.NewFileReadTool(cfg.RootDir)
 	if err != nil {
 		return nil, err

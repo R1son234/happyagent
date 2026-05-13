@@ -415,6 +415,73 @@ func TestRunnerOffloadsLargeToolObservation(t *testing.T) {
 	}
 }
 
+func TestRunnerDoesNotReoffloadOffloadFileReads(t *testing.T) {
+	root := t.TempDir()
+	registry := tools.NewRegistry()
+	largeOutput := strings.Repeat("x", 128)
+	registry.MustRegister(stubTool{
+		def: tools.Definition{Name: "file_read"},
+		run: func(call tools.Call) (tools.Result, error) {
+			return tools.Result{Output: largeOutput}, nil
+		},
+	})
+
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{Role: protocol.RoleAssistant, Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "file_read",
+					Arguments:  []byte(`{"path":".happyagent/offload/run-1/step-1-file_read.txt"}`),
+				}}},
+				Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_1",
+					ToolName:   "file_read",
+					Arguments:  []byte(`{"path":".happyagent/offload/run-1/step-1-file_read.txt"}`),
+				}},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"done"}`,
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, registry, 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "read offload",
+		SystemPrompt: "reply with JSON action",
+		Config: RunConfig{
+			MaxObservationBytes: 48,
+			Offload: OffloadConfig{
+				Enabled:  true,
+				MinBytes: 32,
+				Dir:      ".happyagent/offload",
+				RootDir:  root,
+				RunID:    "run-1",
+			},
+		},
+		ToolDefs: []tools.Definition{{Name: "file_read"}},
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	observation := result.Steps[0].Observation
+	if strings.Contains(observation, "[offloaded tool result]") {
+		t.Fatalf("did not expect offload file read to be re-offloaded: %q", observation)
+	}
+	if !strings.Contains(observation, "[observation truncated]") {
+		t.Fatalf("expected offload file read to be truncated in context, got %q", observation)
+	}
+	if result.Steps[0].ToolCalls[0].Offloaded {
+		t.Fatalf("did not expect tool call to be marked offloaded: %+v", result.Steps[0].ToolCalls[0])
+	}
+}
+
 func TestRunnerFallsBackToTruncationWhenOffloadFails(t *testing.T) {
 	registry := tools.NewRegistry()
 	registry.MustRegister(stubTool{

@@ -6,7 +6,7 @@
 
 - Agent loop with structured `plan` and `execute` steps.
 - Profile-aware runtime with scoped prompts, tools, skills, memory strategy, output schema, and eval suite configuration.
-- Local tools for file read/search/list/patch/write/delete, controlled shell execution, capability discovery, and final answers.
+- Local tools for file read/search/list/patch/write/delete, controlled shell execution, TODO planning, capability discovery, and final answers.
 - MCP stdio client that registers remote tools and reads MCP resources with output bounds.
 - On-demand skill loading through `list_capabilities` and `activate_skill`.
 - Session and run persistence under `.happyagent/store/`.
@@ -218,6 +218,8 @@ Included profiles:
 - `general-assistant`
 - `career-copilot`
 
+Profiles can enable Plan-then-Act behavior by exposing the `write_todos` tool and adding prompt guidance for when to use it. `write_todos` keeps a run-scoped TODO plan in the agent loop; every non-final tool result includes a short system reminder while TODOs remain unfinished. If the model tries to call `final_answer` while TODOs remain unfinished, the loop reminds it to continue or update/remove obsolete TODOs before finishing.
+
 Examples:
 
 ```bash
@@ -252,7 +254,7 @@ Large tool results can be offloaded to local files instead of staying in the mod
 }
 ```
 
-When a non-final tool result reaches the threshold, happyagent writes the full output under `.happyagent/offload/<run-id>/` and returns a compact `file_read`-compatible reference in the observation. Offload files are local state under `.happyagent/` and are ignored by Git.
+When a non-final tool result reaches the threshold, happyagent writes the full output under `.happyagent/offload/<run-id>/` and returns a compact reference in the observation. Offload files are local state under `.happyagent/` and are ignored by Git. Reading an offload file is treated as a debugging escape hatch and is not offloaded again; for model work, prefer reading the original source with `start_line` / `end_line` instead of chasing offload paths.
 
 ## MCP
 

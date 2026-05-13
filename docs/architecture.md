@@ -77,9 +77,10 @@ The generic runtime path is `config -> runtime -> engine/tools/mcp/skills/profil
 8. The engine enters the loop and asks the model for a structured action.
 9. Tool calls are validated and executed by the runtime.
 10. Large non-final tool results may be offloaded under `.happyagent/offload/<run-id>/`; the model receives a compact `file_read`-compatible reference instead of the full payload.
-11. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
-12. The app layer stores session and run records.
-13. Optional trace output writes per-step actions, observations, timing, token usage, tool-call status, and offload counters.
+11. If a profile exposes `write_todos`, complex tasks can maintain a run-scoped TODO plan inside the same ReAct loop. Every non-final tool result includes a system reminder while TODOs remain unfinished, and `final_answer` is blocked until the plan is completed or updated.
+12. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
+13. The app layer stores session and run records.
+14. Optional trace output writes per-step actions, observations, timing, token usage, tool-call status, and offload counters.
 
 ## Session Memory
 

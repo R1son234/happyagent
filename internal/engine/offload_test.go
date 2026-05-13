@@ -17,7 +17,7 @@ func TestMaybeOffloadObservationWritesLargeOutput(t *testing.T) {
 		Dir:      ".happyagent/offload",
 		RootDir:  root,
 		RunID:    "run-1",
-	}, "shell", 2, output)
+	}, "shell", 2, output, "logs/run.log")
 	if err != nil {
 		t.Fatalf("maybeOffloadObservation() error = %v", err)
 	}
@@ -27,7 +27,7 @@ func TestMaybeOffloadObservationWritesLargeOutput(t *testing.T) {
 	if result.Bytes != len(output) {
 		t.Fatalf("unexpected bytes: %d", result.Bytes)
 	}
-	if !strings.Contains(result.Observation, "Use file_read") || !strings.Contains(result.Observation, result.Path) {
+	if !strings.Contains(result.Observation, "source: logs/run.log") || !strings.Contains(result.Observation, "Do not repeatedly read this offload path") || !strings.Contains(result.Observation, result.Path) {
 		t.Fatalf("unexpected observation: %q", result.Observation)
 	}
 	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(result.Path)))
@@ -40,7 +40,7 @@ func TestMaybeOffloadObservationWritesLargeOutput(t *testing.T) {
 }
 
 func TestMaybeOffloadObservationSkipsWhenDisabledOrSmall(t *testing.T) {
-	result, err := maybeOffloadObservation(OffloadConfig{Enabled: false, MinBytes: 1}, "shell", 1, "large")
+	result, err := maybeOffloadObservation(OffloadConfig{Enabled: false, MinBytes: 1}, "shell", 1, "large", "")
 	if err != nil {
 		t.Fatalf("maybeOffloadObservation() error = %v", err)
 	}
@@ -48,7 +48,7 @@ func TestMaybeOffloadObservationSkipsWhenDisabledOrSmall(t *testing.T) {
 		t.Fatalf("did not expect disabled offload")
 	}
 
-	result, err = maybeOffloadObservation(OffloadConfig{Enabled: true, MinBytes: 100, RootDir: t.TempDir()}, "shell", 1, "small")
+	result, err = maybeOffloadObservation(OffloadConfig{Enabled: true, MinBytes: 100, RootDir: t.TempDir()}, "shell", 1, "small", "")
 	if err != nil {
 		t.Fatalf("maybeOffloadObservation() error = %v", err)
 	}
@@ -64,7 +64,7 @@ func TestMaybeOffloadObservationRejectsEscapingDir(t *testing.T) {
 		Dir:      "../outside",
 		RootDir:  t.TempDir(),
 		RunID:    "run-1",
-	}, "shell", 1, "large")
+	}, "shell", 1, "large", "")
 	if err == nil || !strings.Contains(err.Error(), "escapes root") {
 		t.Fatalf("unexpected error: %v", err)
 	}

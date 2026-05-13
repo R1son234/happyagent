@@ -18,7 +18,7 @@ type offloadResult struct {
 	Bytes       int
 }
 
-func maybeOffloadObservation(config OffloadConfig, toolName string, stepIndex int, output string) (offloadResult, error) {
+func maybeOffloadObservation(config OffloadConfig, toolName string, stepIndex int, output string, source string) (offloadResult, error) {
 	if !config.Enabled {
 		return offloadResult{}, nil
 	}
@@ -71,10 +71,14 @@ func maybeOffloadObservation(config OffloadConfig, toolName string, stepIndex in
 	}
 
 	displayPath := filepath.ToSlash(relativePath)
+	sourceLine := ""
+	if strings.TrimSpace(source) != "" {
+		sourceLine = fmt.Sprintf("\nsource: %s", source)
+	}
 	return offloadResult{
 		Offloaded: true,
-		Observation: fmt.Sprintf("[offloaded tool result]\ntool: %s\nbytes: %d\npath: %s\nUse file_read with this path to inspect the saved output.",
-			toolName, len(output), displayPath),
+		Observation: fmt.Sprintf("[offloaded tool result]\ntool: %s\nbytes: %d%s\npath: %s\nFull output was saved for debugging. Do not repeatedly read this offload path during model work; if more source content is needed, read the original source with start_line/end_line or a smaller max_bytes.",
+			toolName, len(output), sourceLine, displayPath),
 		Path:  displayPath,
 		Bytes: len(output),
 	}, nil

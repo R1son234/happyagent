@@ -2,7 +2,9 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -69,6 +71,10 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	if len(actions) == 1 && actions[0].Type == protocol.ActionFinalAnswer {
+		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
+			appendSystemReminder(state, reminder)
+			return StepResult{Observation: reminder}, nil
+		}
 		if input.Hooks.ValidateFinalAnswer != nil {
 			if err := input.Hooks.ValidateFinalAnswer(actions[0].Content); err != nil {
 				observation := truncateObservation(err.Error(), input.Config.MaxObservationBytes)
@@ -158,6 +164,16 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusUnavailable},
 		}, nil
 	}
+	if action.ToolName == tools.FinalAnswerToolName {
+		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
+			observation := truncateObservation(reminder, input.Config.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
+			}, nil
+		}
+	}
 	if input.Hooks.BeforeToolCall != nil {
 		observation, handled, err := input.Hooks.BeforeToolCall(ctx, action, input)
 		if err != nil {
@@ -185,6 +201,18 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
 		}, nil
 	}
+	if action.ToolName == tools.WriteTodosToolName {
+		todos, err := tools.DecodeWriteTodosArguments(action.Arguments)
+		if err != nil {
+			observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
+			}, nil
+		}
+		state.Todos = todos
+	}
 	if input.Hooks.AfterToolCall != nil {
 		if err := input.Hooks.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {
 			return toolCallOutcome{}, err
@@ -194,18 +222,25 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	observation := rawOutput
 	toolCall := ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded}
 	if action.ToolName != tools.FinalAnswerToolName {
-		offloaded, err := maybeOffloadObservation(input.Config.Offload, action.ToolName, stepIndex, rawOutput)
-		if err != nil {
-			toolCall.OffloadError = err.Error()
+		if isOffloadFileRead(action, input.Config.Offload) {
 			observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
-		} else if offloaded.Offloaded {
-			observation = offloaded.Observation
-			toolCall.Offloaded = true
-			toolCall.OffloadPath = offloaded.Path
-			toolCall.OffloadedBytes = offloaded.Bytes
 		} else {
-			observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
+			offloaded, err := maybeOffloadObservation(input.Config.Offload, action.ToolName, stepIndex, rawOutput, offloadSourceLabel(action))
+			if err != nil {
+				toolCall.OffloadError = err.Error()
+				observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
+			} else if offloaded.Offloaded {
+				observation = offloaded.Observation
+				toolCall.Offloaded = true
+				toolCall.OffloadPath = offloaded.Path
+				toolCall.OffloadedBytes = offloaded.Bytes
+			} else {
+				observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
+			}
 		}
+	}
+	if action.ToolName != tools.FinalAnswerToolName {
+		observation = appendTodoProgressReminder(observation, state)
 	}
 	if action.ToolName == tools.FinalAnswerToolName && input.Hooks.ValidateFinalAnswer != nil {
 		if err := input.Hooks.ValidateFinalAnswer(rawOutput); err != nil {
@@ -232,6 +267,96 @@ func appendToolObservation(state *LoopState, action Action, observation string) 
 		ToolCallID: action.ToolCallID,
 		ToolName:   action.ToolName,
 	})
+}
+
+func appendTodoProgressReminder(observation string, state *LoopState) string {
+	reminder, ok := unfinishedTodoProgressReminder(state)
+	if !ok {
+		return observation
+	}
+	if strings.TrimSpace(observation) == "" {
+		return reminder
+	}
+	return observation + "\n\n" + reminder
+}
+
+func appendSystemReminder(state *LoopState, reminder string) {
+	state.Messages = append(state.Messages, MessageEnvelope{
+		Role:    protocol.RoleSystem,
+		Content: reminder,
+	})
+}
+
+func unfinishedTodoProgressReminder(state *LoopState) (string, bool) {
+	if !hasUnfinishedTodos(state.Todos) {
+		return "", false
+	}
+	return `<system-reminder>
+- There're still some TODOs not marked as 'completed', update the TODO list before your next action
+- Running multiple tasks in parallel is allowed, and mark multiple TODOs as 'in_progress' if applicable
+- Add/update/remove TODOs from your plan according to the latest information we collect if necessary
+</system-reminder>`, true
+}
+
+func unfinishedTodoFinalAnswerReminder(state *LoopState) (string, bool) {
+	if !hasUnfinishedTodos(state.Todos) {
+		return "", false
+	}
+	return `<system-reminder>
+- You attempted to produce a final answer, but the TODO list still has unfinished items.
+- Continue working on the unfinished TODOs, or call ` + "`write_todos`" + ` to update/remove TODOs that are no longer needed.
+- Only call ` + "`final_answer`" + ` after the TODO list accurately reflects completed or intentionally removed work.
+</system-reminder>`, true
+}
+
+func hasUnfinishedTodos(todos []tools.TodoItem) bool {
+	for _, todo := range todos {
+		if todo.Status != "completed" {
+			return true
+		}
+	}
+	return false
+}
+
+func offloadSourceLabel(action Action) string {
+	if action.ToolName != "file_read" {
+		return ""
+	}
+	path, ok := fileReadPath(action)
+	if !ok {
+		return ""
+	}
+	return filepath.ToSlash(filepath.Clean(path))
+}
+
+func isOffloadFileRead(action Action, config OffloadConfig) bool {
+	if action.ToolName != "file_read" {
+		return false
+	}
+	path, ok := fileReadPath(action)
+	if !ok {
+		return false
+	}
+	offloadDir := strings.TrimSpace(config.Dir)
+	if offloadDir == "" {
+		offloadDir = ".happyagent/offload"
+	}
+	cleanPath := filepath.ToSlash(filepath.Clean(path))
+	cleanDir := filepath.ToSlash(filepath.Clean(offloadDir))
+	return cleanPath == cleanDir || strings.HasPrefix(cleanPath, cleanDir+"/")
+}
+
+func fileReadPath(action Action) (string, bool) {
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(action.Arguments, &input); err != nil {
+		return "", false
+	}
+	if strings.TrimSpace(input.Path) == "" {
+		return "", false
+	}
+	return input.Path, true
 }
 
 func toolAllowed(defs []tools.Definition, name string) bool {
