@@ -179,7 +179,7 @@ func main() {
 		if err != nil {
 			exitf("resolve session: %v", err)
 		}
-		if err := runInteractiveSession(application, cfg, os.Stdin, os.Stdout, os.Stderr, resolvedSessionID, profileName, config.OverrideCSV(approvedToolsCSV), prompt, createdSession, logSession); err != nil {
+		if err := runInteractiveSession(application, cfg, os.Stdin, os.Stdout, os.Stderr, resolvedSessionID, profileName, config.MergeApprovedTools(cfg.Tools.ApprovedTools, approvedToolsCSV), prompt, createdSession, logSession); err != nil {
 			exitf("interactive session: %v", err)
 		}
 		return
@@ -234,7 +234,7 @@ func main() {
 		ProfileName:     profileName,
 		Input:           prompt,
 		SystemPrompt:    cfg.Engine.SystemPrompt,
-		ApprovedTools:   config.OverrideCSV(approvedToolsCSV),
+		ApprovedTools:   config.MergeApprovedTools(cfg.Tools.ApprovedTools, approvedToolsCSV),
 		OnStepStart:     spinner.OnStepStart,
 		OnToolCallStart: spinner.OnToolCallStart,
 		OnToolCallEnd:   spinner.OnToolCallEnd,

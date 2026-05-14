@@ -188,6 +188,65 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	}
 }
 
+func TestAddMaterialFromFileAvoidsSameSecondChineseTitleCollision(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 14, 14, 37, 18, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	sourceDir := t.TempDir()
+	firstPath := filepath.Join(sourceDir, "字节Agent开发三面面经.md")
+	secondPath := filepath.Join(sourceDir, "字节Agent开发二面面经.md")
+	if err := os.WriteFile(firstPath, []byte("# 字节Agent开发三面面经\n三面内容"), 0o644); err != nil {
+		t.Fatalf("write first source: %v", err)
+	}
+	if err := os.WriteFile(secondPath, []byte("# 字节Agent开发二面面经\n二面内容"), 0o644); err != nil {
+		t.Fatalf("write second source: %v", err)
+	}
+
+	first, err := ws.AddMaterialFromFile(WorkspaceFileInput{
+		ItemType:     WorkspaceTypeExperiences,
+		Text:         "# 字节Agent开发三面面经\n三面内容",
+		OriginalPath: firstPath,
+		OriginalName: filepath.Base(firstPath),
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("AddMaterialFromFile(first) error = %v", err)
+	}
+	second, err := ws.AddMaterialFromFile(WorkspaceFileInput{
+		ItemType:     WorkspaceTypeExperiences,
+		Text:         "# 字节Agent开发二面面经\n二面内容",
+		OriginalPath: secondPath,
+		OriginalName: filepath.Base(secondPath),
+		Now:          now,
+	})
+	if err != nil {
+		t.Fatalf("AddMaterialFromFile(second) error = %v", err)
+	}
+
+	if first.ID == second.ID || first.Path == second.Path {
+		t.Fatalf("expected distinct material paths, got first=%+v second=%+v", first, second)
+	}
+	for _, item := range []WorkspaceItem{first, second} {
+		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(item.Path))); err != nil {
+			t.Fatalf("expected extracted file %s: %v", item.Path, err)
+		}
+	}
+	firstData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(first.Path)))
+	if err != nil {
+		t.Fatalf("read first extracted: %v", err)
+	}
+	secondData, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(second.Path)))
+	if err != nil {
+		t.Fatalf("read second extracted: %v", err)
+	}
+	if !strings.Contains(string(firstData), "三面内容") || !strings.Contains(string(secondData), "二面内容") {
+		t.Fatalf("unexpected extracted contents:\nfirst=%s\nsecond=%s", firstData, secondData)
+	}
+}
+
 func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 10, 20, 15, 0, 0, time.UTC)

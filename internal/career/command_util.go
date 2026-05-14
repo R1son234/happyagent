@@ -37,11 +37,12 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 	defer spinner.Stop()
 
 	record, err := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:    sessionID,
-		ProfileName:  ProfileName,
-		Input:        prompt,
-		SystemPrompt: deps.Config.Engine.SystemPrompt,
-		Events:       []observe.Event{classificationEvent(classification)},
+		SessionID:     sessionID,
+		ProfileName:   ProfileName,
+		Input:         prompt,
+		SystemPrompt:  deps.Config.Engine.SystemPrompt,
+		ApprovedTools: deps.Config.Tools.ApprovedTools,
+		Events:        []observe.Event{classificationEvent(classification)},
 		OnStepStart: func(stepIndex int) {
 			spinner.UpdateMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
 		},
@@ -68,10 +69,11 @@ func parseOrRepairReport(ctx context.Context, deps Dependencies, sessionID strin
 	}
 	repairPrompt := BuildReportRepairPrompt(record.Output, err)
 	repairedRecord, repairErr := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:    sessionID,
-		ProfileName:  ProfileName,
-		Input:        repairPrompt,
-		SystemPrompt: deps.Config.Engine.SystemPrompt,
+		SessionID:     sessionID,
+		ProfileName:   ProfileName,
+		Input:         repairPrompt,
+		SystemPrompt:  deps.Config.Engine.SystemPrompt,
+		ApprovedTools: deps.Config.Tools.ApprovedTools,
 	})
 	if repairErr != nil {
 		return Report{}, record, fmt.Errorf("parse career report json: %w; repair run failed: %v", err, repairErr)

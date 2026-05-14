@@ -163,6 +163,66 @@ func TestRunnerRetriesFinalAnswerToolAfterValidationFailure(t *testing.T) {
 	}
 }
 
+func TestRunnerBlocksMisleadingFinalAnswerAfterDeliveryToolUnavailable(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role: protocol.RoleAssistant,
+					Actions: []protocol.Action{{
+						Type:       protocol.ActionToolCall,
+						ToolCallID: "call_write",
+						ToolName:   "file_write",
+						Arguments:  []byte(`{"path":"out.md","content":"content"}`),
+					}},
+				},
+				Actions: []protocol.Action{{
+					Type:       protocol.ActionToolCall,
+					ToolCallID: "call_write",
+					ToolName:   "file_write",
+					Arguments:  []byte(`{"path":"out.md","content":"content"}`),
+				}},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"已保存到 out.md"}`,
+				},
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"未写入 out.md；完整内容：content"}`,
+				},
+			},
+		},
+	}
+
+	runner := NewRunner(client, tools.NewRegistry(), 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "write a file",
+		SystemPrompt: "reply with JSON action",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != "未写入 out.md；完整内容：content" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(result.Steps) != 3 {
+		t.Fatalf("expected 3 steps, got %d", len(result.Steps))
+	}
+	if result.Steps[0].ToolCalls[0].Status != protocol.ToolCallStatusUnavailable {
+		t.Fatalf("expected unavailable file_write, got %+v", result.Steps[0].ToolCalls)
+	}
+	if !strings.Contains(result.Steps[1].Observation, "previous delivery tool call failed") {
+		t.Fatalf("expected delivery failure reminder, got %q", result.Steps[1].Observation)
+	}
+	if result.Trace.UnavailableToolCallCount != 1 || result.Trace.BlockedToolCallCount != 0 {
+		t.Fatalf("unexpected trace counts: %+v", result.Trace)
+	}
+}
+
 func TestRunnerErrorsWhenFinalAnswerToolIsCombinedWithOtherActions(t *testing.T) {
 	client := &stubClient{
 		responses: []llm.ChatResponse{

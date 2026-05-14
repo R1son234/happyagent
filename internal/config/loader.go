@@ -74,6 +74,7 @@ func applyEnv(cfg *Config) {
 	overrideBool("HAPPYAGENT_DELETE_ENABLED", &cfg.Tools.DeleteEnabled)
 	overrideBool("HAPPYAGENT_DELETE_REQUIRE_CONFIRMATION", &cfg.Tools.DeleteRequireConfirmation)
 	overrideCSV("HAPPYAGENT_SHELL_ALLOWED_COMMANDS", &cfg.Tools.ShellAllowedCommands)
+	overrideCSV("HAPPYAGENT_APPROVED_TOOLS", &cfg.Tools.ApprovedTools)
 }
 
 func validate(cfg Config) error {
@@ -189,4 +190,28 @@ func OverrideCSV(value string) []string {
 		values = append(values, part)
 	}
 	return values
+}
+
+func MergeApprovedTools(configured []string, cliCSV string) []string {
+	merged := make([]string, 0, len(configured))
+	seen := make(map[string]struct{}, len(configured))
+	for _, value := range configured {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		merged = append(merged, value)
+	}
+	for _, value := range OverrideCSV(cliCSV) {
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		merged = append(merged, value)
+	}
+	return merged
 }

@@ -171,10 +171,11 @@ func Analyze(ctx context.Context, options AnalyzeOptions, deps Dependencies) err
 
 	prompt := BuildAnalyzePrompt(normalized)
 	record, err := deps.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:    session.ID,
-		ProfileName:  ProfileName,
-		Input:        prompt,
-		SystemPrompt: deps.Config.Engine.SystemPrompt,
+		SessionID:     session.ID,
+		ProfileName:   ProfileName,
+		Input:         prompt,
+		SystemPrompt:  deps.Config.Engine.SystemPrompt,
+		ApprovedTools: deps.Config.Tools.ApprovedTools,
 	})
 	if err != nil {
 		return fmt.Errorf("run career analysis: %w", err)

@@ -48,7 +48,7 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 	if title == "" {
 		title = inferMaterialTitle(itemType, content)
 	}
-	id := materialID(itemType, title, now)
+	id := w.uniqueMaterialID(itemType, title, now)
 	relDir := materialRelDir(itemType, id)
 	absDir := filepath.Join(w.Root, relDir)
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
@@ -156,7 +156,7 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 		now = time.Now()
 	}
 	title := inferMaterialTitle(itemType, content)
-	id := materialID(itemType, title, now)
+	id := w.uniqueMaterialID(itemType, title, now)
 	relDir := materialRelDir(itemType, id)
 	absDir := filepath.Join(w.Root, relDir)
 	if err := os.MkdirAll(absDir, 0o755); err != nil {
@@ -389,6 +389,19 @@ func workspaceTypeDir(itemType string) string {
 
 func materialID(itemType string, title string, now time.Time) string {
 	return fmt.Sprintf("%s-%s-%s", itemIDPrefix(itemType), now.Format("20060102-150405"), slug(title))
+}
+
+func (w *Workspace) uniqueMaterialID(itemType string, title string, now time.Time) string {
+	baseID := materialID(itemType, title, now)
+	if _, err := os.Stat(filepath.Join(w.Root, materialRelDir(itemType, baseID))); err != nil {
+		return baseID
+	}
+	for i := 2; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", baseID, i)
+		if _, err := os.Stat(filepath.Join(w.Root, materialRelDir(itemType, candidate))); err != nil {
+			return candidate
+		}
+	}
 }
 
 func materialRelDir(itemType string, id string) string {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -72,6 +73,10 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 
 	if len(actions) == 1 && actions[0].Type == protocol.ActionFinalAnswer {
 		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
+			appendSystemReminder(state, reminder)
+			return StepResult{Observation: reminder}, nil
+		}
+		if reminder, ok := unresolvedDeliveryFailureFinalAnswerReminder(state, actions[0].Content); ok {
 			appendSystemReminder(state, reminder)
 			return StepResult{Observation: reminder}, nil
 		}
@@ -159,6 +164,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	if !toolAllowed(input.ToolDefs, action.ToolName) {
 		observation := truncateObservation("tool error: tool "+action.ToolName+" is not available in the current context", input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
+		recordDeliveryToolFailure(state, action.ToolName, protocol.ToolCallStatusUnavailable, observation)
 		return toolCallOutcome{
 			Observation: observation,
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusUnavailable},
@@ -166,6 +172,15 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	}
 	if action.ToolName == tools.FinalAnswerToolName {
 		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
+			observation := truncateObservation(reminder, input.Config.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
+			}, nil
+		}
+		content := finalAnswerContentFromAction(action)
+		if reminder, ok := unresolvedDeliveryFailureFinalAnswerReminder(state, content); ok {
 			observation := truncateObservation(reminder, input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			return toolCallOutcome{
@@ -202,6 +217,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}
 		observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
+		recordDeliveryToolFailure(state, action.ToolName, protocol.ToolCallStatusFailed, observation)
 		return toolCallOutcome{
 			Observation: observation,
 			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
@@ -215,6 +231,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}
 			observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
+			recordDeliveryToolFailure(state, action.ToolName, protocol.ToolCallStatusFailed, observation)
 			return toolCallOutcome{
 				Observation: observation,
 				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
@@ -265,6 +282,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}
 	}
 	appendToolObservation(state, action, observation)
+	clearDeliveryToolFailure(state, action.ToolName)
 	if input.Hooks.OnToolCallEnd != nil {
 		input.Hooks.OnToolCallEnd(action.ToolName, true)
 	}
@@ -302,6 +320,35 @@ func appendSystemReminder(state *LoopState, reminder string) {
 	})
 }
 
+func recordDeliveryToolFailure(state *LoopState, toolName string, status string, observation string) {
+	if !isDeliveryTool(toolName) {
+		return
+	}
+	if state.DeliveryToolFailures == nil {
+		state.DeliveryToolFailures = map[string]string{}
+	}
+	state.DeliveryToolFailures[toolName] = status + ": " + observation
+}
+
+func clearDeliveryToolFailure(state *LoopState, toolName string) {
+	if state.DeliveryToolFailures == nil || !isDeliveryTool(toolName) {
+		return
+	}
+	delete(state.DeliveryToolFailures, toolName)
+	if len(state.DeliveryToolFailures) == 0 {
+		state.DeliveryToolFailures = nil
+	}
+}
+
+func isDeliveryTool(toolName string) bool {
+	switch toolName {
+	case "file_write", "file_patch", "file_delete":
+		return true
+	default:
+		return false
+	}
+}
+
 func unfinishedTodoProgressReminder(state *LoopState) (string, bool) {
 	if !hasUnfinishedTodos(state.Todos) {
 		return "", false
@@ -322,6 +369,68 @@ func unfinishedTodoFinalAnswerReminder(state *LoopState) (string, bool) {
 - Continue working on the unfinished TODOs, or call ` + "`write_todos`" + ` to update/remove TODOs that are no longer needed.
 - Only call ` + "`final_answer`" + ` after the TODO list accurately reflects completed or intentionally removed work.
 </system-reminder>`, true
+}
+
+func unresolvedDeliveryFailureFinalAnswerReminder(state *LoopState, finalContent string) (string, bool) {
+	if len(state.DeliveryToolFailures) == 0 {
+		return "", false
+	}
+	if finalAnswerAcknowledgesDeliveryFailure(finalContent) {
+		return "", false
+	}
+	var tools []string
+	for toolName := range state.DeliveryToolFailures {
+		tools = append(tools, toolName)
+	}
+	sort.Strings(tools)
+	return `<system-reminder>
+- A previous delivery tool call failed or was unavailable: ` + strings.Join(tools, ", ") + `.
+- Do not claim that requested files were saved, written, deleted, or patched until the relevant delivery tool succeeds.
+- Retry with an available tool, adjust the plan, or provide a final answer that explicitly says the requested filesystem change was not completed and includes the full recoverable content or exact next step.
+</system-reminder>`, true
+}
+
+func finalAnswerContentFromAction(action Action) string {
+	if action.ToolName != tools.FinalAnswerToolName {
+		return action.Content
+	}
+	var input struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(action.Arguments, &input); err != nil {
+		return ""
+	}
+	return input.Content
+}
+
+func finalAnswerAcknowledgesDeliveryFailure(content string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(content))
+	if normalized == "" {
+		return false
+	}
+	acknowledgements := []string{
+		"未写入",
+		"未保存",
+		"没有写入",
+		"没有保存",
+		"无法写入",
+		"无法保存",
+		"写入失败",
+		"保存失败",
+		"not written",
+		"not saved",
+		"not completed",
+		"was not written",
+		"was not saved",
+		"write failed",
+		"save failed",
+	}
+	for _, acknowledgement := range acknowledgements {
+		if strings.Contains(normalized, acknowledgement) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasUnfinishedTodos(todos []tools.TodoItem) bool {

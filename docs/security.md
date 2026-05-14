@@ -50,4 +50,4 @@ Example:
 
 ## Dangerous Tool Policy
 
-The policy engine allows non-dangerous tools, blocks explicitly denied tools, and requires approval for dangerous tools that are not in the approved list. Built-in write, patch, delete, shell, and unconfigured MCP tools should be treated as operations that can change local state or expose sensitive context.
+The policy engine allows non-dangerous tools, blocks explicitly denied tools, and requires approval for dangerous tools that are not in the approved list. Built-in write, patch, delete, shell, and unconfigured MCP tools should be treated as operations that can change local state or expose sensitive context. Local defaults can be configured with `tools.approved_tools`; per-run `--approve-tools` values are merged with those defaults.

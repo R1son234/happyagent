@@ -68,9 +68,10 @@ type ToolCallRecord struct {
 type Action = protocol.Action
 
 type LoopState struct {
-	Messages []MessageEnvelope
-	Steps    []StepRecord
-	Todos    []tools.TodoItem
+	Messages             []MessageEnvelope
+	Steps                []StepRecord
+	Todos                []tools.TodoItem
+	DeliveryToolFailures map[string]string
 }
 
 type StepResult struct {
@@ -99,6 +100,12 @@ type RunTrace struct {
 	ExecutedToolCallsByName    map[string]int `json:"executed_tool_calls_by_name"`
 	SuccessfulToolCallCount    int            `json:"successful_tool_call_count"`
 	SuccessfulToolCallsByName  map[string]int `json:"successful_tool_calls_by_name"`
+	FailedToolCallCount        int            `json:"failed_tool_call_count,omitempty"`
+	FailedToolCallsByName      map[string]int `json:"failed_tool_calls_by_name,omitempty"`
+	UnavailableToolCallCount   int            `json:"unavailable_tool_call_count,omitempty"`
+	UnavailableToolCallsByName map[string]int `json:"unavailable_tool_calls_by_name,omitempty"`
+	BlockedToolCallCount       int            `json:"blocked_tool_call_count,omitempty"`
+	BlockedToolCallsByName     map[string]int `json:"blocked_tool_calls_by_name,omitempty"`
 	OffloadedToolResultCount   int            `json:"offloaded_tool_result_count,omitempty"`
 	OffloadedToolResultBytes   int            `json:"offloaded_tool_result_bytes,omitempty"`
 	OffloadedToolResultsByName map[string]int `json:"offloaded_tool_results_by_name,omitempty"`

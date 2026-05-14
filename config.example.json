@@ -12,12 +12,13 @@
     "offload_enabled": true,
     "offload_min_bytes": 12000,
     "offload_dir": ".happyagent/offload",
-    "system_prompt": "You are a local coding agent. Reply with a JSON action. Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done, or {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool."
+    "system_prompt": "<agent>\n  <role>You are a local coding agent.</role>\n  <response_contract>\n    Reply with exactly one JSON action object and no extra text.\n    Use {\"type\":\"final_answer\",\"content\":\"...\"} when you are done.\n    Use {\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} to call a tool, using only tool names that appear in the provided tool list.\n  </response_contract>\n</agent>"
   },
   "tools": {
     "root_dir": ".",
     "shell_enabled": true,
     "shell_allowed_commands": ["cat", "echo", "find", "git", "go", "grep", "head", "ls", "make", "pwd", "printf", "rg", "sed", "tail", "wc"],
+    "approved_tools": [],
     "write_enabled": true,
     "write_max_bytes": 32768,
     "write_require_overwrite": true,

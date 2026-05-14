@@ -111,6 +111,27 @@ func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord
 				trace.SuccessfulToolCallCount++
 				trace.SuccessfulToolCallsByName[toolCall.ToolName]++
 			}
+			if toolCall.Status == protocol.ToolCallStatusFailed {
+				trace.FailedToolCallCount++
+				if trace.FailedToolCallsByName == nil {
+					trace.FailedToolCallsByName = map[string]int{}
+				}
+				trace.FailedToolCallsByName[toolCall.ToolName]++
+			}
+			if toolCall.Status == protocol.ToolCallStatusUnavailable {
+				trace.UnavailableToolCallCount++
+				if trace.UnavailableToolCallsByName == nil {
+					trace.UnavailableToolCallsByName = map[string]int{}
+				}
+				trace.UnavailableToolCallsByName[toolCall.ToolName]++
+			}
+			if toolCall.Status == protocol.ToolCallStatusBlocked {
+				trace.BlockedToolCallCount++
+				if trace.BlockedToolCallsByName == nil {
+					trace.BlockedToolCallsByName = map[string]int{}
+				}
+				trace.BlockedToolCallsByName[toolCall.ToolName]++
+			}
 			if toolCall.Offloaded {
 				trace.OffloadedToolResultCount++
 				trace.OffloadedToolResultBytes += toolCall.OffloadedBytes

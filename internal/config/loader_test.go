@@ -72,6 +72,19 @@ func TestOverrideCSV(t *testing.T) {
 	}
 }
 
+func TestMergeApprovedTools(t *testing.T) {
+	got := MergeApprovedTools([]string{"file_write", "shell", "file_write", " "}, "shell,file_patch")
+	want := []string{"file_write", "shell", "file_patch"}
+	if len(got) != len(want) {
+		t.Fatalf("MergeApprovedTools() = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("MergeApprovedTools()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLLMConfigSafeString(t *testing.T) {
 	tests := []struct {
 		key  string

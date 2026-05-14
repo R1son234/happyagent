@@ -67,6 +67,37 @@ func TestRunInteractiveCreatesWorkspaceAndHandlesStatus(t *testing.T) {
 	}
 }
 
+func TestRunInteractivePassesConfiguredApprovedToolsToModelTurn(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	cfg := config.Default()
+	cfg.Tools.ApprovedTools = []string{"file_write"}
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        cfg,
+		Stdin:         strings.NewReader("帮我整理一份面试复习材料\n/exit\n"),
+		Stdout:        &bytes.Buffer{},
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 1 {
+		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
+	}
+	got := app.appendRequests[0].ApprovedTools
+	if len(got) != 1 || got[0] != "file_write" {
+		t.Fatalf("approved tools = %v, want [file_write]", got)
+	}
+}
+
 func TestRunInteractiveIngestsJDWithoutModelTurn(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
@@ -569,7 +600,7 @@ func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
 	if strings.Contains(output, "无法自动归档") {
 		t.Fatalf("did not expect ingest warning, got:\n%s", output)
 	}
-	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
+	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") {
 		t.Fatalf("expected model turn with auto-saved context, got %+v", app.appendRequests)
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
@@ -619,7 +650,7 @@ func TestRunInteractiveAutoArchivesThenStillCallsModelForRecordOnlyRequest(t *te
 	if len(app.appendRequests) != 1 {
 		t.Fatalf("expected auto-archive to be followed by a model turn, got %d", len(app.appendRequests))
 	}
-	if !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") || !strings.Contains(app.appendRequests[0].Input, sourcePath) {
+	if !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") || !strings.Contains(app.appendRequests[0].Input, sourcePath) {
 		t.Fatalf("expected model prompt to include original input and auto-saved context, got:\n%s", app.appendRequests[0].Input)
 	}
 	if !strings.Contains(stdout.String(), "assistant> 我已经记录") {
@@ -691,7 +722,7 @@ func TestRunInteractiveAutoArchivesNamedJDAndDiscoveredResumeFromSameDirectory(t
 	if !hasResume || !hasJD {
 		t.Fatalf("expected archived resume and jd items, got %+v", index.Items)
 	}
-	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "Auto-saved workspace assets") {
+	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") {
 		t.Fatalf("expected one model turn with auto-saved context, got %+v", app.appendRequests)
 	}
 }
@@ -989,7 +1020,16 @@ func TestRunInteractiveNaturalLanguageCommandHelpDoesNotCallModel(t *testing.T) 
 
 func TestBuildInteractivePromptIncludesFactBoundary(t *testing.T) {
 	prompt := BuildInteractivePrompt("帮我优化简历", ClassifyInput("帮我优化简历"))
-	for _, expected := range []string{"Career Copilot continuous conversation workspace", "Input classification", "User input", "帮我优化简历"} {
+	for _, expected := range []string{
+		"Career Copilot continuous conversation workspace",
+		"<input_classification>",
+		"<user_input>",
+		"帮我优化简历",
+		"<delivery_policy>",
+		"only say it was saved after the relevant write tool succeeds",
+		"<implementation_grounding>",
+		"label it as a suggested design or a point needing user confirmation",
+	} {
 		if !strings.Contains(prompt, expected) {
 			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
 		}

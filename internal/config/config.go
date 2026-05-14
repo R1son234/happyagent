@@ -39,6 +39,7 @@ type ToolsConfig struct {
 	RootDir                   string   `json:"root_dir"`
 	ShellEnabled              bool     `json:"shell_enabled"`
 	ShellAllowedCommands      []string `json:"shell_allowed_commands"`
+	ApprovedTools             []string `json:"approved_tools"`
 	WriteEnabled              bool     `json:"write_enabled"`
 	WriteMaxBytes             int      `json:"write_max_bytes"`
 	WriteRequireOverwrite     bool     `json:"write_require_overwrite"`
@@ -77,10 +78,14 @@ func Default() Config {
 			LoopMaxSteps:        8,
 			MaxObservationBytes: 8 * 1024,
 			RunTimeoutSeconds:   60,
-			SystemPrompt: "You are a local coding agent. Reply with exactly one JSON action object and no extra text. " +
-				"When you need to act, respond with " +
-				"{\"type\":\"tool_call\",\"tool_name\":\"...\",\"arguments\":{...}} " +
-				"using only tool names that appear in the provided tool list.",
+			SystemPrompt: `<agent>
+  <role>You are a local coding agent.</role>
+  <response_contract>
+    Reply with exactly one JSON action object and no extra text.
+    When you need to act, respond with {"type":"tool_call","tool_name":"...","arguments":{...}} using only tool names that appear in the provided tool list.
+    When you are done, use final_answer.
+  </response_contract>
+</agent>`,
 			OffloadEnabled:  false,
 			OffloadMinBytes: 12 * 1024,
 			OffloadDir:      ".happyagent/offload",

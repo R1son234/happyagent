@@ -242,6 +242,16 @@ Dangerous tools require explicit approval. For example:
   "inspect git status and update README if needed"
 ```
 
+To approve dangerous tools by default for local runs, set `tools.approved_tools` in `happyagent.local.json`:
+
+```json
+{
+  "tools": {
+    "approved_tools": ["file_write"]
+  }
+}
+```
+
 The `shell` tool only runs configured allowed commands and executes via argv rather than string interpolation.
 
 Large tool results can be offloaded to local files instead of staying in the model context. Configure this under `engine`:
