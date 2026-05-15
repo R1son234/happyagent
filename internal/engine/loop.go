@@ -238,6 +238,9 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}, nil
 		}
 		state.Todos = todos
+		if input.Hooks.OnTodosUpdated != nil {
+			input.Hooks.OnTodosUpdated(todos)
+		}
 	}
 	if input.Hooks.AfterToolCall != nil {
 		if err := input.Hooks.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {

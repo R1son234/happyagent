@@ -20,6 +20,7 @@ import (
 	"happyagent/internal/runtime"
 	"happyagent/internal/store"
 	"happyagent/internal/terminal"
+	"happyagent/internal/tools"
 )
 
 const (
@@ -32,6 +33,7 @@ type spinnerHooks struct {
 	OnStepStart     func(stepIndex int)
 	OnToolCallStart func(toolName string)
 	OnToolCallEnd   func(toolName string, succeeded bool)
+	OnTodosUpdated  func(todos []tools.TodoItem)
 	Stop            func()
 }
 
@@ -40,7 +42,7 @@ func newSpinnerHooks(w io.Writer) spinnerHooks {
 	s.Start("Thinking...")
 	return spinnerHooks{
 		OnStepStart: func(stepIndex int) {
-			s.UpdateMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
+			s.UpdateThinkingMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
 		},
 		OnToolCallStart: func(toolName string) {
 			s.UpdateMessage(fmt.Sprintf("Executing %s...", toolName))
@@ -50,8 +52,19 @@ func newSpinnerHooks(w io.Writer) spinnerHooks {
 				s.UpdateMessage(fmt.Sprintf("Tool %s failed, thinking...", toolName))
 			}
 		},
+		OnTodosUpdated: func(todos []tools.TodoItem) {
+			s.UpdateChecklist(checklistItemsFromTodos(todos))
+		},
 		Stop: func() { s.Stop() },
 	}
+}
+
+func checklistItemsFromTodos(todos []tools.TodoItem) []terminal.ChecklistItem {
+	items := make([]terminal.ChecklistItem, len(todos))
+	for i, todo := range todos {
+		items[i] = terminal.ChecklistItem{Content: todo.Content, Status: todo.Status}
+	}
+	return items
 }
 
 type sessionApplication interface {
@@ -238,6 +251,7 @@ func main() {
 		OnStepStart:     spinner.OnStepStart,
 		OnToolCallStart: spinner.OnToolCallStart,
 		OnToolCallEnd:   spinner.OnToolCallEnd,
+		OnTodosUpdated:  spinner.OnTodosUpdated,
 	})
 	if err != nil {
 		if record.ID != "" {
@@ -378,6 +392,7 @@ func runSingleTurn(application sessionApplication, cfg config.Config, sessionID 
 		OnStepStart:     spinner.OnStepStart,
 		OnToolCallStart: spinner.OnToolCallStart,
 		OnToolCallEnd:   spinner.OnToolCallEnd,
+		OnTodosUpdated:  spinner.OnTodosUpdated,
 	})
 	if err != nil {
 		return record, err

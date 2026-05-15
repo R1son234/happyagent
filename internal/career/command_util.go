@@ -16,6 +16,7 @@ import (
 	"happyagent/internal/runlog"
 	"happyagent/internal/store"
 	"happyagent/internal/terminal"
+	"happyagent/internal/tools"
 )
 
 func runCareerTurn(deps Dependencies, sessionID string, prompt string, classification InputClassification) (store.RunRecord, error) {
@@ -44,7 +45,7 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 		ApprovedTools: deps.Config.Tools.ApprovedTools,
 		Events:        []observe.Event{classificationEvent(classification)},
 		OnStepStart: func(stepIndex int) {
-			spinner.UpdateMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
+			spinner.UpdateThinkingMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
 		},
 		OnToolCallStart: func(toolName string) {
 			spinner.UpdateMessage(fmt.Sprintf("Executing %s...", toolName))
@@ -53,6 +54,13 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 			if !succeeded {
 				spinner.UpdateMessage(fmt.Sprintf("Tool %s failed, thinking...", toolName))
 			}
+		},
+		OnTodosUpdated: func(todos []tools.TodoItem) {
+			items := make([]terminal.ChecklistItem, len(todos))
+			for i, todo := range todos {
+				items[i] = terminal.ChecklistItem{Content: todo.Content, Status: todo.Status}
+			}
+			spinner.UpdateChecklist(items)
 		},
 	})
 	if err != nil {

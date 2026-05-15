@@ -21,6 +21,7 @@ type RunHooks struct {
 	OnStepStart         func(stepIndex int)
 	OnToolCallStart     func(toolName string)
 	OnToolCallEnd       func(toolName string, succeeded bool)
+	OnTodosUpdated      func(todos []tools.TodoItem)
 }
 
 type RunInput struct {

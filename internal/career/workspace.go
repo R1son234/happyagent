@@ -1,6 +1,7 @@
 package career
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -58,30 +59,33 @@ type WorkspaceItem struct {
 }
 
 type WorkspaceItemMetadata struct {
-	ID             string    `json:"id"`
-	Title          string    `json:"title"`
-	Type           string    `json:"type"`
-	CreatedAt      time.Time `json:"created_at"`
-	Source         string    `json:"source"`
-	Original       string    `json:"original,omitempty"`
-	ExternalSource string    `json:"external_source,omitempty"`
-	Extractor      string    `json:"extractor,omitempty"`
-	MIMEType       string    `json:"mime_type,omitempty"`
-	ExtractStatus  string    `json:"extract_status,omitempty"`
-	ExtractError   string    `json:"extract_error,omitempty"`
+	ID                 string    `json:"id"`
+	Title              string    `json:"title"`
+	Type               string    `json:"type"`
+	CreatedAt          time.Time `json:"created_at"`
+	Source             string    `json:"source"`
+	Original           string    `json:"original,omitempty"`
+	ExternalSource     string    `json:"external_source,omitempty"`
+	Extractor          string    `json:"extractor,omitempty"`
+	MIMEType           string    `json:"mime_type,omitempty"`
+	ExtractStatus      string    `json:"extract_status,omitempty"`
+	ExtractError       string    `json:"extract_error,omitempty"`
+	SourceFingerprint    string `json:"source_fingerprint,omitempty"`
+	ContentFingerprint  string `json:"content_fingerprint,omitempty"`
 }
 
 type WorkspaceFileInput struct {
-	ItemType      string
-	Title         string
-	Text          string
-	OriginalPath  string
-	OriginalName  string
-	Now           time.Time
-	Extractor     string
-	MIMEType      string
-	ExtractStatus string
-	ExtractError  string
+	ItemType           string
+	Title              string
+	Text               string
+	OriginalPath       string
+	OriginalName       string
+	Now                time.Time
+	Extractor          string
+	MIMEType           string
+	ExtractStatus      string
+	ExtractError       string
+	ContentFingerprint string
 }
 
 type GuidedMaterialInput struct {
@@ -223,4 +227,39 @@ func (w *Workspace) readJSON(path string, dest any) error {
 		return fmt.Errorf("parse %q: %w", path, err)
 	}
 	return nil
+}
+
+// ContentFingerprint computes a SHA-256 hash of normalized text content.
+func ContentFingerprint(text string) string {
+	normalized := strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
+	hash := sha256.Sum256([]byte(normalized))
+	return fmt.Sprintf("%x", hash[:16])
+}
+
+// FindExistingByContentFingerprint searches the workspace index and metadata for an item
+// of the given type with a matching content fingerprint. Returns the existing item and true
+// if found, or a zero WorkspaceItem and false otherwise.
+func (w *Workspace) FindExistingByContentFingerprint(itemType string, contentFingerprint string) (WorkspaceItem, bool) {
+	if contentFingerprint == "" {
+		return WorkspaceItem{}, false
+	}
+	index, err := w.ReadIndex()
+	if err != nil {
+		return WorkspaceItem{}, false
+	}
+	for _, item := range index.Items {
+		if item.Type != itemType {
+			continue
+		}
+		metaPath := filepath.Join(w.Root, filepath.FromSlash(item.Path))
+		metaPath = filepath.Join(filepath.Dir(metaPath), "metadata.json")
+		var meta WorkspaceItemMetadata
+		if err := w.readJSON(metaPath, &meta); err != nil {
+			continue
+		}
+		if meta.ContentFingerprint == contentFingerprint {
+			return item, true
+		}
+	}
+	return WorkspaceItem{}, false
 }

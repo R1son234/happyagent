@@ -83,12 +83,18 @@ func TestRunnerAppendsTodoReminderToToolResultsWhileTodosAreUnfinished(t *testin
 	}
 
 	runner := NewRunner(client, registry, 5)
+	var todoUpdates [][]tools.TodoItem
 	result, err := runner.Run(context.Background(), RunInput{
 		Input:        "read and summarize",
 		SystemPrompt: "base prompt",
 		ToolDefs: []tools.Definition{
 			tools.NewWriteTodosTool().Definition(),
 			{Name: "file_read"},
+		},
+		Hooks: RunHooks{
+			OnTodosUpdated: func(todos []tools.TodoItem) {
+				todoUpdates = append(todoUpdates, todos)
+			},
 		},
 	})
 	if err != nil {
@@ -119,6 +125,15 @@ func TestRunnerAppendsTodoReminderToToolResultsWhileTodosAreUnfinished(t *testin
 	if !strings.Contains(fileReadObservation.Content, "file contents") ||
 		!strings.Contains(fileReadObservation.Content, "There're still some TODOs not marked as 'completed'") {
 		t.Fatalf("expected file_read observation to include reminder, got %q", fileReadObservation.Content)
+	}
+	if len(todoUpdates) != 2 {
+		t.Fatalf("expected 2 todo update hooks, got %d", len(todoUpdates))
+	}
+	if todoUpdates[0][0].Content != "Read file" || todoUpdates[0][0].Status != "in_progress" {
+		t.Fatalf("unexpected first todo update: %+v", todoUpdates[0])
+	}
+	if todoUpdates[1][0].Status != "completed" || todoUpdates[1][1].Status != "completed" {
+		t.Fatalf("unexpected final todo update: %+v", todoUpdates[1])
 	}
 }
 

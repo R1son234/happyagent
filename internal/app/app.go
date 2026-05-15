@@ -12,6 +12,7 @@ import (
 	"happyagent/internal/protocol"
 	"happyagent/internal/runtime"
 	"happyagent/internal/store"
+	"happyagent/internal/tools"
 )
 
 type Runner interface {
@@ -40,15 +41,16 @@ func New(runner Runner, store *store.Store, metrics *observe.Metrics) (*Applicat
 }
 
 type AppendTurnRequest struct {
-	SessionID     string
-	ProfileName   string
-	Input         string
-	SystemPrompt  string
-	ApprovedTools []string
-	Events        []observe.Event
-	OnStepStart   func(stepIndex int)
+	SessionID       string
+	ProfileName     string
+	Input           string
+	SystemPrompt    string
+	ApprovedTools   []string
+	Events          []observe.Event
+	OnStepStart     func(stepIndex int)
 	OnToolCallStart func(toolName string)
 	OnToolCallEnd   func(toolName string, succeeded bool)
+	OnTodosUpdated  func(todos []tools.TodoItem)
 }
 
 func (a *Application) CreateSession(profileName string) (store.SessionRecord, error) {
@@ -99,6 +101,7 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		OnStepStart:     req.OnStepStart,
 		OnToolCallStart: req.OnToolCallStart,
 		OnToolCallEnd:   req.OnToolCallEnd,
+		OnTodosUpdated:  req.OnTodosUpdated,
 	})
 
 	record := store.RunRecord{

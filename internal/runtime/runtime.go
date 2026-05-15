@@ -29,6 +29,7 @@ type RunRequest struct {
 	OnStepStart     func(stepIndex int)
 	OnToolCallStart func(toolName string)
 	OnToolCallEnd   func(toolName string, succeeded bool)
+	OnTodosUpdated  func(todos []tools.TodoItem)
 }
 
 type RunResult struct {
@@ -90,6 +91,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			OnStepStart:         req.OnStepStart,
 			OnToolCallStart:     req.OnToolCallStart,
 			OnToolCallEnd:       req.OnToolCallEnd,
+			OnTodosUpdated:      req.OnTodosUpdated,
 		},
 	})
 	if err != nil {

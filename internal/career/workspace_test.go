@@ -337,3 +337,31 @@ func TestLooksLikeJD(t *testing.T) {
 		t.Fatalf("short interview note should not be detected as JD")
 	}
 }
+
+func TestContentFingerprintIsDeterministic(t *testing.T) {
+	text := "# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"
+	fp1 := ContentFingerprint(text)
+	fp2 := ContentFingerprint(text)
+	if fp1 != fp2 {
+		t.Fatalf("expected deterministic fingerprint, got %s and %s", fp1, fp2)
+	}
+	if fp1 == "" {
+		t.Fatalf("expected non-empty fingerprint")
+	}
+}
+
+func TestContentFingerprintDiffersForDifferentContent(t *testing.T) {
+	fp1 := ContentFingerprint("# JD\n岗位职责：负责增长分析。")
+	fp2 := ContentFingerprint("# JD\n岗位职责：负责内容运营。")
+	if fp1 == fp2 {
+		t.Fatalf("expected different fingerprints for different content, both got %s", fp1)
+	}
+}
+
+func TestContentFingerprintNormalizesWhitespace(t *testing.T) {
+	fp1 := ContentFingerprint("  hello   world  ")
+	fp2 := ContentFingerprint("hello world")
+	if fp1 != fp2 {
+		t.Fatalf("expected same fingerprint after whitespace normalization, got %s and %s", fp1, fp2)
+	}
+}

@@ -1164,3 +1164,193 @@ func validCareerReportJSON() string {
   "appendix": {"files_reviewed": ["resume.md"]}
 }`
 }
+
+func TestRunInteractiveAnalyzeDoesNotScanInboxWithoutInboxSignal(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "这是一份分析结果。"}},
+	}
+	workspaceRoot := t.TempDir()
+	// Pre-populate workspace with resume and JD so analysis can proceed.
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if _, err := ws.AddJD("# Sample JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。", time.Now()); err != nil {
+		t.Fatalf("AddJD() error = %v", err)
+	}
+	if _, err := ws.AddMaterial(WorkspaceTypeResume, "简历\n工作经历：项目协作", time.Now()); err != nil {
+		t.Fatalf("AddMaterial() error = %v", err)
+	}
+	// Put a file in inbox — it should NOT be scanned.
+	inboxPath := filepath.Join(workspaceRoot, "inbox", "extra-jd.txt")
+	if err := os.WriteFile(inboxPath, []byte("# Extra JD\n岗位职责：另一个岗位。"), 0o644); err != nil {
+		t.Fatalf("write inbox file: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("后续分析，核心帮我分析阿里云对应的岗位\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 1 {
+		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
+	}
+	// Inbox file should still exist (not consumed).
+	if _, err := os.Stat(inboxPath); err != nil {
+		t.Fatalf("inbox file should still exist: %v", err)
+	}
+	// Index should only have the pre-populated resume and JD, not the inbox file.
+	index, err := ws.ReadIndex()
+	if err != nil {
+		t.Fatalf("ReadIndex() error = %v", err)
+	}
+	for _, item := range index.Items {
+		if strings.Contains(item.Path, "extra-jd") {
+			t.Fatalf("inbox file should not have been archived: %+v", item)
+		}
+	}
+}
+
+func TestRunInteractiveMemoryIntentDoesNotScanInbox(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+		runs: []store.RunRecord{{ID: "run-1", SessionID: "session-career", Output: "已更新记忆。"}},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	jdPath := filepath.Join(workspaceRoot, "inbox", "jd.txt")
+	if err := os.WriteFile(jdPath, []byte("# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("更新 memory：以后分析岗位时不要自动重新扫描 inbox\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 1 {
+		t.Fatalf("expected one model turn for memory intent, got %d", len(app.appendRequests))
+	}
+	// Verify the prompt includes memory priority section and suppresses analysis context.
+	prompt := app.appendRequests[0].Input
+	if !strings.Contains(prompt, "<memory_priority>") {
+		t.Fatalf("expected memory_priority section in prompt:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "memory_save") {
+		t.Fatalf("expected memory_save in memory prompt:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<workspace_pointers>") {
+		t.Fatalf("memory prompt should not include workspace_pointers:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<analysis_priority>") {
+		t.Fatalf("memory prompt should not include analysis_priority:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<workspace_guide>") {
+		t.Fatalf("memory prompt should not include workspace_guide:\n%s", prompt)
+	}
+	// Inbox file should still exist (not scanned).
+	if _, err := os.Stat(jdPath); err != nil {
+		t.Fatalf("inbox file should still exist: %v", err)
+	}
+	// No workspace items should have been created.
+	ws, err := OpenWorkspace(workspaceRoot, time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	index, err := ws.ReadIndex()
+	if err != nil {
+		t.Fatalf("ReadIndex() error = %v", err)
+	}
+	if len(index.Items) != 0 {
+		t.Fatalf("memory intent should not archive items, got %+v", index.Items)
+	}
+}
+
+func TestBuildInteractivePromptForMemoryIntentPrefersMemoryTools(t *testing.T) {
+	classification := InputClassification{
+		Type:       string(CareerIntentMemory),
+		Confidence: 0.9,
+		Signals:    []string{"更新 memory"},
+	}
+	prompt := BuildInteractivePrompt("更新 memory：以后分析岗位时不要自动重新扫描 inbox", classification)
+	if !strings.Contains(prompt, "<memory_priority>") {
+		t.Fatalf("expected memory_priority section:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "memory_save") {
+		t.Fatalf("expected memory_save instruction:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "DO NOT DO CAREER ANALYSIS") {
+		t.Fatalf("expected strong anti-analysis instruction:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<workspace_pointers>") {
+		t.Fatalf("memory prompt should suppress workspace_pointers:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<analysis_priority>") {
+		t.Fatalf("memory prompt should suppress analysis_priority:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "<workspace_guide>") {
+		t.Fatalf("memory prompt should suppress workspace_guide:\n%s", prompt)
+	}
+}
+
+func TestRunInteractiveInboxSignalScansInbox(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
+		t.Fatalf("mkdir inbox: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 高德地图 AI Coding 工程师\n岗位职责：负责 AI Coding 工具建设。\n任职要求：熟悉后端工程和 LLM 应用。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("帮我识别下inbox的内容\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "已整理 inbox 文件到 JD") {
+		t.Fatalf("expected inbox scan confirmation, got:\n%s", output)
+	}
+}

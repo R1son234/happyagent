@@ -98,21 +98,34 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 			classification.Reason = "low confidence classification saved as record"
 		}
 	}
+
+	// Compute content fingerprint and check for existing item with same content.
+	contentFingerprint := ContentFingerprint(extracted.Text)
+	if existing, found := ws.FindExistingByContentFingerprint(itemType, contentFingerprint); found {
+		return IngestResult{
+			Item:         existing,
+			OriginalRel:  existing.Metadata.Original,
+			ExtractedRel: existing.Metadata.Source,
+			ItemType:     existing.Type,
+		}, nil
+	}
+
 	result, err := ws.AddGuidedMaterial(GuidedMaterialInput{
 		ItemType:       itemType,
 		Classification: classification,
 		SourceLabel:    absPath,
 		Now:            now,
 		File: WorkspaceFileInput{
-			ItemType:      itemType,
-			Text:          extracted.Text,
-			OriginalPath:  absPath,
-			OriginalName:  filepath.Base(absPath),
-			Now:           now,
-			Extractor:     extracted.Extractor,
-			MIMEType:      extracted.MIMEType,
-			ExtractStatus: extracted.ExtractStatus,
-			ExtractError:  extracted.ExtractError,
+			ItemType:           itemType,
+			Text:               extracted.Text,
+			OriginalPath:       absPath,
+			OriginalName:       filepath.Base(absPath),
+			Now:                now,
+			Extractor:          extracted.Extractor,
+			MIMEType:           extracted.MIMEType,
+			ExtractStatus:      extracted.ExtractStatus,
+			ExtractError:       extracted.ExtractError,
+			ContentFingerprint: contentFingerprint,
 		},
 	})
 	if err != nil {

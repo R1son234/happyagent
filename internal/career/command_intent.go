@@ -11,6 +11,14 @@ import (
 
 func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
 	intent := ClassifyIntent(input)
+
+	// Memory intent: skip inbox scan and archive, route directly to model with memory-focused prompt.
+	if isMemoryIntent(intent) {
+		classification := ClassifyInputWithGuide(input, WorkspaceGuide{})
+		classification.Type = string(CareerIntentMemory)
+		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, nil, nil)
+	}
+
 	guide, err := workspace.LoadGuide()
 	if err != nil {
 		return err
@@ -144,12 +152,18 @@ func detectWorkspaceTypeHintNearPathWithGuide(input string, path string, guide W
 }
 
 func shouldScanInbox(intent IntentClassification) bool {
-	switch intent.Intent {
-	case CareerIntentIngest, CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
+	if intent.Intent == CareerIntentIngest {
 		return true
-	default:
-		return false
 	}
+	// Also scan when the input explicitly mentions inbox/import signals,
+	// even if the classified intent is analyze or another type.
+	for _, signal := range intent.Signals {
+		switch strings.ToLower(signal) {
+		case "inbox", "放进 inbox", "放进来了", "导入", "扫描", "scan", "记录下来", "存下来", "保存":
+			return true
+		}
+	}
+	return false
 }
 
 func shouldGenerateOutput(intent CareerIntent) bool {
@@ -159,6 +173,10 @@ func shouldGenerateOutput(intent CareerIntent) bool {
 	default:
 		return false
 	}
+}
+
+func isMemoryIntent(intent IntentClassification) bool {
+	return intent.Intent == CareerIntentMemory
 }
 
 func outputSpec(intent CareerIntent) (string, string) {

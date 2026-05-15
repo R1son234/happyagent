@@ -183,3 +183,46 @@ func TestIngestInboxArchivesFilesAndPreservesInboxCopies(t *testing.T) {
 		t.Fatalf("expected jd inbox copy to be preserved, err=%v", err)
 	}
 }
+
+func TestIngestInboxSkipsAlreadyArchivedFiles(t *testing.T) {
+	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	jdPath := filepath.Join(ws.Root, "inbox", "jd.txt")
+	content := "# JD\n岗位职责：负责增长分析。\n任职要求：熟悉内容策略。"
+	if err := os.WriteFile(jdPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+
+	// First ingest should create a new item.
+	first, err := IngestInbox(context.Background(), ws, time.Now())
+	if err != nil {
+		t.Fatalf("first IngestInbox() error = %v", err)
+	}
+	if len(first.Items) != 1 {
+		t.Fatalf("expected 1 ingested item on first run, got %d", len(first.Items))
+	}
+	firstID := first.Items[0].ID
+
+	// Second ingest of the same file should skip (dedup by content fingerprint).
+	second, err := IngestInbox(context.Background(), ws, time.Now())
+	if err != nil {
+		t.Fatalf("second IngestInbox() error = %v", err)
+	}
+	if len(second.Items) != 1 {
+		t.Fatalf("expected 1 item on second run (dedup), got %d", len(second.Items))
+	}
+	if second.Items[0].ID != firstID {
+		t.Fatalf("expected same item ID on dedup, got first=%s second=%s", firstID, second.Items[0].ID)
+	}
+
+	// Index should still have exactly 1 item.
+	index, err := ws.ReadIndex()
+	if err != nil {
+		t.Fatalf("ReadIndex() error = %v", err)
+	}
+	if len(index.Items) != 1 {
+		t.Fatalf("expected 1 index item after dedup, got %d", len(index.Items))
+	}
+}

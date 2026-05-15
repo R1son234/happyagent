@@ -13,6 +13,7 @@ const (
 	CareerIntentGapPlan         CareerIntent = "gap_plan"
 	CareerIntentInterviewReview CareerIntent = "interview_review"
 	CareerIntentStatus          CareerIntent = "status"
+	CareerIntentMemory          CareerIntent = "memory"
 )
 
 type IntentClassification struct {
@@ -30,6 +31,7 @@ func ClassifyIntent(input string) IntentClassification {
 		intent  CareerIntent
 		signals []string
 	}{
+		{CareerIntentMemory, []string{"更新 memory", "更新记忆", "记住", "以后你要", "以后按", "别再", "不要再", "我的偏好", "记忆里"}},
 		{CareerIntentInterviewReview, []string{"刚面完", "面试官问我", "我回答", "interviewer asked", "asked me", "面试复盘"}},
 		{CareerIntentResumeReview, []string{"优化简历", "改简历", "简历建议", "rewrite my resume", "rewrite resume", "resume review", "给我建议", "看看内容"}},
 		{CareerIntentInterviewBrief, []string{"面试准备", "准备一面", "准备二面", "interview brief", "mock interview", "准备面试", "准备一下面试"}},
@@ -50,6 +52,14 @@ func ClassifyIntent(input string) IntentClassification {
 		}
 		if len(matched) == 0 {
 			continue
+		}
+		// Memory intent has absolute priority: any memory signal match returns immediately.
+		if candidate.intent == CareerIntentMemory {
+			return IntentClassification{
+				Intent:     CareerIntentMemory,
+				Confidence: 0.55 + float64(len(matched))*0.1,
+				Signals:    matched,
+			}
 		}
 		switch candidate.intent {
 		case CareerIntentAnalyze:

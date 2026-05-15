@@ -70,17 +70,18 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 		}
 	}
 	metadata := WorkspaceItemMetadata{
-		ID:             id,
-		Title:          title,
-		Type:           itemType,
-		CreatedAt:      now,
-		Source:         filepath.ToSlash(sourceRel),
-		Original:       filepath.ToSlash(originalRel),
-		ExternalSource: filepath.Clean(strings.TrimSpace(input.OriginalPath)),
-		Extractor:      input.Extractor,
-		MIMEType:       input.MIMEType,
-		ExtractStatus:  normalizeExtractStatus(input.ExtractStatus),
-		ExtractError:   strings.TrimSpace(input.ExtractError),
+		ID:                 id,
+		Title:              title,
+		Type:               itemType,
+		CreatedAt:          now,
+		Source:             filepath.ToSlash(sourceRel),
+		Original:           filepath.ToSlash(originalRel),
+		ExternalSource:     filepath.Clean(strings.TrimSpace(input.OriginalPath)),
+		Extractor:          input.Extractor,
+		MIMEType:           input.MIMEType,
+		ExtractStatus:      normalizeExtractStatus(input.ExtractStatus),
+		ExtractError:       strings.TrimSpace(input.ExtractError),
+		ContentFingerprint: input.ContentFingerprint,
 	}
 	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
 		return WorkspaceItem{}, err
