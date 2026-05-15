@@ -165,9 +165,6 @@ func (g WorkspaceGuide) Validate() error {
 	if g.Version == 0 {
 		return fmt.Errorf("workspace guide version must not be empty")
 	}
-	if strings.TrimSpace(g.DemoTopic) == "" {
-		return fmt.Errorf("workspace guide demo_topic must not be empty")
-	}
 	if len(g.Directories) == 0 {
 		return fmt.Errorf("workspace guide directories must not be empty")
 	}
@@ -238,9 +235,6 @@ func (g WorkspaceGuide) PromptSummary() string {
 			b.WriteString(".")
 		}
 		b.WriteString("\n")
-	}
-	if g.Markdown.DemoRedaction {
-		b.WriteString(fmt.Sprintf("- Use %q as the neutral demo topic in generated examples, specs, templates, and tests.\n", g.DemoTopic))
 	}
 	if len(g.SyncRules) > 0 {
 		b.WriteString("Sync rules:\n")

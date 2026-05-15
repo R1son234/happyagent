@@ -27,18 +27,29 @@ func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Ti
 		}
 		result.PrepareItem = prepareItem
 	}
-	roleDir := filepath.Join("my-interviews", "市场营销")
-	checklistRel := filepath.Join(roleDir, "面经来源与复习清单.md")
-	checklistContent := fmt.Sprintf("# 面经来源与复习清单\n\n- 来源资料：%s\n- 资料性质：公开面经，不是用户真实面试记录。\n- 导入时间：%s\n", experienceItem.Path, now.Format(time.RFC3339))
-	if err := w.writeWorkspaceText(checklistRel, checklistContent); err != nil {
+	_, index, err := w.Status()
+	if err != nil {
 		return PublicInterviewArchiveResult{}, err
 	}
-	result.MyInterviewRel = filepath.ToSlash(checklistRel)
+	ctx := w.buildReviewLibraryContext(experienceItem, index)
+	result.Domain = ctx.Domain
+	generatedPaths, err := w.writeExperienceReviewLibrary(ctx, experienceItem, now)
+	if err != nil {
+		return PublicInterviewArchiveResult{}, err
+	}
+	result.GeneratedPaths = generatedPaths
+	result.MyInterviewRel = findGeneratedPathWithSuffix(generatedPaths, "面经链接与公司观察.md")
 	recordRel := filepath.Join("record", "imports", fmt.Sprintf("%s-public-interview-experience.md", now.Format("20060102-150405")))
 	var b strings.Builder
 	b.WriteString("# Public Interview Experience Import\n\n")
 	b.WriteString(fmt.Sprintf("- source_path: %s\n", experienceItem.Path))
-	b.WriteString(fmt.Sprintf("- my_interview_path: %s\n", result.MyInterviewRel))
+	b.WriteString(fmt.Sprintf("- domain: %s\n", result.Domain.Name))
+	if result.MyInterviewRel != "" {
+		b.WriteString(fmt.Sprintf("- observation_path: %s\n", result.MyInterviewRel))
+	}
+	if len(result.GeneratedPaths) > 0 {
+		b.WriteString(fmt.Sprintf("- generated_paths: %s\n", strings.Join(result.GeneratedPaths, ", ")))
+	}
 	if result.PrepareItem.ID != "" {
 		b.WriteString(fmt.Sprintf("- prepare_path: %s\n", result.PrepareItem.Path))
 	}
@@ -60,6 +71,15 @@ func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Ti
 		return PublicInterviewArchiveResult{}, err
 	}
 	return result, nil
+}
+
+func findGeneratedPathWithSuffix(paths []string, suffix string) string {
+	for _, path := range paths {
+		if strings.HasSuffix(path, suffix) {
+			return path
+		}
+	}
+	return ""
 }
 
 func (w *Workspace) writeClassificationRecord(item WorkspaceItem, classification InputClassification, sourceLabel string, now time.Time, syncActions []string) (string, error) {

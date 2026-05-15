@@ -30,7 +30,11 @@ func printCareerWelcome(output io.Writer, workspace *Workspace, sessionID string
 		fmt.Sprintf("项目素材：%d 份", counts[WorkspaceTypePrepare]),
 		fmt.Sprintf("面经/面试记录：%d 份", counts[WorkspaceTypeExperiences]+counts[WorkspaceTypeMyInterviews]),
 	}, "生成结果", []string{
-		"所有报告和建议会保存到：",
+		"复习入口：",
+		"",
+		"  " + filepath.ToSlash(filepath.Join(workspace.Root, "面试资料库首页.md")),
+		"",
+		"报告和建议会保存到：",
 		"",
 		"  " + filepath.ToSlash(filepath.Join(workspace.Root, "outputs")) + "/",
 	}, "你可以直接说", []string{
@@ -53,7 +57,8 @@ func printCareerHelp(output io.Writer) {
 	fmt.Fprintln(output, "高级命令：")
 	fmt.Fprintln(output, "  /help     查看帮助")
 	fmt.Fprintln(output, "  /status   查看当前工作区状态")
-	fmt.Fprintln(output, "  /export   生成 jd-match、resume-review、project-pitch、interview-review、review-material")
+	fmt.Fprintln(output, "  /library  刷新可复习资料库首页、总览、资料包和题库")
+	fmt.Fprintln(output, "  /export   生成 review-library、jd-match、resume-review、project-pitch、interview-review、review-material")
 	fmt.Fprintln(output, "  /add jd   添加 JD；多行内容用单独一行 . 结束")
 	fmt.Fprintln(output, "  /add resume | prepare | experiences | my-interviews | record")
 	fmt.Fprintln(output, "  /exit     退出")

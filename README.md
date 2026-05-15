@@ -79,6 +79,7 @@ The interactive workspace keeps material local. Advanced commands are still avai
 
 - `/status` shows workspace counts and active pointers.
 - `/add <type>` archives material.
+- `/library` refreshes the review-library homepage, overview pages, material packages, and question banks.
 - `/export <kind>` generates Markdown material and saves it back into the relevant workspace area.
 - `/help` lists available commands.
 - `/exit` exits the workspace.
@@ -97,6 +98,7 @@ The workspace creates this user-facing layout:
 ```text
 career-workspace/
   inbox/
+  面试资料库首页.md
   resume/
   jd/
   experiences/
@@ -108,7 +110,7 @@ career-workspace/
   index.json
 ```
 
-`record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library.
+`面试资料库首页.md` is the main review entry point. It links to JD, public interview experience, project preparation, and per-role interview material. `record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library. `metadata.json`, `source.*`, and `extracted.md` are preserved for evidence tracing; the review flow should start from index pages, material packages, question banks, and role pages.
 
 Examples:
 

@@ -140,7 +140,29 @@ func (w *Workspace) AddGuidedMaterial(input GuidedMaterialInput) (GuidedMaterial
 	if err != nil {
 		return GuidedMaterialResult{}, err
 	}
-	recordRel, err := w.writeClassificationRecord(item, classification, input.SourceLabel, now, nil)
+	var syncActions []string
+	libraryContent := strings.TrimSpace(input.Content)
+	if libraryContent == "" {
+		libraryContent = strings.TrimSpace(input.File.Text)
+	}
+	if item.Type == WorkspaceTypeExperiences && libraryContent != "" {
+		_, index, err := w.Status()
+		if err != nil {
+			return GuidedMaterialResult{}, err
+		}
+		ctx := w.buildReviewLibraryContext(item, index)
+		if strings.TrimSpace(ctx.ExperienceContent) == "" {
+			ctx.ExperienceContent = libraryContent
+		}
+		paths, err := w.writeExperienceReviewLibrary(ctx, item, now)
+		if err != nil {
+			return GuidedMaterialResult{}, err
+		}
+		if len(paths) > 0 {
+			syncActions = append(syncActions, "review_library:"+strings.Join(paths, ","))
+		}
+	}
+	recordRel, err := w.writeClassificationRecord(item, classification, input.SourceLabel, now, syncActions)
 	if err != nil {
 		return GuidedMaterialResult{}, err
 	}

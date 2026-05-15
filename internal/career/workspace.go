@@ -70,8 +70,8 @@ type WorkspaceItemMetadata struct {
 	MIMEType           string    `json:"mime_type,omitempty"`
 	ExtractStatus      string    `json:"extract_status,omitempty"`
 	ExtractError       string    `json:"extract_error,omitempty"`
-	SourceFingerprint    string `json:"source_fingerprint,omitempty"`
-	ContentFingerprint  string `json:"content_fingerprint,omitempty"`
+	SourceFingerprint  string    `json:"source_fingerprint,omitempty"`
+	ContentFingerprint string    `json:"content_fingerprint,omitempty"`
 }
 
 type WorkspaceFileInput struct {
@@ -107,6 +107,8 @@ type PublicInterviewArchiveResult struct {
 	PrepareItem    WorkspaceItem
 	MyInterviewRel string
 	RecordRel      string
+	GeneratedPaths []string
+	Domain         ReviewDomain
 }
 
 func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
@@ -150,6 +152,9 @@ func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
 		if err := ws.writeJSON(ws.guidePath(), DefaultWorkspaceGuide()); err != nil {
 			return nil, err
 		}
+	}
+	if err := ws.EnsureReviewLibrarySkeleton(now); err != nil {
+		return nil, err
 	}
 	return ws, nil
 }

@@ -221,6 +221,39 @@ func TestRunInteractiveAddResumeCommandArchivesResume(t *testing.T) {
 	}
 }
 
+func TestRunInteractiveLibraryCommandRefreshesReviewLibrary(t *testing.T) {
+	app := &stubCareerApp{
+		session: store.SessionRecord{
+			ID:        "session-career",
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
+		},
+	}
+	workspaceRoot := t.TempDir()
+	var stdout bytes.Buffer
+
+	err := RunInteractive(Dependencies{
+		App:           app,
+		Config:        config.Default(),
+		Stdin:         strings.NewReader("/library\n/exit\n"),
+		Stdout:        &stdout,
+		Stderr:        &bytes.Buffer{},
+		WorkspaceRoot: workspaceRoot,
+	})
+	if err != nil {
+		t.Fatalf("RunInteractive() error = %v", err)
+	}
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected /library to avoid model turn, got %d", len(app.appendRequests))
+	}
+	if !strings.Contains(stdout.String(), "已刷新可复习资料库") {
+		t.Fatalf("missing library confirmation:\n%s", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, "面试资料库首页.md")); err != nil {
+		t.Fatalf("expected review library home: %v", err)
+	}
+}
+
 func TestRunInteractiveAddJDFileCommandArchivesOriginalFile(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{

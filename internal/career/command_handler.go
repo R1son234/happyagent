@@ -15,7 +15,19 @@ import (
 func handleExportCommand(output io.Writer, workspace *Workspace, input string) error {
 	kind := strings.TrimSpace(strings.TrimPrefix(input, "/export"))
 	if kind == "" {
-		fmt.Fprintln(output, "assistant> 用法：/export <类型>。支持 jd-match、resume-review、project-pitch、interview-review、review-material。")
+		fmt.Fprintln(output, "assistant> 用法：/export <类型>。支持 review-library、jd-match、resume-review、project-pitch、interview-review、review-material。")
+		return nil
+	}
+	if kind == "review-library" || kind == "interview-library" {
+		result, err := workspace.GenerateReviewLibrary(time.Now())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(output, "assistant> 已刷新可复习资料库：面试资料库首页.md")
+		if len(result.Paths) > 0 {
+			fmt.Fprintf(output, "；更新 %d 个资料文件", len(result.Paths))
+		}
+		fmt.Fprintln(output)
 		return nil
 	}
 	title, content, err := RenderWorkspaceArtifact(workspace, kind)
@@ -96,7 +108,7 @@ func saveMaterialAndPrint(output io.Writer, workspace *Workspace, itemType strin
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "assistant> %s，并保存到 %s；已同步沉淀到 %s，并记录导入流程 %s。\n", prefix, result.ExperienceItem.Path, result.MyInterviewRel, result.RecordRel)
+		fmt.Fprintf(output, "assistant> %s，并保存到 %s；已同步生成 %d 个可复习资料文件，并记录导入流程 %s。\n", prefix, result.ExperienceItem.Path, len(result.GeneratedPaths), result.RecordRel)
 		return nil
 	}
 	guide, err := workspace.LoadGuide()

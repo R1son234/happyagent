@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string, error) {
@@ -13,6 +14,12 @@ func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string,
 		return "", "", err
 	}
 	switch kind {
+	case "review-library", "interview-library":
+		result, err := workspace.GenerateReviewLibrary(time.Now())
+		if err != nil {
+			return "", "", err
+		}
+		return "Review Library", renderReviewLibraryExport(result), nil
 	case "jd-match":
 		return "JD Match Report", renderJDMatch(workspace, index), nil
 	case "resume-review":
@@ -26,6 +33,23 @@ func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string,
 	default:
 		return "", "", fmt.Errorf("unknown export kind %q", kind)
 	}
+}
+
+func renderReviewLibraryExport(result ReviewLibraryResult) string {
+	var b strings.Builder
+	b.WriteString("# Review Library\n\n")
+	b.WriteString("复习资料库已经刷新。主入口：`面试资料库首页.md`。\n\n")
+	if len(result.Paths) == 0 {
+		b.WriteString("暂无可更新的面经资料文件；请先导入 JD、简历、项目材料或公开面经。\n")
+		return b.String()
+	}
+	b.WriteString("## Updated Files\n\n")
+	for _, path := range result.Paths {
+		b.WriteString("- `")
+		b.WriteString(path)
+		b.WriteString("`\n")
+	}
+	return b.String()
 }
 
 func renderJDMatch(workspace *Workspace, index WorkspaceIndex) string {

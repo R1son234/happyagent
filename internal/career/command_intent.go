@@ -108,6 +108,9 @@ func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionI
 	if err != nil {
 		return err
 	}
+	if _, err := workspace.GenerateReviewLibrary(now); err != nil {
+		return err
+	}
 	printCompletionSummary(deps.Stdout, outputTitle, collectedInputPaths(workspace.Root, meta, autoArchived), paths)
 	return nil
 }

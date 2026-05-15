@@ -306,15 +306,21 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 		t.Fatalf("expected prepare item, got %+v", result.PrepareItem)
 	}
 	for _, rel := range []string{
-		result.MyInterviewRel,
 		result.RecordRel,
 	} {
 		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("expected derived file %s: %v", rel, err)
 		}
 	}
-	if !strings.Contains(result.MyInterviewRel, "my-interviews/市场营销/") {
-		t.Fatalf("expected marketing interview directory, got %s", result.MyInterviewRel)
+	if len(result.GeneratedPaths) == 0 {
+		t.Fatalf("expected generated review library paths")
+	}
+	if result.Domain.Slug == "" || result.Domain.Slug == "job-description" {
+		t.Fatalf("expected dynamic domain, got %+v", result.Domain)
+	}
+	joinedPaths := strings.Join(result.GeneratedPaths, "\n")
+	if strings.Contains(joinedPaths, "面经来源与复习清单") || strings.Contains(joinedPaths, "domain-") {
+		t.Fatalf("unexpected legacy generated path: %+v", result.GeneratedPaths)
 	}
 	_, index, err := ws.Status()
 	if err != nil {

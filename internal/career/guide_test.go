@@ -55,9 +55,12 @@ func TestClassifyInputWithGuideUsesCustomSignals(t *testing.T) {
 
 func TestWorkspaceGuidePromptSummaryIncludesDirectoryResponsibilities(t *testing.T) {
 	summary := DefaultWorkspaceGuide().PromptSummary()
-	for _, expected := range []string{"Workspace directory guide", "jd", "experiences", "Required sections", "市场营销", "Sync rules"} {
+	for _, expected := range []string{"Workspace directory guide", "jd", "experiences", "Required sections", "Sync rules"} {
 		if !strings.Contains(summary, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, summary)
 		}
+	}
+	if strings.Contains(summary, "neutral demo topic") || strings.Contains(summary, "Use \"市场营销\"") {
+		t.Fatalf("runtime prompt summary should not inject demo topic:\n%s", summary)
 	}
 }

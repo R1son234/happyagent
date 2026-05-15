@@ -123,6 +123,17 @@ func RunInteractive(deps Dependencies) error {
 				return err
 			}
 			continue
+		case "/library":
+			result, err := workspace.GenerateReviewLibrary(time.Now())
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(deps.Stdout, "assistant> 已刷新可复习资料库：面试资料库首页.md")
+			if len(result.Paths) > 0 {
+				fmt.Fprintf(deps.Stdout, "；更新 %d 个资料文件", len(result.Paths))
+			}
+			fmt.Fprintln(deps.Stdout)
+			continue
 		}
 		if isCommandHelpQuestion(input) {
 			printCareerHelp(deps.Stdout)
