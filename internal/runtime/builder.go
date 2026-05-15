@@ -9,6 +9,7 @@ import (
 	"happyagent/internal/engine"
 	"happyagent/internal/llm"
 	"happyagent/internal/mcp"
+	"happyagent/internal/memory"
 	"happyagent/internal/skills"
 	"happyagent/internal/tools"
 )
@@ -70,6 +71,18 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	}
 
 	skillLoader := skills.NewLoader(cfg.Skills.Dir)
+
+	memStore := memory.NewLongTermStore(".happyagent/memory")
+	memSave := tools.NewMemorySaveTool(memStore)
+	registry.MustRegister(memSave)
+	defs = append(defs, memSave.Definition())
+	memDelete := tools.NewMemoryDeleteTool(memStore)
+	registry.MustRegister(memDelete)
+	defs = append(defs, memDelete.Definition())
+	memRecall := tools.NewMemoryRecallTool(memStore)
+	registry.MustRegister(memRecall)
+	defs = append(defs, memRecall.Definition())
+
 	rt := &Runtime{
 		tools:               defs,
 		maxObservationBytes: cfg.Engine.MaxObservationBytes,
@@ -82,6 +95,7 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 		mcpManager:  manager,
 		skillLoader: skillLoader,
 		profileDir:  b.profileDir,
+		memoryStore: memStore,
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)

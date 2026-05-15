@@ -25,6 +25,7 @@ type RunRequest struct {
 	RunID           string
 	ApprovedTools   []string
 	History         []memory.Turn
+	MemorySnapshot  string
 	OnStepStart     func(stepIndex int)
 	OnToolCallStart func(toolName string)
 	OnToolCallEnd   func(toolName string, succeeded bool)
@@ -47,6 +48,7 @@ type Runtime struct {
 	mcpManager          *mcp.Manager
 	skillLoader         *skills.Loader
 	profileDir          string
+	memoryStore         *memory.LongTermStore
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
@@ -123,6 +125,10 @@ func (r *Runtime) Close() error {
 	return r.mcpManager.Close()
 }
 
+func (r *Runtime) MemoryStore() *memory.LongTermStore {
+	return r.memoryStore
+}
+
 func (r *Runtime) ListResources() []mcp.ResourceInfo {
 	if r.mcpManager == nil {
 		return nil
@@ -159,7 +165,7 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 	}
 	prepared.offload.RunID = req.RunID
 	if req.ProfileName == "" {
-		prepared.runtimeContext = assembleRuntimeContext(memory.Build(req.History, memory.Strategy{}))
+		prepared.runtimeContext = assembleRuntimeContext(memory.Build(req.History, memory.Strategy{}), req.MemorySnapshot)
 		return prepared, nil
 	}
 
@@ -180,7 +186,7 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		}
 	}
 	memoryResult := memory.Build(req.History, parseMemoryStrategy(resolved.MemoryStrategy))
-	prepared.runtimeContext = assembleRuntimeContext(memoryResult)
+	prepared.runtimeContext = assembleRuntimeContext(memoryResult, req.MemorySnapshot)
 	return prepared, nil
 }
 
@@ -244,10 +250,13 @@ func parseMemoryStrategy(raw json.RawMessage) memory.Strategy {
 	return strategy
 }
 
-func assembleRuntimeContext(memoryResult memory.BuildResult) string {
-	parts := make([]string, 0, 1)
+func assembleRuntimeContext(memoryResult memory.BuildResult, memorySnapshot string) string {
+	parts := make([]string, 0, 2)
 	if strings.TrimSpace(memoryResult.Text) != "" {
 		parts = append(parts, memoryResult.Text)
+	}
+	if strings.TrimSpace(memorySnapshot) != "" {
+		parts = append(parts, memorySnapshot)
 	}
 	return strings.TrimSpace(strings.Join(parts, "\n\n"))
 }

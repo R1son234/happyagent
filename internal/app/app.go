@@ -16,12 +16,14 @@ import (
 
 type Runner interface {
 	Run(ctx context.Context, req runtime.RunRequest) (runtime.RunResult, error)
+	MemoryStore() *memory.LongTermStore
 }
 
 type Application struct {
-	runner  Runner
-	store   *store.Store
-	metrics *observe.Metrics
+	runner       Runner
+	store        *store.Store
+	metrics      *observe.Metrics
+	activeSnapID string
 }
 
 func New(runner Runner, store *store.Store, metrics *observe.Metrics) (*Application, error) {
@@ -73,6 +75,16 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		return store.RunRecord{}, err
 	}
 
+	memStore := a.runner.MemoryStore()
+	var memSnapshot string
+	if memStore != nil {
+		if a.activeSnapID != req.SessionID {
+			memStore.LoadSnapshot()
+			a.activeSnapID = req.SessionID
+		}
+		memSnapshot = memStore.SnapshotText()
+	}
+
 	runID := newID("run")
 	startedAt := time.Now()
 	result, runErr := a.runner.Run(ctx, runtime.RunRequest{
@@ -83,6 +95,7 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 		RunID:           runID,
 		ApprovedTools:   req.ApprovedTools,
 		History:         buildHistory(historyRuns),
+		MemorySnapshot:  memSnapshot,
 		OnStepStart:     req.OnStepStart,
 		OnToolCallStart: req.OnToolCallStart,
 		OnToolCallEnd:   req.OnToolCallEnd,

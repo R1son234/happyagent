@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"happyagent/internal/engine"
+	"happyagent/internal/memory"
 	"happyagent/internal/observe"
 	"happyagent/internal/protocol"
 	"happyagent/internal/runtime"
@@ -18,6 +19,10 @@ type stubRunner struct {
 
 func (r stubRunner) Run(ctx context.Context, req runtime.RunRequest) (runtime.RunResult, error) {
 	return r.result, r.err
+}
+
+func (r stubRunner) MemoryStore() *memory.LongTermStore {
+	return nil
 }
 
 func TestApplicationCreateSessionAndAppendTurn(t *testing.T) {
