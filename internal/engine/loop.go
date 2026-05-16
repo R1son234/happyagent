@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -252,7 +253,13 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	toolCall := ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded}
 	if action.ToolName != tools.FinalAnswerToolName {
 		if isOffloadFileRead(action, input.Config.Offload) {
-			observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
+			// Offload files are already validated UTF-8 text from prior rounds.
+			// Read directly to bypass tool-internal looksBinary false positives.
+			if directObs, ok := readOffloadFileDirect(action, input.Config.MaxObservationBytes); ok {
+				observation = directObs
+			} else {
+				observation = truncateObservation(rawOutput, input.Config.MaxObservationBytes)
+			}
 		} else {
 			offloaded, err := maybeOffloadObservation(input.Config.Offload, action.ToolName, stepIndex, rawOutput, offloadSourceLabel(action))
 			if err != nil {
@@ -268,7 +275,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}
 		}
 	}
-	if action.ToolName != tools.FinalAnswerToolName {
+	if action.ToolName != tools.FinalAnswerToolName && action.ToolName != tools.WriteTodosToolName {
 		observation = appendTodoProgressReminder(observation, state)
 	}
 	if action.ToolName == tools.FinalAnswerToolName && input.Hooks.ValidateFinalAnswer != nil {
@@ -484,6 +491,22 @@ func fileReadPath(action Action) (string, bool) {
 		return "", false
 	}
 	return input.Path, true
+}
+
+// readOffloadFileDirect reads an offload file directly via os.ReadFile and
+// truncates the result, bypassing the tool's Execute method which may
+// incorrectly classify the content as binary via looksBinary. Offload files
+// are already validated UTF-8 text from prior rounds.
+func readOffloadFileDirect(action Action, maxBytes int) (string, bool) {
+	path, ok := fileReadPath(action)
+	if !ok {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return truncateObservation(string(data), maxBytes), true
 }
 
 func toolAllowed(defs []tools.Definition, name string) bool {

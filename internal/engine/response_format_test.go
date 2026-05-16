@@ -479,6 +479,16 @@ func TestRunnerDoesNotReoffloadOffloadFileReads(t *testing.T) {
 	root := t.TempDir()
 	registry := tools.NewRegistry()
 	largeOutput := strings.Repeat("x", 128)
+
+	// Write the offload file to disk so readOffloadFileDirect can read it.
+	offloadPath := filepath.Join(root, ".happyagent", "offload", "run-1", "step-1-file_read.txt")
+	if err := os.MkdirAll(filepath.Dir(offloadPath), 0o755); err != nil {
+		t.Fatalf("create offload dir: %v", err)
+	}
+	if err := os.WriteFile(offloadPath, []byte(largeOutput), 0o600); err != nil {
+		t.Fatalf("write offload file: %v", err)
+	}
+
 	registry.MustRegister(stubTool{
 		def: tools.Definition{Name: "file_read"},
 		run: func(call tools.Call) (tools.Result, error) {
@@ -534,8 +544,13 @@ func TestRunnerDoesNotReoffloadOffloadFileReads(t *testing.T) {
 	if strings.Contains(observation, "[offloaded tool result]") {
 		t.Fatalf("did not expect offload file read to be re-offloaded: %q", observation)
 	}
-	if !strings.Contains(observation, "[observation truncated]") {
-		t.Fatalf("expected offload file read to be truncated in context, got %q", observation)
+	// readOffloadFileDirect reads the file from disk and truncates, so the
+	// observation should contain the actual file content (not binary omitted).
+	if strings.Contains(observation, "[binary file omitted") {
+		t.Fatalf("offload file read should not trigger binary detection, got %q", observation)
+	}
+	if !strings.Contains(observation, strings.Repeat("x", 20)) {
+		t.Fatalf("expected offload file read to contain actual content, got %q", observation)
 	}
 	if result.Steps[0].ToolCalls[0].Offloaded {
 		t.Fatalf("did not expect tool call to be marked offloaded: %+v", result.Steps[0].ToolCalls[0])

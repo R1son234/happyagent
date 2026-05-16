@@ -112,9 +112,11 @@ func TestRunnerAppendsTodoReminderToToolResultsWhileTodosAreUnfinished(t *testin
 	if writeTodosObservation.Role != protocol.RoleTool {
 		t.Fatalf("expected write_todos tool observation, got %+v", writeTodosObservation)
 	}
-	if !strings.Contains(writeTodosObservation.Content, "TODO plan updated") ||
-		!strings.Contains(writeTodosObservation.Content, "There're still some TODOs not marked as 'completed'") {
-		t.Fatalf("expected write_todos observation to include reminder, got %q", writeTodosObservation.Content)
+	if !strings.Contains(writeTodosObservation.Content, "TODO plan updated") {
+		t.Fatalf("expected write_todos observation to include summary, got %q", writeTodosObservation.Content)
+	}
+	if strings.Contains(writeTodosObservation.Content, "There're still some TODOs not marked as 'completed'") {
+		t.Fatalf("write_todos observation should not include reminder, got %q", writeTodosObservation.Content)
 	}
 
 	thirdRequestMessages := client.requests[2].Messages
