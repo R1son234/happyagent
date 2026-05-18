@@ -143,3 +143,38 @@ func TestValidateRejectsInvalidOffloadConfigWhenEnabled(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestValidateWebConfigWhenEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.APIKey = "test-key"
+	cfg.Web.Enabled = true
+
+	if err := validate(cfg); err != nil {
+		t.Fatalf("validate() error = %v", err)
+	}
+}
+
+func TestValidateRejectsUnsupportedWebBackend(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.APIKey = "test-key"
+	cfg.Web.Enabled = true
+	cfg.Web.SearchBackend = "google"
+
+	err := validate(cfg)
+	if err == nil || err.Error() != `web.search_backend "google" is not supported` {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateRejectsMissingSearXNGURLWhenWebEnabled(t *testing.T) {
+	cfg := Default()
+	cfg.LLM.APIKey = "test-key"
+	cfg.Web.Enabled = true
+	cfg.Web.SearchBackend = "searxng"
+	cfg.Web.SearXNGURL = ""
+
+	err := validate(cfg)
+	if err == nil || err.Error() != "web.searxng_url must not be empty when web is enabled" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

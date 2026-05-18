@@ -256,6 +256,28 @@ To approve dangerous tools by default for local runs, set `tools.approved_tools`
 
 The `shell` tool only runs configured allowed commands and executes via argv rather than string interpolation.
 
+### Web Search And Fetch
+
+`web_search` and `web_fetch` are disabled by default. Enable them with zero-config direct search:
+
+```json
+{
+  "web": {
+    "enabled": true,
+    "search_backend": "auto",
+    "searxng_url": "",
+    "direct_search_url": "",
+    "request_timeout_seconds": 15,
+    "max_fetch_bytes": 65536,
+    "max_search_results": 10,
+    "allow_private_networks": false,
+    "blocked_domains": []
+  }
+}
+```
+
+With `search_backend: "auto"`, `web_search` uses SearXNG when `searxng_url` is set; otherwise it falls back to zero-config direct HTML search. Direct search tries Baidu first and falls back to Bing when Baidu returns a challenge page or no parseable results. The direct backend is best-effort because search result HTML is not a stable API. `web_fetch` reads one selected public URL and returns a bounded text preview. Private/internal network URLs, secret-like URLs, blocked domains, and binary responses are rejected by default.
+
 Large tool results can be offloaded to local files instead of staying in the model context. Configure this under `engine`:
 
 ```json

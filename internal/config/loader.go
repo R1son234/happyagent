@@ -56,6 +56,9 @@ func applyEnv(cfg *Config) {
 	overrideString("HAPPYAGENT_OFFLOAD_DIR", &cfg.Engine.OffloadDir)
 	overrideString("HAPPYAGENT_ROOT_DIR", &cfg.Tools.RootDir)
 	overrideString("HAPPYAGENT_SKILLS_DIR", &cfg.Skills.Dir)
+	overrideString("HAPPYAGENT_WEB_SEARCH_BACKEND", &cfg.Web.SearchBackend)
+	overrideString("HAPPYAGENT_WEB_SEARXNG_URL", &cfg.Web.SearXNGURL)
+	overrideString("HAPPYAGENT_WEB_DIRECT_SEARCH_URL", &cfg.Web.DirectSearchURL)
 
 	overrideInt("HAPPYAGENT_LOOP_MAX_STEPS", &cfg.Engine.LoopMaxSteps)
 	overrideInt("HAPPYAGENT_LLM_TIMEOUT_SECONDS", &cfg.LLM.TimeoutSeconds)
@@ -66,6 +69,9 @@ func applyEnv(cfg *Config) {
 	overrideInt("HAPPYAGENT_MCP_MAX_LISTED_RESOURCES", &cfg.MCP.MaxListedResources)
 	overrideInt("HAPPYAGENT_MCP_MAX_RESOURCE_BYTES", &cfg.MCP.MaxResourceBytes)
 	overrideInt("HAPPYAGENT_WRITE_MAX_BYTES", &cfg.Tools.WriteMaxBytes)
+	overrideInt("HAPPYAGENT_WEB_REQUEST_TIMEOUT_SECONDS", &cfg.Web.RequestTimeoutSeconds)
+	overrideInt("HAPPYAGENT_WEB_MAX_FETCH_BYTES", &cfg.Web.MaxFetchBytes)
+	overrideInt("HAPPYAGENT_WEB_MAX_SEARCH_RESULTS", &cfg.Web.MaxSearchResults)
 
 	overrideBool("HAPPYAGENT_SHELL_ENABLED", &cfg.Tools.ShellEnabled)
 	overrideBool("HAPPYAGENT_OFFLOAD_ENABLED", &cfg.Engine.OffloadEnabled)
@@ -73,8 +79,11 @@ func applyEnv(cfg *Config) {
 	overrideBool("HAPPYAGENT_WRITE_REQUIRE_OVERWRITE", &cfg.Tools.WriteRequireOverwrite)
 	overrideBool("HAPPYAGENT_DELETE_ENABLED", &cfg.Tools.DeleteEnabled)
 	overrideBool("HAPPYAGENT_DELETE_REQUIRE_CONFIRMATION", &cfg.Tools.DeleteRequireConfirmation)
+	overrideBool("HAPPYAGENT_WEB_ENABLED", &cfg.Web.Enabled)
+	overrideBool("HAPPYAGENT_WEB_ALLOW_PRIVATE_NETWORKS", &cfg.Web.AllowPrivateNetworks)
 	overrideCSV("HAPPYAGENT_SHELL_ALLOWED_COMMANDS", &cfg.Tools.ShellAllowedCommands)
 	overrideCSV("HAPPYAGENT_APPROVED_TOOLS", &cfg.Tools.ApprovedTools)
+	overrideCSV("HAPPYAGENT_WEB_BLOCKED_DOMAINS", &cfg.Web.BlockedDomains)
 }
 
 func validate(cfg Config) error {
@@ -112,6 +121,28 @@ func validate(cfg Config) error {
 	}
 	if cfg.Tools.ShellEnabled && len(cfg.Tools.ShellAllowedCommands) == 0 {
 		return fmt.Errorf("tools.shell_allowed_commands must not be empty when shell is enabled")
+	}
+	if cfg.Web.Enabled {
+		if cfg.Web.SearchBackend == "" {
+			return fmt.Errorf("web.search_backend must not be empty when web is enabled")
+		}
+		switch cfg.Web.SearchBackend {
+		case "auto", "direct", "searxng":
+		default:
+			return fmt.Errorf("web.search_backend %q is not supported", cfg.Web.SearchBackend)
+		}
+		if cfg.Web.SearchBackend == "searxng" && strings.TrimSpace(cfg.Web.SearXNGURL) == "" {
+			return fmt.Errorf("web.searxng_url must not be empty when web is enabled")
+		}
+		if cfg.Web.RequestTimeoutSeconds <= 0 {
+			return fmt.Errorf("web.request_timeout_seconds must be greater than zero")
+		}
+		if cfg.Web.MaxFetchBytes < 1024 || cfg.Web.MaxFetchBytes > 256*1024 {
+			return fmt.Errorf("web.max_fetch_bytes must be between 1024 and 262144")
+		}
+		if cfg.Web.MaxSearchResults <= 0 || cfg.Web.MaxSearchResults > 50 {
+			return fmt.Errorf("web.max_search_results must be between 1 and 50")
+		}
 	}
 	if cfg.MCP.ConnectTimeoutSeconds <= 0 {
 		return fmt.Errorf("mcp.connect_timeout_seconds must be greater than zero")

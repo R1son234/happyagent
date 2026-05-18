@@ -41,6 +41,18 @@ Example:
 }
 ```
 
+## Web Tools
+
+- Web tools are disabled by default with `web.enabled: false`.
+- `web_search` uses the configured SearXNG service when present; otherwise it uses zero-config direct HTML search.
+- The direct backend tries Baidu first and falls back to Bing when Baidu returns a challenge page or no parseable results. It is best-effort and may break if search result HTML changes or search sites block automated requests.
+- `web_fetch` only supports HTTP/HTTPS GET requests and returns bounded text previews.
+- Localhost, loopback, private networks, link-local addresses, multicast, unspecified addresses, and metadata IPs are blocked unless `web.allow_private_networks` is explicitly true.
+- URL redirects are re-checked before the final page is fetched.
+- URLs containing values that look like tokens, API keys, secrets, or passwords are rejected.
+- `web.blocked_domains` can deny exact domains and subdomains; wildcard rules like `*.example.com` match subdomains only.
+- `web.max_fetch_bytes` limits returned content size. Large observations may still be offloaded by the engine if offload is enabled.
+
 ## Persistence And Logs
 
 - Session and run state is stored under `.happyagent/store/`.

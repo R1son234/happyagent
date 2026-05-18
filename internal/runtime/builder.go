@@ -38,7 +38,7 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	}
 
 	registry := tools.NewRegistry()
-	defs, err := registerBuiltinTools(registry, cfg.Tools)
+	defs, err := registerBuiltinTools(registry, cfg.Tools, cfg.Web)
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	return rt, nil
 }
 
-func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]tools.Definition, error) {
+func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig, webCfg config.WebConfig) ([]tools.Definition, error) {
 	var registered []tools.Definition
 
 	finalAnswer := tools.NewFinalAnswerTool()
@@ -146,6 +146,16 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig) ([]t
 	}
 	registry.MustRegister(fileList)
 	registered = append(registered, fileList.Definition())
+
+	if webCfg.Enabled {
+		webSearch := tools.NewWebSearchTool(webCfg)
+		registry.MustRegister(webSearch)
+		registered = append(registered, webSearch.Definition())
+
+		webFetch := tools.NewWebFetchTool(webCfg)
+		registry.MustRegister(webFetch)
+		registered = append(registered, webFetch.Definition())
+	}
 
 	if cfg.WriteEnabled {
 		filePatch, err := tools.NewFilePatchTool(cfg.RootDir)

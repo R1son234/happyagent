@@ -6,6 +6,7 @@ type Config struct {
 	Tools  ToolsConfig  `json:"tools"`
 	MCP    MCPConfig    `json:"mcp"`
 	Skills SkillsConfig `json:"skills"`
+	Web    WebConfig    `json:"web"` // Web controls optional outbound web search and fetch tools.
 }
 
 type LLMConfig struct {
@@ -68,6 +69,18 @@ type SkillsConfig struct {
 	Dir string `json:"dir"`
 }
 
+type WebConfig struct {
+	Enabled               bool     `json:"enabled"`                 // Enabled controls whether web_search and web_fetch are registered.
+	SearchBackend         string   `json:"search_backend"`          // SearchBackend selects "auto", "direct", or "searxng" for web_search.
+	SearXNGURL            string   `json:"searxng_url"`             // SearXNGURL is the base URL of the SearXNG HTTP service used by web_search.
+	DirectSearchURL       string   `json:"direct_search_url"`       // DirectSearchURL optionally overrides the direct search endpoint for tests or advanced use.
+	RequestTimeoutSeconds int      `json:"request_timeout_seconds"` // RequestTimeoutSeconds bounds each outbound HTTP request.
+	MaxFetchBytes         int      `json:"max_fetch_bytes"`         // MaxFetchBytes is the maximum extracted content preview returned by web_fetch.
+	MaxSearchResults      int      `json:"max_search_results"`      // MaxSearchResults caps the number of results returned by web_search.
+	AllowPrivateNetworks  bool     `json:"allow_private_networks"`  // AllowPrivateNetworks permits localhost/private-network fetches when explicitly enabled.
+	BlockedDomains        []string `json:"blocked_domains"`         // BlockedDomains lists domains that web tools must not access.
+}
+
 func Default() Config {
 	return Config{
 		LLM: LLMConfig{
@@ -109,6 +122,15 @@ func Default() Config {
 		},
 		Skills: SkillsConfig{
 			Dir: "skills",
+		},
+		Web: WebConfig{
+			Enabled:               false,
+			SearchBackend:         "auto",
+			RequestTimeoutSeconds: 15,
+			MaxFetchBytes:         64 * 1024,
+			MaxSearchResults:      10,
+			AllowPrivateNetworks:  false,
+			BlockedDomains:        nil,
 		},
 	}
 }

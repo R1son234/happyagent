@@ -42,5 +42,16 @@
   },
   "skills": {
     "dir": "skills"
+  },
+  "web": {
+    "enabled": false,
+    "search_backend": "auto",
+    "searxng_url": "",
+    "direct_search_url": "",
+    "request_timeout_seconds": 15,
+    "max_fetch_bytes": 65536,
+    "max_search_results": 10,
+    "allow_private_networks": false,
+    "blocked_domains": []
   }
 }
