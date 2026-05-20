@@ -39,7 +39,7 @@ func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Ti
 	}
 	result.GeneratedPaths = generatedPaths
 	result.MyInterviewRel = findGeneratedPathWithSuffix(generatedPaths, "面经链接与公司观察.md")
-	recordRel := filepath.Join("record", "imports", fmt.Sprintf("%s-public-interview-experience.md", now.Format("20060102-150405")))
+	recordRel := filepath.Join(WorkspaceInternalDir, "record", "imports", fmt.Sprintf("%s-public-interview-experience.md", now.Format("20060102-150405")))
 	var b strings.Builder
 	b.WriteString("# Public Interview Experience Import\n\n")
 	b.WriteString(fmt.Sprintf("- source_path: %s\n", experienceItem.Path))
@@ -87,7 +87,7 @@ func (w *Workspace) writeClassificationRecord(item WorkspaceItem, classification
 		now = time.Now()
 	}
 	name := fmt.Sprintf("%s-classification-%s.md", now.Format("20060102-150405"), slug(item.ID))
-	rel := filepath.Join("record", "imports", name)
+	rel := filepath.Join(WorkspaceInternalDir, "record", "imports", name)
 	var b strings.Builder
 	b.WriteString("# Classification Record\n\n")
 	if strings.TrimSpace(sourceLabel) != "" {

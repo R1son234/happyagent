@@ -29,7 +29,7 @@ func TestRenderAndWriteWorkspaceArtifact(t *testing.T) {
 	if err != nil {
 		t.Fatalf("WriteArtifact() error = %v", err)
 	}
-	if !strings.HasPrefix(path, "record/generated/") {
+	if !strings.HasPrefix(path, filepath.ToSlash(filepath.Join(WorkspaceInternalDir, "record", "generated"))+"/") {
 		t.Fatalf("expected generated record path, got %s", path)
 	}
 }

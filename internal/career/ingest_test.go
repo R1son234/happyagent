@@ -155,7 +155,7 @@ func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
 	}
 }
 
-func TestIngestInboxArchivesFilesAndPreservesInboxCopies(t *testing.T) {
+func TestIngestInboxArchivesFilesAndRemovesInboxCopies(t *testing.T) {
 	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
@@ -176,11 +176,15 @@ func TestIngestInboxArchivesFilesAndPreservesInboxCopies(t *testing.T) {
 	if len(result.Items) != 2 {
 		t.Fatalf("expected 2 ingested items, got %+v", result.Items)
 	}
-	if _, err := os.Stat(resumePath); err != nil {
-		t.Fatalf("expected resume inbox copy to be preserved, err=%v", err)
+	if _, err := os.Stat(resumePath); !os.IsNotExist(err) {
+		t.Fatalf("expected resume inbox copy to be removed, err=%v", err)
 	}
-	if _, err := os.Stat(jdPath); err != nil {
-		t.Fatalf("expected jd inbox copy to be preserved, err=%v", err)
+	if _, err := os.Stat(jdPath); !os.IsNotExist(err) {
+		t.Fatalf("expected jd inbox copy to be removed, err=%v", err)
+	}
+	archiveEntries, err := os.ReadDir(filepath.Join(ws.Root, WorkspaceDirArchive))
+	if err != nil || len(archiveEntries) == 0 {
+		t.Fatalf("expected archived originals, entries=%+v err=%v", archiveEntries, err)
 	}
 }
 
@@ -205,13 +209,16 @@ func TestIngestInboxSkipsAlreadyArchivedFiles(t *testing.T) {
 	}
 	firstID := first.Items[0].ID
 
-	// Second ingest of the same file should skip (dedup by content fingerprint).
+	if err := os.WriteFile(jdPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("rewrite jd: %v", err)
+	}
+	// Second ingest of the same file should skip creating a duplicate item.
 	second, err := IngestInbox(context.Background(), ws, time.Now())
 	if err != nil {
 		t.Fatalf("second IngestInbox() error = %v", err)
 	}
 	if len(second.Items) != 1 {
-		t.Fatalf("expected 1 item on second run (dedup), got %d", len(second.Items))
+		t.Fatalf("expected 1 existing item on second run (dedup), got %d", len(second.Items))
 	}
 	if second.Items[0].ID != firstID {
 		t.Fatalf("expected same item ID on dedup, got first=%s second=%s", firstID, second.Items[0].ID)

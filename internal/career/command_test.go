@@ -295,10 +295,10 @@ func TestRunInteractiveAddJDFileCommandArchivesOriginalFile(t *testing.T) {
 	if item.Type != WorkspaceTypeJD {
 		t.Fatalf("expected jd item, got %+v", item)
 	}
-	if !strings.HasSuffix(item.Path, "/extracted.md") {
-		t.Fatalf("expected extracted markdown path, got %q", item.Path)
+	if !strings.HasPrefix(item.Path, WorkspaceDirJD+"/") || !strings.HasSuffix(item.Path, ".md") {
+		t.Fatalf("expected visible jd markdown path, got %q", item.Path)
 	}
-	metadataPath := filepath.Join(workspaceRoot, "jd", item.ID, "metadata.json")
+	metadataPath := filepath.Join(workspaceRoot, internalItemRelDir(item.ID), "metadata.json")
 	data, err := os.ReadFile(metadataPath)
 	if err != nil {
 		t.Fatalf("read metadata: %v", err)
@@ -369,7 +369,7 @@ func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
 	if len(app.appendRequests) != 1 {
 		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
 	}
-	for _, rel := range []string{"outputs/latest-report.md", "outputs/latest-report.json"} {
+	for _, rel := range []string{filepath.Join(WorkspaceDirOutputs, "latest-report.md"), filepath.Join(WorkspaceDirOutputs, "latest-report.json")} {
 		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); err != nil {
 			t.Fatalf("expected output file %s: %v", rel, err)
 		}
@@ -939,7 +939,7 @@ func TestRunInteractiveAutoArchivesResumeAndJDInSameTurn(t *testing.T) {
 	if !hasResume || !hasJD {
 		t.Fatalf("expected resume and jd items, got %+v", index.Items)
 	}
-	for _, rel := range []string{"outputs/latest-report.md", "outputs/latest-report.json"} {
+	for _, rel := range []string{filepath.Join(WorkspaceDirOutputs, "latest-report.md"), filepath.Join(WorkspaceDirOutputs, "latest-report.json")} {
 		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); err != nil {
 			t.Fatalf("expected generated output %s: %v", rel, err)
 		}
@@ -972,7 +972,7 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 	if !strings.Contains(output, "已生成并保存 Review Material") {
 		t.Fatalf("unexpected output:\n%s", output)
 	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, "outputs", "latest-review-material.md")); err != nil {
+	if _, err := os.Stat(filepath.Join(workspaceRoot, WorkspaceDirOutputs, "latest-review-material.md")); err != nil {
 		t.Fatalf("expected latest review material output: %v", err)
 	}
 }
@@ -1081,17 +1081,17 @@ func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *te
 		[]WorkspaceItem{{
 			Type:  WorkspaceTypeResume,
 			Title: "resume-sample",
-			Path:  "resume/versions/resume-20260501-143151-resume-sample/extracted.md",
+			Path:  WorkspaceDirResume + "/resume-sample.md",
 		}},
 		nil,
 		WorkspaceMetadata{
-			CurrentResume: "resume/versions/resume-20260501-143151-resume-sample/extracted.md",
+			CurrentResume: WorkspaceDirResume + "/resume-sample.md",
 		},
 		true,
 		".happyagent/career",
 	)
 	for _, expected := range []string{
-		".happyagent/career/resume/versions/resume-20260501-143151-resume-sample/extracted.md",
+		".happyagent/career/" + WorkspaceDirResume + "/resume-sample.md",
 		"Workspace directory guide",
 		"Sync rules",
 		"preferably in one multi-tool step",

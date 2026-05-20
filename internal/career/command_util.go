@@ -190,10 +190,10 @@ func normalizeAnalyzeOptions(options AnalyzeOptions) (AnalyzeOptions, error) {
 	}
 	options.RepoPath = repo
 	if strings.TrimSpace(options.MarkdownPath) == "" {
-		options.MarkdownPath = filepath.Join(DefaultWorkspaceRoot, "outputs", "latest-report.md")
+		options.MarkdownPath = filepath.Join(DefaultWorkspaceRoot, WorkspaceDirOutputs, "latest-report.md")
 	}
 	if strings.TrimSpace(options.JSONPath) == "" {
-		options.JSONPath = filepath.Join(DefaultWorkspaceRoot, "outputs", "latest-report.json")
+		options.JSONPath = filepath.Join(DefaultWorkspaceRoot, WorkspaceDirOutputs, "latest-report.json")
 	}
 	if strings.TrimSpace(options.TraceJSONPath) == "" {
 		options.TraceJSONPath = "logs/career/latest-trace.json"

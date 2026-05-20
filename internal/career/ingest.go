@@ -102,6 +102,7 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 	// Compute content fingerprint and check for existing item with same content.
 	contentFingerprint := ContentFingerprint(extracted.Text)
 	if existing, found := ws.FindExistingByContentFingerprint(itemType, contentFingerprint); found {
+		_, _ = ws.ArchiveOriginalFile(absPath, now)
 		return IngestResult{
 			Item:         existing,
 			OriginalRel:  existing.Metadata.Original,
@@ -178,8 +179,26 @@ func IngestInbox(ctx context.Context, workspace *Workspace, now time.Time) (Inbo
 			continue
 		}
 		result.Items = append(result.Items, ingested.Item)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: remove processed inbox file: %v", path, err))
+		}
 	}
 	return result, nil
+}
+
+func (w *Workspace) ArchiveOriginalFile(path string, now time.Time) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	rel := uniqueRelPath(w.Root, archiveRel(now, filepath.Base(path)))
+	if err := copyFile(path, filepath.Join(w.Root, rel)); err != nil {
+		return "", err
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 func inferIngestItemType(hintType string, path string, userInput string, content string) string {

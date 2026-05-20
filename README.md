@@ -1,6 +1,6 @@
 # happyagent
 
-`happyagent` is a local Go agent runtime and CLI application. It combines model-driven tool use, MCP integration, on-demand skills, persistent run history, structured traces, eval suites, and a Career Copilot workspace for evidence-grounded job-search material analysis.
+`happyagent` is a local AI workspace with a Go agent runtime and a desktop-style web UI. It combines model-driven tool use, MCP integration, on-demand skills, persistent run history, structured traces, eval suites, and a Career Copilot workspace for evidence-grounded job-search material analysis.
 
 ## Features
 
@@ -12,7 +12,8 @@
 - Session and run persistence under `.happyagent/store/`.
 - JSON run traces with step timing, tool-call status, token usage, and error categories.
 - Eval runner for smoke, profile, and Career Copilot scenarios.
-- Career Copilot CLI for maintaining a local interview library of resumes, JDs, public interview experience, project preparation, real interview records, and operation records.
+- HappyAgent Desktop for daily local workspace use: file tree, preview, ingestion, graph data, settings, and chat runs.
+- Career Copilot workspace for maintaining a local interview library of resumes, JDs, public interview experience, project preparation, real interview records, and operation records.
 
 ## Setup
 
@@ -34,55 +35,56 @@ Edit `happyagent.local.json` with your model configuration:
 }
 ```
 
-Build the CLI:
+Install frontend dependencies once:
 
 ```bash
-make build
+cd desktop
+npm install
+cd ..
 ```
 
-Run a basic request:
+Build the desktop UI and bridge:
 
 ```bash
-./bin/happyagent --profile general-assistant "say hello in one sentence"
+make build-desktop
 ```
 
-Start an interactive session:
+Start the local desktop workspace:
 
 ```bash
-./bin/happyagent --interactive --profile general-assistant
+./bin/happyagent-desktop --addr 127.0.0.1:8765 --workspace career-workspace --static desktop/dist
 ```
 
-Continue an existing session:
+Then open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The `--workspace` directory is the local material library. If it does not exist, HappyAgent initializes it automatically. Use a different directory when testing a fresh workspace:
 
 ```bash
-./bin/happyagent --interactive --session-id <session_id> --profile general-assistant
+./bin/happyagent-desktop --addr 127.0.0.1:8765 --workspace test --static desktop/dist
 ```
 
-Exit interactive mode with `/exit` or `Ctrl-D`.
+## Desktop Workspace
 
-## Career Copilot
+HappyAgent Desktop is the normal daily entry point. It keeps the Go agent runtime in the backend and serves a React workspace UI from `desktop/`.
 
-Start the Career Copilot workspace:
+In the browser UI you can:
 
-```bash
-./bin/happyagent
-```
+- View the local workspace status and file tree.
+- Preview saved Markdown, text, DOCX-extracted text, and PDF-extracted text.
+- Import external files into the workspace through the existing Career Copilot ingestion path.
+- Inspect graph data and settings.
+- Ask the assistant to analyze JDs, optimize resumes, prepare interviews, and save generated material back into the workspace.
 
-By default the CLI now opens the local Career Copilot workspace at `career-workspace/`. Put your prepared material into `career-workspace/inbox/`, then talk to it in natural language. Inbox scans copy recognized material into the typed workspace library and keep the original inbox files in place:
+Put prepared material into `career-workspace/inbox/` or import it from the UI, then ask in natural language:
 
 - `我把简历和 JD 放进 inbox 了，帮我分析一下`
 - `帮我针对当前岗位优化简历`
 - `帮我生成面试准备材料`
 - `我刚面完，帮我复盘一下`
-
-The interactive workspace keeps material local. Advanced commands are still available in the prompt:
-
-- `/status` shows workspace counts and active pointers.
-- `/add <type>` archives material.
-- `/library` refreshes the review-library homepage, overview pages, material packages, and question banks.
-- `/export <kind>` generates Markdown material and saves it back into the relevant workspace area.
-- `/help` lists available commands.
-- `/exit` exits the workspace.
 
 Supported material types:
 
@@ -99,20 +101,47 @@ The workspace creates this user-facing layout:
 career-workspace/
   inbox/
   面试资料库首页.md
-  resume/
-  jd/
-  experiences/
-  prepare/
-  my-interviews/
-  outputs/
-  record/
-  workspace.json
-  index.json
+  我的简历/
+  岗位明细/
+  面经汇总/
+  复习资料库/
+  我的面试/
+  已归档/
+  输出报告/
+  .happyagent/workspace/
+    record/
+    workspace.json
+    index.json
 ```
 
 `面试资料库首页.md` is the main review entry point. It links to JD, public interview experience, project preparation, and per-role interview material. `record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library. `metadata.json`, `source.*`, and `extracted.md` are preserved for evidence tracing; the review flow should start from index pages, material packages, question banks, and role pages.
 
-Examples:
+## Career Copilot CLI
+
+The CLI remains available for terminal workflows, batch analysis, evals, and automation.
+
+Build only the CLI:
+
+```bash
+make build
+```
+
+Start the interactive Career Copilot workspace:
+
+```bash
+./bin/happyagent
+```
+
+By default the CLI opens `career-workspace/`. The workspace is local and is initialized automatically when missing. Advanced commands are available in the prompt:
+
+- `/status` shows workspace counts and active pointers.
+- `/add <type>` archives material.
+- `/library` refreshes the review-library homepage, overview pages, material packages, and question banks.
+- `/export <kind>` generates Markdown material and saves it back into the relevant workspace area.
+- `/help` lists available commands.
+- `/exit` exits the workspace.
+
+Command examples:
 
 ```text
 /add jd ./examples/career/real-world-anonymized/jd-marketing-growth.md
@@ -131,8 +160,8 @@ Batch analysis is available through `career analyze`:
   --resume examples/career/real-world-anonymized/resume-marketing-anonymized.md \
   --target examples/career/real-world-anonymized/target.md \
   --repo . \
-  --out career-workspace/outputs/latest-report.md \
-  --json career-workspace/outputs/latest-report.json \
+  --out career-workspace/输出报告/latest-report.md \
+  --json career-workspace/输出报告/latest-report.json \
   --trace-json logs/career/latest-trace.json
 ```
 
@@ -164,8 +193,10 @@ Report transforms can be generated from the structured report:
 ```text
 cmd/
   happyagent/        Main CLI entrypoint.
+  happyagent-desktop/ Desktop web workspace bridge.
   happyagent-eval/   Eval runner.
   mcpdemo/           Small local MCP server for integration checks.
+desktop/             React frontend for HappyAgent Desktop.
 internal/
   app/               Session-oriented application layer.
   career/            Career Copilot workspace, prompts, ingestion, and generated records.
@@ -413,3 +444,7 @@ Supported environment overrides:
 - [Architecture](docs/architecture.md)
 - [Usage Guide](docs/demo.md)
 - [Eval Guide](docs/eval.md)
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.

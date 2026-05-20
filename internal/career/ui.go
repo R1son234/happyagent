@@ -36,7 +36,7 @@ func printCareerWelcome(output io.Writer, workspace *Workspace, sessionID string
 		"",
 		"报告和建议会保存到：",
 		"",
-		"  " + filepath.ToSlash(filepath.Join(workspace.Root, "outputs")) + "/",
+		"  " + filepath.ToSlash(filepath.Join(workspace.Root, WorkspaceDirOutputs)) + "/",
 	}, "你可以直接说", []string{
 		"我把简历和 JD 放进 inbox 了，帮我分析一下",
 		"帮我针对当前岗位优化简历",
@@ -113,7 +113,7 @@ func printWorkspaceStatus(output io.Writer, workspace *Workspace) error {
 		fmt.Sprintf("记录：%d 份", counts[WorkspaceTypeRecord]),
 	}, "生成结果", []string{
 		"最新报告：" + reportPath,
-		"输出目录：" + filepath.ToSlash(filepath.Join(workspace.Root, "outputs")) + "/",
+		"输出目录：" + filepath.ToSlash(filepath.Join(workspace.Root, WorkspaceDirOutputs)) + "/",
 	}, "就绪情况", []string{
 		ready,
 		missingMaterialsHint(workspace, meta),

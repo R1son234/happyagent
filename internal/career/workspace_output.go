@@ -57,7 +57,7 @@ func (w *Workspace) LatestOutputPath(kind string, ext string) string {
 	if strings.TrimSpace(ext) == "" {
 		ext = ".md"
 	}
-	return filepath.ToSlash(filepath.Join("outputs", latestOutputName(kind)+ext))
+	return filepath.ToSlash(filepath.Join(WorkspaceDirOutputs, latestOutputName(kind)+ext))
 }
 
 func (w *Workspace) TimestampedOutputPath(kind string, ext string, now time.Time) string {
@@ -67,7 +67,7 @@ func (w *Workspace) TimestampedOutputPath(kind string, ext string, now time.Time
 	if now.IsZero() {
 		now = time.Now()
 	}
-	return filepath.ToSlash(filepath.Join("outputs", "runs", fmt.Sprintf("%s-%s%s", now.Format("20060102-150405"), latestOutputName(kind), ext)))
+	return filepath.ToSlash(filepath.Join(WorkspaceDirOutputs, "runs", fmt.Sprintf("%s-%s%s", now.Format("20060102-150405"), latestOutputName(kind), ext)))
 }
 
 func (w *Workspace) WriteUserOutput(kind string, title string, markdown string, jsonContent []byte, now time.Time) (UserOutputPaths, error) {
@@ -112,9 +112,9 @@ func (w *Workspace) WriteUserOutput(kind string, title string, markdown string, 
 func artifactDestination(kind string) (string, string) {
 	switch kind {
 	case "project-pitch":
-		return filepath.Join("prepare", "generated"), WorkspaceTypePrepare
+		return filepath.Join(WorkspaceDirPrepare, "generated"), WorkspaceTypePrepare
 	default:
-		return filepath.Join("record", "generated"), WorkspaceTypeRecord
+		return filepath.Join(WorkspaceInternalDir, "record", "generated"), WorkspaceTypeRecord
 	}
 }
 

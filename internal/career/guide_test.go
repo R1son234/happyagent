@@ -14,7 +14,7 @@ func TestOpenWorkspaceCreatesDefaultGuide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, WorkspaceGuideFileName)); err != nil {
+	if _, err := os.Stat(filepath.Join(root, WorkspaceInternalDir, WorkspaceGuideFileName)); err != nil {
 		t.Fatalf("expected default guide file: %v", err)
 	}
 	guide, err := ws.LoadGuide()
@@ -55,7 +55,7 @@ func TestClassifyInputWithGuideUsesCustomSignals(t *testing.T) {
 
 func TestWorkspaceGuidePromptSummaryIncludesDirectoryResponsibilities(t *testing.T) {
 	summary := DefaultWorkspaceGuide().PromptSummary()
-	for _, expected := range []string{"Workspace directory guide", "jd", "experiences", "Required sections", "Sync rules"} {
+	for _, expected := range []string{"Workspace directory guide", WorkspaceDirJD, WorkspaceDirExperiences, "Required sections", "Sync rules"} {
 		if !strings.Contains(summary, expected) {
 			t.Fatalf("summary missing %q:\n%s", expected, summary)
 		}

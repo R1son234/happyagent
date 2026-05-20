@@ -42,10 +42,10 @@ func (w *Workspace) EnsureReviewLibrarySkeleton(now time.Time) error {
 		now = time.Now()
 	}
 	files := map[string]string{
-		"面试资料库首页.md":                            renderHomeIndex(now),
-		filepath.Join("experiences", "面经总览.md"): renderExperienceIndex(now),
-		filepath.Join("prepare", "项目专项总览.md"):   renderPrepareIndex(now),
-		filepath.Join("jd", "JD 汇总.md"):         renderJDIndex(now),
+		"面试资料库首页.md":                                      renderHomeIndex(now),
+		filepath.Join(WorkspaceDirExperiences, "面经总览.md"): renderExperienceIndex(now),
+		filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"):   renderPrepareIndex(now),
+		filepath.Join(WorkspaceDirJD, "岗位汇总.md"):          renderJDIndex(now),
 	}
 	for rel, content := range files {
 		if err := w.writeWorkspaceTextIfMissing(rel, content); err != nil {
@@ -121,20 +121,20 @@ func (w *Workspace) writeExperienceReviewLibrary(ctx ReviewLibraryContext, sourc
 	}
 	paths = append(paths, sourceRel)
 
-	packageRel := filepath.Join("experiences", domain.Slug, fmt.Sprintf("%s 面经资料包.md", domain.Name))
+	packageRel := filepath.Join(WorkspaceDirExperiences, domain.Slug, fmt.Sprintf("%s 面经资料包.md", domain.Name))
 	if err := w.writeWorkspaceText(packageRel, renderDomainPackage(domain, topics, sourceRel, now)); err != nil {
 		return nil, err
 	}
 	paths = append(paths, filepath.ToSlash(packageRel))
 
-	observationsRel := filepath.Join("experiences", domain.Slug, fmt.Sprintf("%s 面经链接与公司观察.md", domain.Name))
+	observationsRel := filepath.Join(WorkspaceDirExperiences, domain.Slug, fmt.Sprintf("%s 面经链接与公司观察.md", domain.Name))
 	if err := w.writeWorkspaceText(observationsRel, renderExperienceObservations(domain, sourceItem, sourceRel, ctx.ExperienceContent, now)); err != nil {
 		return nil, err
 	}
 	paths = append(paths, filepath.ToSlash(observationsRel))
 
 	for _, topic := range topics {
-		topicRel := filepath.Join("experiences", domain.Slug, fmt.Sprintf("%s题库.md", topic.Name))
+		topicRel := filepath.Join(WorkspaceDirExperiences, domain.Slug, fmt.Sprintf("%s题库.md", topic.Name))
 		if err := w.writeWorkspaceText(topicRel, renderTopicQuestionBank(ctx, topic, sourceItem, now)); err != nil {
 			return nil, err
 		}
@@ -156,7 +156,7 @@ func (w *Workspace) writeExperienceReviewLibrary(ctx ReviewLibraryContext, sourc
 	if err := w.refreshJDIndex(ctx, now); err != nil {
 		return nil, err
 	}
-	paths = append(paths, filepath.ToSlash(filepath.Join("jd", "JD 汇总.md")))
+	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
 	return paths, nil
 }
 
@@ -169,7 +169,7 @@ func (w *Workspace) writeExperienceSource(domain ReviewDomain, sourceItem Worksp
 	if stableName == "" || stableName == "job-description" {
 		stableName = slugForPath(name)
 	}
-	rel := filepath.Join("experiences", domain.Slug, "sources", stableName+".md")
+	rel := filepath.Join(WorkspaceInternalDir, "sources", domain.Slug, stableName+".md")
 	if err := w.writeWorkspaceText(rel, renderSourceMaterial(sourceItem, content, now)); err != nil {
 		return "", err
 	}
@@ -178,69 +178,66 @@ func (w *Workspace) writeExperienceSource(domain ReviewDomain, sourceItem Worksp
 
 func (w *Workspace) refreshExperienceIndex(domain ReviewDomain, topics []ReviewTopic, now time.Time) error {
 	var b strings.Builder
-	b.WriteString(frontmatter("面经总览", []string{"moc", "interview/experience"}, now))
 	b.WriteString("# 面经总览\n\n")
 	b.WriteString("## 方向入口\n\n")
-	b.WriteString(fmt.Sprintf("- [[experiences/%s/%s 面经资料包|%s 面经资料包]]\n", domain.Slug, domain.Name, domain.Name))
+	b.WriteString(fmt.Sprintf("- %s 面经资料包：%s\n", domain.Name, filepath.ToSlash(filepath.Join(domain.Slug, domain.Name+" 面经资料包.md"))))
 	b.WriteString("\n## 最近更新\n\n")
 	for _, topic := range topics {
-		b.WriteString(fmt.Sprintf("- [[experiences/%s/%s题库|%s题库]]\n", domain.Slug, topic.Name, topic.Name))
+		b.WriteString(fmt.Sprintf("- %s题库：%s\n", topic.Name, filepath.ToSlash(filepath.Join(domain.Slug, topic.Name+"题库.md"))))
 	}
-	return w.writeWorkspaceText(filepath.Join("experiences", "面经总览.md"), b.String())
+	return w.writeWorkspaceText(filepath.Join(WorkspaceDirExperiences, "面经总览.md"), b.String())
 }
 
 func renderHomeIndex(now time.Time) string {
-	return frontmatter("面试资料库首页", []string{"moc", "interview", "career"}, now) + `# 面试资料库首页
+	return `# 面试资料库首页
 
 ## 核心入口
 
-- [[JD 汇总]]
-- [[面经总览]]
-- [[项目专项总览]]
+- 岗位明细/岗位汇总.md
+- 面经汇总/面经总览.md
+- 复习资料库/复习资料总览.md
 
 ## 资料分层
 
 | 层级 | 目录 | 用途 |
 | --- | --- | --- |
-| JD | ` + "`jd/`" + ` | 岗位职责、关键词和匹配关系 |
-| 通用面经 | ` + "`experiences/`" + ` | 公开面经、跨公司高频题、通用答案 |
-| 项目专项 | ` + "`prepare/`" + ` | 个人项目介绍、深挖追问、证据口径 |
-| 具体岗位 | ` + "`my-interviews/`" + ` | 单个岗位的临阵材料、真实复盘 |
-| 过程记录 | ` + "`record/`" + ` | 导入、分类、生成过程记录 |
+| 岗位明细 | ` + "`岗位明细/`" + ` | 岗位职责、关键词和匹配关系 |
+| 面经汇总 | ` + "`面经汇总/`" + ` | 公开面经、跨公司高频题、通用答案 |
+| 复习资料库 | ` + "`复习资料库/`" + ` | 分类知识、项目复习、深挖追问、证据口径 |
+| 我的面试 | ` + "`我的面试/`" + ` | 单个岗位的临阵材料、真实复盘 |
+| 已归档 | ` + "`已归档/`" + ` | 已处理的原始材料 |
 `
 }
 
 func renderExperienceIndex(now time.Time) string {
-	return frontmatter("面经总览", []string{"moc", "interview/experience"}, now) + "# 面经总览\n\n## 方向入口\n\n- 暂无方向资料。导入公开面经或运行 `/library` 后会自动更新。\n"
+	return "# 面经总览\n\n## 方向入口\n\n- 暂无方向资料。导入公开面经或运行 `/library` 后会自动更新。\n"
 }
 
 func renderPrepareIndex(now time.Time) string {
-	return frontmatter("项目专项总览", []string{"moc", "interview/prepare"}, now) + "# 项目专项总览\n\n## 项目入口\n\n- 暂无项目专项资料。导入项目材料后会自动更新。\n"
+	return "# 复习资料总览\n\n## 资料入口\n\n- 暂无复习资料。导入项目材料、知识点或补充资料后会自动更新。\n"
 }
 
 func renderJDIndex(now time.Time) string {
-	return frontmatter("JD 汇总", []string{"moc", "interview/jd"}, now) + "# JD 汇总\n\n## JD 入口\n\n- 暂无 JD。导入 JD 后会自动更新。\n"
+	return "# 岗位汇总\n\n## 岗位入口\n\n- 暂无岗位明细。导入 JD 后会自动更新。\n"
 }
 
 func renderDomainPackage(domain ReviewDomain, topics []ReviewTopic, sourceRel string, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter(domain.Name+" 面经资料包", []string{"moc", "interview/experience", domain.Slug}, now))
 	b.WriteString("# " + domain.Name + " 面经资料包\n\n")
 	b.WriteString("## 维护边界\n\n")
 	b.WriteString("本目录维护该方向的公开面经、跨公司高频题、知识点和可说出口答案。新增内容按主题补到对应文档，不再堆回单个长文档。\n\n")
 	b.WriteString("## 文档地图\n\n")
 	b.WriteString("| 文档 | 职责 |\n| --- | --- |\n")
-	b.WriteString(fmt.Sprintf("| [[%s|来源资料]] | 保存公开面经原文或来源摘要，复习时作为来源回溯。 |\n", strings.TrimSuffix(sourceRel, ".md")))
+	b.WriteString(fmt.Sprintf("| 来源资料 | `%s`，保存公开面经原文或来源摘要，复习时作为来源回溯。 |\n", sourceRel))
 	for _, topic := range topics {
-		b.WriteString(fmt.Sprintf("| [[%s题库]] | 维护%s相关问题、答题要点、追问和项目映射。 |\n", topic.Name, topic.Name))
+		b.WriteString(fmt.Sprintf("| %s题库 | 维护%s相关问题、答题要点、追问和项目映射。 |\n", topic.Name, topic.Name))
 	}
-	b.WriteString(fmt.Sprintf("| [[%s 面经链接与公司观察]] | 保存来源、公司岗位画像和高频追问观察。 |\n", domain.Name))
+	b.WriteString(fmt.Sprintf("| %s 面经链接与公司观察 | 保存来源、公司岗位画像和高频追问观察。 |\n", domain.Name))
 	return b.String()
 }
 
 func renderExperienceObservations(domain ReviewDomain, sourceItem WorkspaceItem, sourceRel string, content string, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter(domain.Name+" 面经链接与公司观察", []string{"interview/experience", domain.Slug}, now))
 	b.WriteString("# " + domain.Name + " 面经链接与公司观察\n\n")
 	b.WriteString("## 来源\n\n")
 	b.WriteString(fmt.Sprintf("- 来源资料：`%s`\n", sourceRel))
@@ -260,7 +257,6 @@ func renderTopicQuestionBank(ctx ReviewLibraryContext, topic ReviewTopic, source
 		questions = []string{inferQuestionForTopic(topic.Name, ctx.ExperienceContent)}
 	}
 	var b strings.Builder
-	b.WriteString(frontmatter(topic.Name+"题库", []string{"interview/experience", ctx.Domain.Slug}, now))
 	b.WriteString("# " + topic.Name + "题库\n\n")
 	b.WriteString(fmt.Sprintf("> 来源：`%s`。公开面经资料，不是用户真实面试记录。\n\n", sourceItem.Path))
 	for i, question := range questions {
@@ -288,7 +284,6 @@ func renderTopicQuestionBank(ctx ReviewLibraryContext, topic ReviewTopic, source
 
 func renderSourceMaterial(sourceItem WorkspaceItem, content string, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter(sourceItem.Title, []string{"interview/source"}, now))
 	b.WriteString("# " + sourceItem.Title + "\n\n")
 	b.WriteString("> 公开面经源资料，用于回溯题目来源；不是用户真实面试记录。\n\n")
 	b.WriteString(strings.TrimSpace(content))
@@ -297,27 +292,11 @@ func renderSourceMaterial(sourceItem WorkspaceItem, content string, now time.Tim
 }
 
 func frontmatter(title string, tags []string, now time.Time) string {
-	if now.IsZero() {
-		now = time.Now()
-	}
-	var b strings.Builder
-	b.WriteString("---\n")
-	b.WriteString("title: " + title + "\n")
-	b.WriteString("tags:\n")
-	for _, tag := range tags {
-		if strings.TrimSpace(tag) == "" {
-			continue
-		}
-		b.WriteString("  - " + tag + "\n")
-	}
-	b.WriteString("status: active\n")
-	b.WriteString("updated: " + now.Format("2006-01-02") + "\n")
-	b.WriteString("---\n\n")
-	return b.String()
+	return ""
 }
 
 func (w *Workspace) writeRoleReviewDocuments(ctx ReviewLibraryContext, now time.Time) ([]string, error) {
-	roleDir := filepath.Join("my-interviews", safeFileName(ctx.RoleName))
+	roleDir := filepath.Join(WorkspaceDirMyInterviews, safeFileName(ctx.RoleName))
 	files := map[string]string{
 		filepath.Join(roleDir, "00-JD结构化画像.md"):        renderJDProfile(ctx, now),
 		filepath.Join(roleDir, "01-临阵抗拷打主文档.md"):       renderCrammingDoc(ctx, now),
@@ -342,7 +321,7 @@ func (w *Workspace) writeProjectQADocuments(ctx ReviewLibraryContext, now time.T
 	}
 	var paths []string
 	for _, project := range projects {
-		rel := filepath.Join("prepare", slugForPath(project.Name)+"-interview-qa.md")
+		rel := filepath.Join(WorkspaceDirPrepare, slugForPath(project.Name)+"-interview-qa.md")
 		if err := w.writeWorkspaceText(rel, renderProjectQA(project, ctx, now)); err != nil {
 			return nil, err
 		}
@@ -351,35 +330,32 @@ func (w *Workspace) writeProjectQADocuments(ctx ReviewLibraryContext, now time.T
 	if err := w.refreshPrepareIndex(projects, now); err != nil {
 		return nil, err
 	}
-	paths = append(paths, filepath.ToSlash(filepath.Join("prepare", "项目专项总览.md")))
+	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
 	return paths, nil
 }
 
 func (w *Workspace) refreshPrepareIndex(projects []ResumeProject, now time.Time) error {
 	var b strings.Builder
-	b.WriteString(frontmatter("项目专项总览", []string{"moc", "interview/prepare"}, now))
-	b.WriteString("# 项目专项总览\n\n## 项目入口\n\n")
+	b.WriteString("# 复习资料总览\n\n## 项目入口\n\n")
 	for _, project := range projects {
-		b.WriteString(fmt.Sprintf("- [[%s-interview-qa|%s]]\n", slugForPath(project.Name), project.Name))
+		b.WriteString(fmt.Sprintf("- %s：%s\n", project.Name, slugForPath(project.Name)+"-interview-qa.md"))
 	}
-	return w.writeWorkspaceText(filepath.Join("prepare", "项目专项总览.md"), b.String())
+	return w.writeWorkspaceText(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"), b.String())
 }
 
 func (w *Workspace) refreshJDIndex(ctx ReviewLibraryContext, now time.Time) error {
 	var b strings.Builder
-	b.WriteString(frontmatter("JD 汇总", []string{"moc", "interview/jd"}, now))
-	b.WriteString("# JD 汇总\n\n")
+	b.WriteString("# 岗位汇总\n\n")
 	b.WriteString("## 当前岗位\n\n")
-	b.WriteString(fmt.Sprintf("- [[my-interviews/%s/00-JD结构化画像|%s JD 结构化画像]]\n", safeFileName(ctx.RoleName), ctx.RoleName))
+	b.WriteString(fmt.Sprintf("- %s JD 结构化画像：%s\n", ctx.RoleName, filepath.ToSlash(filepath.Join(WorkspaceDirMyInterviews, safeFileName(ctx.RoleName), "00-JD结构化画像.md"))))
 	if strings.TrimSpace(ctx.JDPath) != "" {
 		b.WriteString(fmt.Sprintf("- 源资料：`%s`\n", ctx.JDPath))
 	}
-	return w.writeWorkspaceText(filepath.Join("jd", "JD 汇总.md"), b.String())
+	return w.writeWorkspaceText(filepath.Join(WorkspaceDirJD, "岗位汇总.md"), b.String())
 }
 
 func renderJDProfile(ctx ReviewLibraryContext, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter("JD结构化画像", []string{"interview/jd", ctx.Domain.Slug}, now))
 	b.WriteString("# JD结构化画像\n\n")
 	b.WriteString("## 岗位目标\n\n")
 	b.WriteString("- " + firstNonEmptyLine(ctx.JDContent, ctx.RoleName) + "\n\n")
@@ -400,7 +376,6 @@ func renderJDProfile(ctx ReviewLibraryContext, now time.Time) string {
 func renderCrammingDoc(ctx ReviewLibraryContext, now time.Time) string {
 	questions := inferQuestionsForTopic("", ctx.ExperienceContent)
 	var b strings.Builder
-	b.WriteString(frontmatter("临阵抗拷打主文档", []string{"interview/brief", ctx.Domain.Slug}, now))
 	b.WriteString("# 临阵抗拷打主文档\n\n")
 	b.WriteString("## 先背 3 个核心答案\n\n")
 	b.WriteString("### 1. 自我介绍\n\n")
@@ -422,7 +397,6 @@ func renderCrammingDoc(ctx ReviewLibraryContext, now time.Time) string {
 
 func renderReviewPlan(ctx ReviewLibraryContext, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter("复习计划", []string{"interview/plan", ctx.Domain.Slug}, now))
 	b.WriteString("# 复习计划\n\n")
 	b.WriteString("## Day 1\n\n")
 	b.WriteString("- 梳理 JD 关键词，背熟自我介绍和岗位理解。\n")
@@ -435,7 +409,6 @@ func renderReviewPlan(ctx ReviewLibraryContext, now time.Time) string {
 
 func renderExperienceJDLink(ctx ReviewLibraryContext, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter("面经来源与JD关联补充", []string{"interview/experience", ctx.Domain.Slug}, now))
 	b.WriteString("# 面经来源与JD关联补充\n\n")
 	b.WriteString("## 来源\n\n")
 	b.WriteString(fmt.Sprintf("- JD：`%s`\n", emptyIfBlank(ctx.JDPath)))
@@ -452,7 +425,6 @@ func renderExperienceJDLink(ctx ReviewLibraryContext, now time.Time) string {
 
 func renderRoleBattlePage(ctx ReviewLibraryContext, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter(ctx.RoleName+"岗作战页", []string{"interview/role", ctx.Domain.Slug}, now))
 	b.WriteString("# " + ctx.RoleName + "岗作战页\n\n")
 	b.WriteString("## 一句话策略\n\n")
 	b.WriteString("围绕岗位关键词，把简历中的真实平台运营、内容策划、数据复盘和合作经历讲成可验证案例。\n\n")
@@ -465,9 +437,9 @@ func renderRoleBattlePage(ctx ReviewLibraryContext, now time.Time) string {
 		b.WriteString("- " + q + "\n")
 	}
 	b.WriteString("\n## 先看哪些文件\n\n")
-	b.WriteString("- [[00-JD结构化画像]]\n")
-	b.WriteString("- [[01-临阵抗拷打主文档]]\n")
-	b.WriteString("- [[03-面经来源与JD关联补充]]\n")
+	b.WriteString("- 00-JD结构化画像.md\n")
+	b.WriteString("- 01-临阵抗拷打主文档.md\n")
+	b.WriteString("- 03-面经来源与JD关联补充.md\n")
 	return b.String()
 }
 
@@ -478,7 +450,6 @@ type ResumeProject struct {
 
 func renderProjectQA(project ResumeProject, ctx ReviewLibraryContext, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(frontmatter(project.Name+" 面试 QA", []string{"interview/prepare", ctx.Domain.Slug}, now))
 	b.WriteString("# " + project.Name + " 面试 QA\n\n")
 	b.WriteString("## 项目一句话\n\n")
 	b.WriteString("- " + strings.Join(firstN(project.Lines, 2), "；") + "\n\n")

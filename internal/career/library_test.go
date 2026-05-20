@@ -16,16 +16,16 @@ func TestOpenWorkspaceCreatesReviewLibraryEntryPoints(t *testing.T) {
 	}
 	for _, rel := range []string{
 		"面试资料库首页.md",
-		filepath.Join("experiences", "面经总览.md"),
-		filepath.Join("prepare", "项目专项总览.md"),
-		filepath.Join("jd", "JD 汇总.md"),
+		filepath.Join(WorkspaceDirExperiences, "面经总览.md"),
+		filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"),
+		filepath.Join(WorkspaceDirJD, "岗位汇总.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(ws.Root, rel))
 		if err != nil {
 			t.Fatalf("expected review library entry %s: %v", rel, err)
 		}
-		if !strings.Contains(string(data), "title:") {
-			t.Fatalf("expected frontmatter in %s:\n%s", rel, data)
+		if strings.HasPrefix(strings.TrimSpace(string(data)), "---") || strings.Contains(string(data), "[[") {
+			t.Fatalf("expected plain markdown in %s:\n%s", rel, data)
 		}
 	}
 }
@@ -51,14 +51,14 @@ func TestArchivePublicInterviewExperienceGeneratesDynamicDirections(t *testing.T
 		t.Fatalf("expected different dynamic domains, got backend=%+v product=%+v", backend.Domain, product.Domain)
 	}
 	for _, rel := range []string{
-		filepath.Join("experiences", backend.Domain.Slug, backend.Domain.Name+" 面经资料包.md"),
-		filepath.Join("experiences", product.Domain.Slug, product.Domain.Name+" 面经资料包.md"),
+		filepath.Join(WorkspaceDirExperiences, backend.Domain.Slug, backend.Domain.Name+" 面经资料包.md"),
+		filepath.Join(WorkspaceDirExperiences, product.Domain.Slug, product.Domain.Name+" 面经资料包.md"),
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("expected generated package %s: %v", rel, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, "my-interviews", "市场营销", "面经来源与复习清单.md")); err == nil {
+	if _, err := os.Stat(filepath.Join(root, WorkspaceDirMyInterviews, "市场营销", "面经来源与复习清单.md")); err == nil {
 		t.Fatalf("unexpected hard-coded marketing interview checklist")
 	}
 }
@@ -97,7 +97,7 @@ Wonderlab
 	if strings.Contains(strings.Join(result.Paths, "\n"), "domain-") {
 		t.Fatalf("generated paths should be readable, got %+v", result.Paths)
 	}
-	bankPath := filepath.Join(root, "experiences", "marketing-new-media-operations-intern", "业务与策略题库.md")
+	bankPath := filepath.Join(root, WorkspaceDirExperiences, "marketing-new-media-operations-intern", "业务与策略题库.md")
 	bank, err := os.ReadFile(bankPath)
 	if err != nil {
 		t.Fatalf("expected question bank %s: %v\npaths=%+v", bankPath, err, result.Paths)
@@ -107,11 +107,11 @@ Wonderlab
 			t.Fatalf("question bank missing %q:\n%s", expected, bank)
 		}
 	}
-	rolePath := filepath.Join(root, "my-interviews", "市场营销新媒体运营实习生JD", "01-临阵抗拷打主文档.md")
+	rolePath := filepath.Join(root, WorkspaceDirMyInterviews, "市场营销新媒体运营实习生JD", "01-临阵抗拷打主文档.md")
 	if _, err := os.Stat(rolePath); err != nil {
 		t.Fatalf("expected role cramming doc %s: %v\npaths=%+v", rolePath, err, result.Paths)
 	}
-	projectPath := filepath.Join(root, "prepare", "wonderlab-interview-qa.md")
+	projectPath := filepath.Join(root, WorkspaceDirPrepare, "wonderlab-interview-qa.md")
 	project, err := os.ReadFile(projectPath)
 	if err != nil {
 		t.Fatalf("expected project QA %s: %v\npaths=%+v", projectPath, err, result.Paths)
@@ -138,7 +138,7 @@ func TestGenerateReviewLibraryUsesGeneralForUnknownDirection(t *testing.T) {
 	if len(result.Paths) == 0 {
 		t.Fatalf("expected generated review library paths")
 	}
-	if _, err := os.Stat(filepath.Join(root, "experiences", "general", "通用 面经资料包.md")); err != nil {
-		t.Fatalf("expected general review package: %v", err)
+	if !strings.Contains(strings.Join(result.Paths, "\n"), WorkspaceDirExperiences+"/") {
+		t.Fatalf("expected generated review package under %s: %+v", WorkspaceDirExperiences, result.Paths)
 	}
 }

@@ -3,6 +3,9 @@ happyagent.local.json
 bin/
 .gocache/
 .gomodcache/
+desktop/node_modules/
+desktop/dist/
+desktop/*.tsbuildinfo
 logs/
 .happyagent/
 career-workspace/

@@ -20,17 +20,18 @@ func TestOpenWorkspaceCreatesCareerDirsAndFiles(t *testing.T) {
 		t.Fatalf("unexpected root: %s", ws.Root)
 	}
 	for _, rel := range []string{
-		"workspace.json",
-		"index.json",
 		"inbox",
-		"resume",
-		"jd",
-		"experiences",
-		"prepare",
-		"my-interviews",
-		"outputs",
-		"outputs/runs",
-		"record",
+		WorkspaceDirResume,
+		WorkspaceDirJD,
+		WorkspaceDirExperiences,
+		WorkspaceDirPrepare,
+		WorkspaceDirMyInterviews,
+		WorkspaceDirOutputs,
+		filepath.Join(WorkspaceDirOutputs, "runs"),
+		WorkspaceDirArchive,
+		filepath.Join(WorkspaceInternalDir, "workspace.json"),
+		filepath.Join(WorkspaceInternalDir, "index.json"),
+		filepath.Join(WorkspaceInternalDir, WorkspaceGuideFileName),
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("workspace missing %s: %v", rel, err)
@@ -79,7 +80,7 @@ func TestAddJDSavesSourceMetadataAndIndex(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(item.Path))); err != nil {
 		t.Fatalf("source was not written: %v", err)
 	}
-	metadataPath := filepath.Join(root, "jd", item.ID, "metadata.json")
+	metadataPath := filepath.Join(root, internalItemRelDir(item.ID), "metadata.json")
 	if _, err := os.Stat(metadataPath); err != nil {
 		t.Fatalf("metadata was not written: %v", err)
 	}
@@ -87,7 +88,7 @@ func TestAddJDSavesSourceMetadataAndIndex(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if meta.ActiveJD != item.Path {
+	if !strings.HasPrefix(meta.ActiveJD, WorkspaceInternalDir+"/items/") {
 		t.Fatalf("unexpected active jd: %q", meta.ActiveJD)
 	}
 	if len(index.Items) != 1 || index.Items[0].ID != item.ID {
@@ -110,14 +111,14 @@ func TestAddMaterialSavesResumeVersionAndUpdatesCurrentResume(t *testing.T) {
 	if item.Type != WorkspaceTypeResume {
 		t.Fatalf("unexpected type: %+v", item)
 	}
-	if filepath.Dir(filepath.FromSlash(item.Path)) != filepath.Join("resume", "versions", item.ID) {
+	if filepath.Dir(filepath.FromSlash(item.Path)) != WorkspaceDirResume {
 		t.Fatalf("unexpected resume path: %s", item.Path)
 	}
 	meta, index, err := ws.Status()
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if meta.CurrentResume != item.Path {
+	if !strings.HasPrefix(meta.CurrentResume, WorkspaceInternalDir+"/items/") {
 		t.Fatalf("current resume not updated: %q", meta.CurrentResume)
 	}
 	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeResume {
@@ -177,10 +178,10 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMaterialFromFile() error = %v", err)
 	}
-	if !strings.HasSuffix(item.Path, "/extracted.md") {
+	if !strings.HasPrefix(item.Path, WorkspaceDirResume+"/") || !strings.HasSuffix(item.Path, ".md") {
 		t.Fatalf("unexpected path: %s", item.Path)
 	}
-	if item.Metadata.Original == "" || item.Metadata.Source != item.Path {
+	if item.Metadata.Original == "" || !strings.HasPrefix(item.Metadata.Source, WorkspaceInternalDir+"/items/") {
 		t.Fatalf("unexpected metadata: %+v", item.Metadata)
 	}
 	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(item.Metadata.Original))); err != nil {
@@ -299,10 +300,10 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ArchivePublicInterviewExperience() error = %v", err)
 	}
-	if result.ExperienceItem.Type != WorkspaceTypeExperiences || !strings.HasPrefix(result.ExperienceItem.Path, "experiences/") {
+	if result.ExperienceItem.Type != WorkspaceTypeExperiences || !strings.HasPrefix(result.ExperienceItem.Path, WorkspaceDirExperiences+"/") {
 		t.Fatalf("unexpected experience item: %+v", result.ExperienceItem)
 	}
-	if result.PrepareItem.Type != WorkspaceTypePrepare || !strings.HasPrefix(result.PrepareItem.Path, "prepare/") {
+	if result.PrepareItem.Type != WorkspaceTypePrepare || !strings.HasPrefix(result.PrepareItem.Path, WorkspaceDirPrepare+"/") {
 		t.Fatalf("expected prepare item, got %+v", result.PrepareItem)
 	}
 	for _, rel := range []string{

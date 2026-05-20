@@ -49,12 +49,12 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 		title = inferMaterialTitle(itemType, content)
 	}
 	id := w.uniqueMaterialID(itemType, title, now)
-	relDir := materialRelDir(itemType, id)
-	absDir := filepath.Join(w.Root, relDir)
-	if err := os.MkdirAll(absDir, 0o755); err != nil {
+	internalDir := internalItemRelDir(id)
+	internalAbsDir := filepath.Join(w.Root, internalDir)
+	if err := os.MkdirAll(internalAbsDir, 0o755); err != nil {
 		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
 	}
-	sourceRel := filepath.Join(relDir, "extracted.md")
+	sourceRel := filepath.Join(internalDir, "extracted.md")
 	sourceContent := content
 	if sourceContent == "" {
 		sourceContent = extractionFailurePlaceholder(filepath.Base(input.OriginalPath), input.ExtractError)
@@ -63,11 +63,22 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 		return WorkspaceItem{}, fmt.Errorf("write extracted %s source: %w", itemType, err)
 	}
 	originalRel := ""
+	visibleRel := uniqueRelPath(w.Root, userVisibleMaterialRel(itemType, title, input.OriginalName))
 	if strings.TrimSpace(input.OriginalPath) != "" {
-		originalRel = filepath.Join(relDir, "source"+filepath.Ext(input.OriginalPath))
+		originalRel = uniqueRelPath(w.Root, archiveRel(now, input.OriginalName))
 		if err := copyFile(input.OriginalPath, filepath.Join(w.Root, originalRel)); err != nil {
 			return WorkspaceItem{}, err
 		}
+	}
+	if itemType == WorkspaceTypeResume && strings.TrimSpace(input.OriginalPath) != "" {
+		resumeOriginalRel := filepath.Join(WorkspaceDirResume, safeFileNameWithExt(input.OriginalName, filepath.Ext(input.OriginalPath)))
+		resumeOriginalRel = uniqueRelPath(w.Root, resumeOriginalRel)
+		if err := copyFile(input.OriginalPath, filepath.Join(w.Root, resumeOriginalRel)); err != nil {
+			return WorkspaceItem{}, err
+		}
+	}
+	if err := w.writeWorkspaceText(visibleRel, renderUserVisibleMaterial(itemType, title, sourceContent, input, now)); err != nil {
+		return WorkspaceItem{}, err
 	}
 	metadata := WorkspaceItemMetadata{
 		ID:                 id,
@@ -83,14 +94,14 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 		ExtractError:       strings.TrimSpace(input.ExtractError),
 		ContentFingerprint: input.ContentFingerprint,
 	}
-	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
+	if err := w.writeJSON(filepath.Join(internalAbsDir, "metadata.json"), metadata); err != nil {
 		return WorkspaceItem{}, err
 	}
 	item := WorkspaceItem{
 		ID:        id,
 		Type:      itemType,
 		Title:     title,
-		Path:      filepath.ToSlash(sourceRel),
+		Path:      filepath.ToSlash(visibleRel),
 		Tags:      inferMaterialTags(itemType, content),
 		CreatedAt: now,
 		Summary:   summarizeMaterial(sourceContent),
@@ -180,15 +191,19 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 	}
 	title := inferMaterialTitle(itemType, content)
 	id := w.uniqueMaterialID(itemType, title, now)
-	relDir := materialRelDir(itemType, id)
-	absDir := filepath.Join(w.Root, relDir)
-	if err := os.MkdirAll(absDir, 0o755); err != nil {
+	internalDir := internalItemRelDir(id)
+	internalAbsDir := filepath.Join(w.Root, internalDir)
+	if err := os.MkdirAll(internalAbsDir, 0o755); err != nil {
 		return WorkspaceItem{}, fmt.Errorf("create %s dir: %w", itemType, err)
 	}
-	sourceRel := filepath.Join(relDir, "extracted.md")
+	sourceRel := filepath.Join(internalDir, "extracted.md")
 	sourceAbs := filepath.Join(w.Root, sourceRel)
 	if err := os.WriteFile(sourceAbs, []byte(content+"\n"), 0o644); err != nil {
 		return WorkspaceItem{}, fmt.Errorf("write %s source: %w", itemType, err)
+	}
+	visibleRel := uniqueRelPath(w.Root, userVisibleMaterialRel(itemType, title, ""))
+	if err := w.writeWorkspaceText(visibleRel, renderUserVisibleMaterial(itemType, title, content, WorkspaceFileInput{}, now)); err != nil {
+		return WorkspaceItem{}, err
 	}
 	metadata := WorkspaceItemMetadata{
 		ID:            id,
@@ -200,7 +215,7 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 		MIMEType:      "text/markdown",
 		ExtractStatus: "ok",
 	}
-	if err := w.writeJSON(filepath.Join(absDir, "metadata.json"), metadata); err != nil {
+	if err := w.writeJSON(filepath.Join(internalAbsDir, "metadata.json"), metadata); err != nil {
 		return WorkspaceItem{}, err
 	}
 
@@ -208,7 +223,7 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 		ID:        id,
 		Type:      itemType,
 		Title:     title,
-		Path:      filepath.ToSlash(sourceRel),
+		Path:      filepath.ToSlash(visibleRel),
 		Tags:      inferMaterialTags(itemType, content),
 		CreatedAt: now,
 		Summary:   summarizeMaterial(content),
@@ -394,19 +409,19 @@ func summarizeMaterial(content string) string {
 func workspaceTypeDir(itemType string) string {
 	switch strings.ToLower(strings.TrimSpace(itemType)) {
 	case WorkspaceTypeJD:
-		return "jd"
+		return WorkspaceDirJD
 	case WorkspaceTypeResume:
-		return "resume"
+		return WorkspaceDirResume
 	case WorkspaceTypePrepare:
-		return "prepare"
+		return WorkspaceDirPrepare
 	case WorkspaceTypeExperiences:
-		return "experiences"
+		return WorkspaceDirExperiences
 	case WorkspaceTypeMyInterviews:
-		return "my-interviews"
+		return WorkspaceDirMyInterviews
 	case WorkspaceTypeRecord:
-		return filepath.Join("record", "unclassified")
+		return filepath.Join(WorkspaceInternalDir, "record", "unclassified")
 	default:
-		return filepath.Join("record", "unclassified")
+		return filepath.Join(WorkspaceInternalDir, "record", "unclassified")
 	}
 }
 
@@ -416,22 +431,167 @@ func materialID(itemType string, title string, now time.Time) string {
 
 func (w *Workspace) uniqueMaterialID(itemType string, title string, now time.Time) string {
 	baseID := materialID(itemType, title, now)
-	if _, err := os.Stat(filepath.Join(w.Root, materialRelDir(itemType, baseID))); err != nil {
+	if _, err := os.Stat(filepath.Join(w.Root, internalItemRelDir(baseID))); err != nil {
 		return baseID
 	}
 	for i := 2; ; i++ {
 		candidate := fmt.Sprintf("%s-%d", baseID, i)
-		if _, err := os.Stat(filepath.Join(w.Root, materialRelDir(itemType, candidate))); err != nil {
+		if _, err := os.Stat(filepath.Join(w.Root, internalItemRelDir(candidate))); err != nil {
 			return candidate
 		}
 	}
 }
 
 func materialRelDir(itemType string, id string) string {
-	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeResume {
-		return filepath.Join("resume", "versions", id)
+	return userVisibleMaterialDir(itemType)
+}
+
+func internalItemRelDir(id string) string {
+	return filepath.Join(WorkspaceInternalDir, "items", slug(id))
+}
+
+func userVisibleMaterialDir(itemType string) string {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case WorkspaceTypeJD:
+		return WorkspaceDirJD
+	case WorkspaceTypeResume:
+		return WorkspaceDirResume
+	case WorkspaceTypePrepare:
+		return WorkspaceDirPrepare
+	case WorkspaceTypeExperiences:
+		return WorkspaceDirExperiences
+	case WorkspaceTypeMyInterviews:
+		return WorkspaceDirMyInterviews
+	case WorkspaceTypeRecord:
+		return filepath.Join(WorkspaceInternalDir, "record", "unclassified")
+	default:
+		return WorkspaceDirPrepare
 	}
-	return filepath.Join(workspaceTypeDir(itemType), id)
+}
+
+func userVisibleMaterialRel(itemType string, title string, originalName string) string {
+	dir := userVisibleMaterialDir(itemType)
+	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeRecord {
+		return filepath.Join(dir, safeFileNameWithExt(title, ".md"))
+	}
+	base := title
+	if strings.TrimSpace(base) == "" {
+		base = strings.TrimSuffix(originalName, filepath.Ext(originalName))
+	}
+	if strings.TrimSpace(base) == "" {
+		base = itemType
+	}
+	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeExperiences && !strings.Contains(base, "面经") {
+		base += "面经"
+	}
+	return filepath.Join(dir, safeFileNameWithExt(base, ".md"))
+}
+
+func archiveRel(now time.Time, name string) string {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	return filepath.Join(WorkspaceDirArchive, now.Format("2006-01-02"), safeFileNameWithExt(name, filepath.Ext(name)))
+}
+
+func uniqueRelPath(root string, rel string) string {
+	return filepath.ToSlash(relFromRoot(root, uniquePath(filepath.Join(root, filepath.FromSlash(rel)))))
+}
+
+func safeFileNameWithExt(name string, ext string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "资料"
+	}
+	if ext == "" {
+		ext = filepath.Ext(name)
+	}
+	name = strings.TrimSuffix(name, filepath.Ext(name))
+	name = safeFileName(name)
+	if name == "" {
+		name = "资料"
+	}
+	if ext != "" && !strings.HasPrefix(ext, ".") {
+		ext = "." + ext
+	}
+	return name + ext
+}
+
+func renderUserVisibleMaterial(itemType string, title string, content string, input WorkspaceFileInput, now time.Time) string {
+	switch strings.ToLower(strings.TrimSpace(itemType)) {
+	case WorkspaceTypeExperiences:
+		return renderInterviewExperienceSummary(title, content, input, now)
+	case WorkspaceTypeJD:
+		return renderPlainMaterial(title, "岗位明细", content)
+	case WorkspaceTypeResume:
+		return renderPlainMaterial(title, "我的简历", content)
+	case WorkspaceTypePrepare:
+		return renderPlainMaterial(title, "复习资料", content)
+	case WorkspaceTypeMyInterviews:
+		return renderPlainMaterial(title, "我的面试", content)
+	default:
+		return renderPlainMaterial(title, "资料", content)
+	}
+}
+
+func renderPlainMaterial(title string, section string, content string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = section
+	}
+	if strings.HasPrefix(strings.TrimSpace(content), "# ") {
+		return content
+	}
+	return fmt.Sprintf("# %s\n\n## %s\n\n%s", title, section, strings.TrimSpace(content))
+}
+
+func renderInterviewExperienceSummary(title string, content string, input WorkspaceFileInput, now time.Time) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "面经"
+	}
+	if !strings.Contains(title, "面经") {
+		title += "面经"
+	}
+	questions := inferQuestionsForTopic("", content)
+	if len(questions) == 0 {
+		questions = []string{"请介绍一下这份面经中最核心的问题。"}
+	}
+	var b strings.Builder
+	b.WriteString("# " + title + "\n\n")
+	b.WriteString("## 基础信息\n\n")
+	b.WriteString("- 来源：" + firstNonEmpty(input.OriginalName, "用户导入或手动输入") + "\n")
+	b.WriteString("- 整理时间：" + now.Format("2006-01-02") + "\n\n")
+	b.WriteString("## 原始内容摘要\n\n")
+	b.WriteString(summarizeMaterial(content) + "\n\n")
+	b.WriteString("## 面试问题与参考答案\n\n")
+	for i, question := range questions {
+		b.WriteString(fmt.Sprintf("### Q%d：%s\n\n", i+1, question))
+		b.WriteString("#### 参考答案\n\n")
+		b.WriteString(renderAnswerForQuestion(question, ReviewLibraryContext{ExperienceContent: content}) + "\n\n")
+		b.WriteString("#### 可追问问题\n\n")
+		followups := followupQuestions(question)
+		for _, followup := range followups {
+			b.WriteString("- " + followup + "\n")
+		}
+		b.WriteString("\n#### 追问参考答案\n\n")
+		for _, followup := range followups {
+			b.WriteString("- " + followup + "：先给结论，再结合已有材料说明证据；材料不足的部分标记为待补充。\n")
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("## 需要补充的材料\n\n")
+	b.WriteString("- 可验证的项目数据、截图、复盘文档或岗位背景信息。\n")
+	return b.String()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func itemIDPrefix(itemType string) string {
