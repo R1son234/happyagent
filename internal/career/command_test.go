@@ -391,7 +391,7 @@ func TestRunInteractiveIdentifyInboxScansInboxWithoutModelGuessing(t *testing.T)
 	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
 		t.Fatalf("mkdir inbox: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 高德地图 AI Coding 工程师\n岗位职责：负责 AI Coding 工具建设。\n任职要求：熟悉后端工程和 LLM 应用。"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 示例公司 示例岗位\n岗位职责：负责示例工具建设。\n任职要求：熟悉示例工程和问题拆解。"), 0o644); err != nil {
 		t.Fatalf("write jd: %v", err)
 	}
 	var stdout bytes.Buffer
@@ -991,7 +991,7 @@ func TestRunInteractiveRejectsUnsupportedAddType(t *testing.T) {
 	err := RunInteractive(Dependencies{
 		App:           app,
 		Config:        config.Default(),
-		Stdin:         strings.NewReader("/add project 市场营销项目准备\n/exit\n"),
+		Stdin:         strings.NewReader("/add project 示例项目准备\n/exit\n"),
 		Stdout:        &stdout,
 		Stderr:        &bytes.Buffer{},
 		WorkspaceRoot: workspaceRoot,
@@ -1229,7 +1229,7 @@ func TestRunInteractiveAnalyzeDoesNotScanInboxWithoutInboxSignal(t *testing.T) {
 	err = RunInteractive(Dependencies{
 		App:           app,
 		Config:        config.Default(),
-		Stdin:         strings.NewReader("后续分析，核心帮我分析阿里云对应的岗位\n/exit\n"),
+		Stdin:         strings.NewReader("后续分析，核心帮我分析示例公司对应的岗位\n/exit\n"),
 		Stdout:        &stdout,
 		Stderr:        &bytes.Buffer{},
 		WorkspaceRoot: workspaceRoot,
@@ -1363,7 +1363,7 @@ func TestRunInteractiveInboxSignalScansInbox(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(workspaceRoot, "inbox"), 0o755); err != nil {
 		t.Fatalf("mkdir inbox: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 高德地图 AI Coding 工程师\n岗位职责：负责 AI Coding 工具建设。\n任职要求：熟悉后端工程和 LLM 应用。"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "inbox", "jd.md"), []byte("# 示例公司 示例岗位\n岗位职责：负责示例工具建设。\n任职要求：熟悉示例工程和问题拆解。"), 0o644); err != nil {
 		t.Fatalf("write jd: %v", err)
 	}
 	var stdout bytes.Buffer

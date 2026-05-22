@@ -21,7 +21,7 @@ func TestOpenWorkspaceCreatesDefaultGuide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadGuide() error = %v", err)
 	}
-	if guide.DemoTopic != "市场营销" {
+	if guide.DemoTopic != "示例主题" {
 		t.Fatalf("unexpected demo topic: %+v", guide)
 	}
 	if _, ok := guide.Directory(WorkspaceTypeJD); !ok {
@@ -60,7 +60,7 @@ func TestWorkspaceGuidePromptSummaryIncludesDirectoryResponsibilities(t *testing
 			t.Fatalf("summary missing %q:\n%s", expected, summary)
 		}
 	}
-	if strings.Contains(summary, "neutral demo topic") || strings.Contains(summary, "Use \"市场营销\"") {
+	if strings.Contains(summary, "neutral demo topic") || strings.Contains(summary, "Use \"示例主题\"") {
 		t.Fatalf("runtime prompt summary should not inject demo topic:\n%s", summary)
 	}
 }

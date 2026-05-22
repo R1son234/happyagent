@@ -226,7 +226,66 @@ func (w *Workspace) writeJSON(path string, value any) error {
 }
 
 func (w *Workspace) writeWorkspaceText(relPath string, content string) error {
+	content = normalizeMarkdownTables(content)
 	return w.writeWorkspaceBytes(relPath, []byte(strings.TrimSpace(content)+"\n"))
+}
+
+func normalizeMarkdownTables(content string) string {
+	var out []string
+	for _, line := range strings.Split(content, "\n") {
+		parts := splitJoinedMarkdownTableRows(line)
+		out = append(out, parts...)
+	}
+	return strings.Join(out, "\n")
+}
+
+func splitJoinedMarkdownTableRows(line string) []string {
+	if !strings.Contains(line, "||") || !strings.Contains(line, "|") {
+		return []string{line}
+	}
+	rawParts := strings.Split(line, "||")
+	if len(rawParts) <= 1 {
+		return []string{line}
+	}
+	var rows []string
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if strings.Contains(part, "|") {
+			if !strings.HasPrefix(part, "|") {
+				part = "| " + part
+			}
+			if !strings.HasSuffix(part, "|") {
+				part += " |"
+			}
+			part = normalizeMarkdownTableSeparatorRow(part)
+		}
+		rows = append(rows, part)
+	}
+	if len(rows) == 0 {
+		return []string{line}
+	}
+	return rows
+}
+
+func normalizeMarkdownTableSeparatorRow(row string) string {
+	trimmed := strings.TrimSpace(row)
+	body := strings.Trim(trimmed, "| ")
+	if body == "" {
+		return row
+	}
+	for _, r := range body {
+		if r != '-' && r != ':' && r != '|' && r != ' ' {
+			return row
+		}
+	}
+	cells := strings.Split(body, "|")
+	for i, cell := range cells {
+		cells[i] = strings.TrimSpace(cell)
+	}
+	return "|" + strings.Join(cells, "|") + "|"
 }
 
 func (w *Workspace) writeWorkspaceBytes(relPath string, content []byte) error {

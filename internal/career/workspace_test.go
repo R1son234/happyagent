@@ -153,6 +153,27 @@ func TestWriteUserOutputCreatesLatestAndTimestampedFiles(t *testing.T) {
 	}
 }
 
+func TestWriteWorkspaceTextNormalizesJoinedMarkdownTableRows(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	ws, err := OpenWorkspace(root, time.Date(2026, 5, 10, 10, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if err := ws.writeWorkspaceText("table.md", "说明\n\n| 列A | 列B ||------|------|| 值A | 值B |"); err != nil {
+		t.Fatalf("writeWorkspaceText() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, "table.md"))
+	if err != nil {
+		t.Fatalf("read table: %v", err)
+	}
+	got := string(data)
+	for _, expected := range []string{"| 列A | 列B |", "|------|------|", "| 值A | 值B |"} {
+		if !strings.Contains(got, expected) {
+			t.Fatalf("normalized table missing %q:\n%s", expected, got)
+		}
+	}
+}
+
 func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 4, 30, 16, 5, 0, 0, time.UTC)
@@ -162,12 +183,12 @@ func TestAddMaterialFromFileStoresOriginalAndMetadata(t *testing.T) {
 	}
 	sourceDir := t.TempDir()
 	sourcePath := filepath.Join(sourceDir, "resume.txt")
-	if err := os.WriteFile(sourcePath, []byte("简历\n工作经历：Go 后端\n"), 0o644); err != nil {
+	if err := os.WriteFile(sourcePath, []byte("简历\n工作经历：示例开发\n"), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
 	item, err := ws.AddMaterialFromFile(WorkspaceFileInput{
 		ItemType:      WorkspaceTypeResume,
-		Text:          "简历\n工作经历：Go 后端",
+		Text:          "简历\n工作经历：示例开发",
 		OriginalPath:  sourcePath,
 		OriginalName:  "resume.txt",
 		Now:           now,
@@ -197,18 +218,18 @@ func TestAddMaterialFromFileAvoidsSameSecondChineseTitleCollision(t *testing.T) 
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 	sourceDir := t.TempDir()
-	firstPath := filepath.Join(sourceDir, "字节Agent开发三面面经.md")
-	secondPath := filepath.Join(sourceDir, "字节Agent开发二面面经.md")
-	if err := os.WriteFile(firstPath, []byte("# 字节Agent开发三面面经\n三面内容"), 0o644); err != nil {
+	firstPath := filepath.Join(sourceDir, "示例公司三面面经.md")
+	secondPath := filepath.Join(sourceDir, "示例公司二面面经.md")
+	if err := os.WriteFile(firstPath, []byte("# 示例公司三面面经\n三面内容"), 0o644); err != nil {
 		t.Fatalf("write first source: %v", err)
 	}
-	if err := os.WriteFile(secondPath, []byte("# 字节Agent开发二面面经\n二面内容"), 0o644); err != nil {
+	if err := os.WriteFile(secondPath, []byte("# 示例公司二面面经\n二面内容"), 0o644); err != nil {
 		t.Fatalf("write second source: %v", err)
 	}
 
 	first, err := ws.AddMaterialFromFile(WorkspaceFileInput{
 		ItemType:     WorkspaceTypeExperiences,
-		Text:         "# 字节Agent开发三面面经\n三面内容",
+		Text:         "# 示例公司三面面经\n三面内容",
 		OriginalPath: firstPath,
 		OriginalName: filepath.Base(firstPath),
 		Now:          now,
@@ -218,7 +239,7 @@ func TestAddMaterialFromFileAvoidsSameSecondChineseTitleCollision(t *testing.T) 
 	}
 	second, err := ws.AddMaterialFromFile(WorkspaceFileInput{
 		ItemType:     WorkspaceTypeExperiences,
-		Text:         "# 字节Agent开发二面面经\n二面内容",
+		Text:         "# 示例公司二面面经\n二面内容",
 		OriginalPath: secondPath,
 		OriginalName: filepath.Base(secondPath),
 		Now:          now,
@@ -296,7 +317,7 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 
-	result, err := ws.ArchivePublicInterviewExperience("市场营销公开面经：一面问用户增长，高频题包括项目追问、技术方案和证据口径。", now)
+	result, err := ws.ArchivePublicInterviewExperience("示例方向公开面经：一面问示例问题，高频题包括项目追问、方案取舍和证据口径。", now)
 	if err != nil {
 		t.Fatalf("ArchivePublicInterviewExperience() error = %v", err)
 	}
@@ -320,7 +341,7 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 		t.Fatalf("expected dynamic domain, got %+v", result.Domain)
 	}
 	joinedPaths := strings.Join(result.GeneratedPaths, "\n")
-	if strings.Contains(joinedPaths, "面经来源与复习清单") || strings.Contains(joinedPaths, "domain-") {
+	if strings.Contains(joinedPaths, "面经来源与复习清单") || strings.Contains(joinedPaths, WorkspaceDirMyInterviews+"/") {
 		t.Fatalf("unexpected legacy generated path: %+v", result.GeneratedPaths)
 	}
 	_, index, err := ws.Status()

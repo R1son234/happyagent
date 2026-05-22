@@ -78,8 +78,8 @@ func TestDiscoverFilesInReferencedDirectoriesPrefersInterviewExperience(t *testi
 	if err := os.WriteFile(resumePath, []byte("not a real docx"), 0o644); err != nil {
 		t.Fatalf("write resume fixture: %v", err)
 	}
-	experiencePath := filepath.Join(testDir, "字节跳动-AI-Agent-面经-2026-04-30.md")
-	if err := os.WriteFile(experiencePath, []byte("# 字节跳动 AI Agent 面经"), 0o644); err != nil {
+	experiencePath := filepath.Join(testDir, "示例公司-示例岗位-面经.md")
+	if err := os.WriteFile(experiencePath, []byte("# 示例公司 示例岗位 面经"), 0o644); err != nil {
 		t.Fatalf("write experience fixture: %v", err)
 	}
 

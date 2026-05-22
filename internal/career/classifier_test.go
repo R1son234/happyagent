@@ -15,7 +15,7 @@ func TestClassifyInputDetectsMaterialTypes(t *testing.T) {
 		},
 		{
 			name: "resume",
-			text: "我的简历：工作经历包括后端开发，教育经历是计算机，专业技能包括 Go 和 Python。",
+			text: "我的简历：工作经历包括示例开发，教育经历是示例专业，专业技能包括示例语言和示例工具。",
 			want: WorkspaceTypeResume,
 		},
 		{
@@ -25,12 +25,12 @@ func TestClassifyInputDetectsMaterialTypes(t *testing.T) {
 		},
 		{
 			name: "public interview experience",
-			text: "市场营销公开面经：一面问了用户增长、内容策略和复盘方法，二面追问高频题。",
+			text: "示例方向公开面经：一面问了示例问题、方案取舍和复盘方法，二面追问高频题。",
 			want: WorkspaceTypeExperiences,
 		},
 		{
 			name: "interview record",
-			text: "刚面完市场营销岗位，面试官问我项目复盘和协作方式，我回答了推进流程，现场表现一般。",
+			text: "刚面完示例岗位，面试官问我项目复盘和协作方式，我回答了推进流程，现场表现一般。",
 			want: WorkspaceTypeMyInterviews,
 		},
 		{

@@ -38,28 +38,36 @@ func TestArchivePublicInterviewExperienceGeneratesDynamicDirections(t *testing.T
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 
-	backend, err := ws.ArchivePublicInterviewExperience("后端公开面经：一面问 Go 并发、MySQL 索引、Redis 缓存和项目难点。", now)
+	first, err := ws.ArchivePublicInterviewExperience("示例方向A公开面经：一面问示例能力甲、示例机制乙和项目难点。", now)
 	if err != nil {
-		t.Fatalf("ArchivePublicInterviewExperience(backend) error = %v", err)
+		t.Fatalf("ArchivePublicInterviewExperience(first) error = %v", err)
 	}
-	product, err := ws.ArchivePublicInterviewExperience("产品经理公开面经：追问需求分析、用户研究、PRD、增长策略和项目复盘。", now.Add(time.Minute))
+	second, err := ws.ArchivePublicInterviewExperience("示例方向B公开面经：追问示例流程、示例文档、协作策略和项目复盘。", now.Add(time.Minute))
 	if err != nil {
-		t.Fatalf("ArchivePublicInterviewExperience(product) error = %v", err)
+		t.Fatalf("ArchivePublicInterviewExperience(second) error = %v", err)
 	}
 
-	if backend.Domain.Slug == product.Domain.Slug {
-		t.Fatalf("expected different dynamic domains, got backend=%+v product=%+v", backend.Domain, product.Domain)
+	if first.Domain.Slug == second.Domain.Slug {
+		t.Fatalf("expected different dynamic domains, got first=%+v second=%+v", first.Domain, second.Domain)
 	}
 	for _, rel := range []string{
-		filepath.Join(WorkspaceDirExperiences, backend.Domain.Slug, backend.Domain.Name+" 面经资料包.md"),
-		filepath.Join(WorkspaceDirExperiences, product.Domain.Slug, product.Domain.Name+" 面经资料包.md"),
+		filepath.Join(WorkspaceDirPrepare, first.Domain.Slug, safeFileName(first.ExperienceItem.Title)+"题库.md"),
+		filepath.Join(WorkspaceDirPrepare, second.Domain.Slug, safeFileName(second.ExperienceItem.Title)+"题库.md"),
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
-			t.Fatalf("expected generated package %s: %v", rel, err)
+			t.Fatalf("expected generated question bank %s: %v", rel, err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(root, WorkspaceDirMyInterviews, "市场营销", "面经来源与复习清单.md")); err == nil {
-		t.Fatalf("unexpected hard-coded marketing interview checklist")
+	for _, paths := range [][]string{first.GeneratedPaths, second.GeneratedPaths} {
+		for _, path := range paths {
+			if strings.HasPrefix(path, WorkspaceDirExperiences+"/") && strings.Contains(path, "/") {
+				t.Fatalf("public interview experience should not generate visible experience subdir paths: %+v", paths)
+			}
+		}
+	}
+	if strings.Contains(strings.Join(first.GeneratedPaths, "\n"), WorkspaceDirMyInterviews+"/") ||
+		strings.Contains(strings.Join(second.GeneratedPaths, "\n"), WorkspaceDirMyInterviews+"/") {
+		t.Fatalf("public interview experience should not generate my-interviews paths: first=%+v second=%+v", first.GeneratedPaths, second.GeneratedPaths)
 	}
 }
 
@@ -71,22 +79,24 @@ func TestReviewLibraryWritesDeepDocumentsFromResumeJDExperience(t *testing.T) {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 	if _, err := ws.AddMaterial(WorkspaceTypeResume, `知页简历
-求职意向：市场营销实习生
-Wonderlab
-市场营销实习生
-负责多平台投放、KOL 合作、数据监控和复盘，累计曝光预计超500万。
-抖音个人IP账号运营
-账号定位、对标分析、选题标题、视频剪辑，累计粉丝8.3W。`, now); err != nil {
+求职意向：示例岗位
+项目介绍
+示例项目一
+角色：示例项目负责人
+负责示例方案设计、任务编排、质量验证和复盘，累计沉淀 12 个示例场景。
+示例项目二
+负责示例链路治理、异常处理、监控和回滚方案。`, now); err != nil {
 		t.Fatalf("AddMaterial(resume) error = %v", err)
 	}
-	if _, err := ws.AddMaterial(WorkspaceTypeJD, `# 市场营销 / 新媒体运营实习生 JD
-负责小红书、抖音等平台内容策划，跟进 KOL/KOC 合作，监控数据并复盘。`, now); err != nil {
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, `# 示例公司 示例岗位 JD
+岗位职责：负责示例系统建设、任务调度、状态监控和质量验证。
+任职要求：熟悉示例工程实践、问题拆解、协作沟通和复盘沉淀。`, now); err != nil {
 		t.Fatalf("AddMaterial(jd) error = %v", err)
 	}
-	if _, err := ws.AddMaterial(WorkspaceTypeExperiences, `# 市场营销 / 新媒体运营实习生面经整理
-- 给你 5 分钟看一个账号，你会如何判断问题并提出优化建议？
-- 上一段实习中如何做出爆款？
-- 你如何理解运营？
+	if _, err := ws.AddMaterial(WorkspaceTypeExperiences, `# 示例公司 示例岗位面经整理
+- 你如何设计一个可验证的示例系统？
+- 上一段经历中如何处理项目难点？
+- 你如何理解任务调度和状态监控？
 - 你的个人优势是什么？请结合经历说明。`, now); err != nil {
 		t.Fatalf("AddMaterial(experience) error = %v", err)
 	}
@@ -94,31 +104,40 @@ Wonderlab
 	if err != nil {
 		t.Fatalf("GenerateReviewLibrary() error = %v", err)
 	}
-	if strings.Contains(strings.Join(result.Paths, "\n"), "domain-") {
-		t.Fatalf("generated paths should be readable, got %+v", result.Paths)
+	joined := strings.Join(result.Paths, "\n")
+	if strings.Contains(joined, WorkspaceDirMyInterviews+"/") {
+		t.Fatalf("public interview experience should not generate my-interviews paths: %+v", result.Paths)
 	}
-	bankPath := filepath.Join(root, WorkspaceDirExperiences, "marketing-new-media-operations-intern", "业务与策略题库.md")
-	bank, err := os.ReadFile(bankPath)
+	if !strings.Contains(joined, WorkspaceDirPrepare+"/") {
+		t.Fatalf("expected question banks under prepare, got %+v", result.Paths)
+	}
+	bankPath := firstPathWithPrefixAndSuffix(result.Paths, WorkspaceDirPrepare+"/", "题库.md")
+	bank, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(bankPath)))
 	if err != nil {
 		t.Fatalf("expected question bank %s: %v\npaths=%+v", bankPath, err, result.Paths)
 	}
-	for _, expected := range []string{"给你 5 分钟看一个账号", "Wonderlab", "8.3W", "证据边界"} {
+	for _, expected := range []string{"你如何设计一个可验证的示例系统", "示例项目一", "12 个示例场景", "风险 / 待补证据"} {
 		if !strings.Contains(string(bank), expected) {
 			t.Fatalf("question bank missing %q:\n%s", expected, bank)
 		}
 	}
-	rolePath := filepath.Join(root, WorkspaceDirMyInterviews, "市场营销新媒体运营实习生JD", "01-临阵抗拷打主文档.md")
-	if _, err := os.Stat(rolePath); err != nil {
-		t.Fatalf("expected role cramming doc %s: %v\npaths=%+v", rolePath, err, result.Paths)
-	}
-	projectPath := filepath.Join(root, WorkspaceDirPrepare, "wonderlab-interview-qa.md")
+	projectPath := filepath.Join(root, WorkspaceDirPrepare, slugForPath("示例项目一")+"-interview-qa.md")
 	project, err := os.ReadFile(projectPath)
 	if err != nil {
 		t.Fatalf("expected project QA %s: %v\npaths=%+v", projectPath, err, result.Paths)
 	}
-	if !strings.Contains(string(project), "累计曝光预计超500万") {
+	if !strings.Contains(string(project), "12 个示例场景") {
 		t.Fatalf("project QA should include resume evidence:\n%s", project)
 	}
+}
+
+func firstPathWithPrefixAndSuffix(paths []string, prefix string, suffix string) string {
+	for _, path := range paths {
+		if strings.HasPrefix(path, prefix) && strings.HasSuffix(path, suffix) {
+			return path
+		}
+	}
+	return ""
 }
 
 func TestGenerateReviewLibraryUsesGeneralForUnknownDirection(t *testing.T) {
@@ -138,7 +157,37 @@ func TestGenerateReviewLibraryUsesGeneralForUnknownDirection(t *testing.T) {
 	if len(result.Paths) == 0 {
 		t.Fatalf("expected generated review library paths")
 	}
-	if !strings.Contains(strings.Join(result.Paths, "\n"), WorkspaceDirExperiences+"/") {
-		t.Fatalf("expected generated review package under %s: %+v", WorkspaceDirExperiences, result.Paths)
+	if !strings.Contains(strings.Join(result.Paths, "\n"), WorkspaceDirPrepare+"/") {
+		t.Fatalf("expected generated question bank under %s: %+v", WorkspaceDirPrepare, result.Paths)
+	}
+}
+
+func TestGenerateReviewLibrarySplitsMultiJDMaterial(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, `# 示例 JD 汇总
+
+示例公司A 示例岗位A
+岗位职责：负责示例能力 A 的方案设计和交付。
+任职要求：熟悉示例方案设计和问题拆解。
+
+示例公司B 示例岗位B
+职位描述：负责示例能力 B 的服务建设和质量验证。
+职位要求：具备示例工程经验和协作能力。`, now); err != nil {
+		t.Fatalf("AddMaterial(jd) error = %v", err)
+	}
+	result, err := ws.GenerateReviewLibrary(now)
+	if err != nil {
+		t.Fatalf("GenerateReviewLibrary() error = %v", err)
+	}
+	joined := strings.Join(result.Paths, "\n")
+	for _, expected := range []string{"示例公司A示例岗位A.md", "示例公司B示例岗位B.md"} {
+		if !strings.Contains(joined, expected) {
+			t.Fatalf("expected split JD path %q in %+v", expected, result.Paths)
+		}
 	}
 }
