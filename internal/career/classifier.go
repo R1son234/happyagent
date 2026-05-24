@@ -12,6 +12,7 @@ const (
 	WorkspaceTypeResume       = "resume"
 	WorkspaceTypeExperiences  = "experiences"
 	WorkspaceTypePrepare      = "prepare"
+	WorkspaceTypeProject      = "project"
 	WorkspaceTypeMyInterviews = "my-interviews"
 	WorkspaceTypeRecord       = "record"
 )
@@ -54,6 +55,13 @@ var workspaceTypeDefinitions = []workspaceTypeDefinition{
 		HintSignals:           []string{"project", "项目"},
 		ClassificationSignals: []string{"项目", "project", "项目追问", "项目亮点", "项目难点", "技术方案", "证据口径", "技术栈", "架构", "repository", "repo", "github", "system design"},
 		FilenameSignals:       []string{"project", "portfolio", "项目"},
+	},
+	{
+		Type:                  WorkspaceTypeProject,
+		DisplayName:           "项目专项",
+		HintSignals:           []string{"project pack", "项目专项", "项目作战"},
+		ClassificationSignals: []string{"项目专项", "项目口述", "一分钟版本", "三分钟版本", "项目深挖", "架构链路"},
+		FilenameSignals:       []string{"project-pack", "项目专项", "项目作战"},
 	},
 	{
 		Type:                  WorkspaceTypeExperiences,

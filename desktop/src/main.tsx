@@ -11,6 +11,7 @@ import {
   Search,
   Send,
   Settings,
+  Sparkles,
   Upload
 } from "lucide-react";
 import "./styles.css";
@@ -54,17 +55,61 @@ type ChatMessage = {
   content: string;
 };
 
+type ReportView = {
+  content: string;
+  logPath?: string;
+  createdAt: string;
+};
+
 type SettingsPayload = {
   path: string;
   content: string;
   restart_required?: boolean;
 };
 
+type InboxView = {
+  files: InboxFileView[];
+  pending_items: PendingInboxItem[];
+  counts: Record<string, number>;
+};
+
+type InboxFileView = {
+  path: string;
+  name: string;
+  size: number;
+  modified: string;
+  status: string;
+};
+
+type PendingInboxItem = {
+  id: string;
+  source_path: string;
+  original_name: string;
+  material_type: string;
+  destination: string;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  source_excerpt: string;
+  needs_user_confirmation: boolean;
+  questions_for_user?: string[];
+  status: string;
+};
+
+type DiagnosticRecord = {
+  id: string;
+  task_name: string;
+  error: string;
+  created_at: string;
+};
+
 function App() {
   const [tree, setTree] = useState<FileNode | null>(null);
   const [status, setStatus] = useState<WorkspaceStatus | null>(null);
+  const [inbox, setInbox] = useState<InboxView | null>(null);
+  const [diagnostics, setDiagnostics] = useState<DiagnosticRecord[]>([]);
   const [modelName, setModelName] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
+  const [lastReport, setLastReport] = useState<ReportView | null>(null);
   const [query, setQuery] = useState("");
   const [input, setInput] = useState("");
   const [sessionId, setSessionId] = useState("");
@@ -82,21 +127,29 @@ function App() {
   const [settingsContent, setSettingsContent] = useState("");
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
+  const [organizingInbox, setOrganizingInbox] = useState(false);
 
   useEffect(() => {
     void loadWorkspace();
   }, []);
 
   async function loadWorkspace() {
-    const [treeRes, statusRes, healthRes] = await Promise.all([
+    const [treeRes, statusRes, healthRes, inboxRes, diagnosticsRes] = await Promise.all([
       fetch("/api/files/tree"),
       fetch("/api/workspace/status"),
-      fetch("/api/health")
+      fetch("/api/health"),
+      fetch("/api/inbox"),
+      fetch("/api/diagnostics")
     ]);
     setTree(await treeRes.json());
     setStatus(await statusRes.json());
     const health = await healthRes.json();
     if (health.model) setModelName(health.model);
+    if (inboxRes.ok) setInbox(await inboxRes.json());
+    if (diagnosticsRes.ok) {
+      const data = await diagnosticsRes.json();
+      setDiagnostics(data.items || []);
+    }
   }
 
   async function openFile(path: string) {
@@ -107,6 +160,7 @@ function App() {
       return;
     }
     setPreview(await res.json());
+    setLastReport(null);
   }
 
   async function sendMessage() {
@@ -133,10 +187,17 @@ function App() {
         throw new Error(data.error || "Agent 运行失败。");
       }
       setRunSteps((items) => [...items, "已生成回答", "已保存运行记录"]);
+      const output = data.record?.output || "已完成。";
       setMessages((items) => [
         ...items,
-        { role: "assistant", content: data.record?.output || "已完成。" }
+        { role: "assistant", content: output }
       ]);
+      setPreview(null);
+      setLastReport({
+        content: output,
+        logPath: data.log_path,
+        createdAt: new Date().toLocaleString()
+      });
       await loadWorkspace();
     } catch (err) {
       const message = err instanceof Error ? err.message : "Agent 运行失败。";
@@ -153,24 +214,24 @@ function App() {
     Array.from(files).forEach((file) => form.append("files", file));
     setRunning(true);
     setError("");
-    setRunSteps(["正在上传文件", "正在导入资料库"]);
+    setRunSteps(["正在上传文件", "正在放入 inbox"]);
     try {
       const res = await fetch("/api/files/upload", {
         method: "POST",
         body: form
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "文件导入失败。");
-      const imported = data.items?.length || 0;
+      if (!res.ok) throw new Error(data.error || "文件上传失败。");
+      const saved = data.saved_paths?.length || 0;
       const warningText = data.warnings?.length ? `，${data.warnings.length} 个文件需要检查` : "";
       setMessages((items) => [
         ...items,
-        { role: "assistant", content: `已导入 ${imported} 个资料${warningText}。` }
+        { role: "assistant", content: `已放入 inbox ${saved} 个文件${warningText}。需要整理时再告诉我。` }
       ]);
-      setRunSteps(["文件已保存到 inbox", "资料库索引已更新"]);
+      setRunSteps(["文件已保存到 inbox", "等待整理指令"]);
       await loadWorkspace();
     } catch (err) {
-      const message = err instanceof Error ? err.message : "文件导入失败。";
+      const message = err instanceof Error ? err.message : "文件上传失败。";
       setError(message);
     } finally {
       setRunning(false);
@@ -189,6 +250,101 @@ function App() {
       setSettingsMessage("");
     } catch (err) {
       setSettingsMessage(err instanceof Error ? err.message : "无法读取配置。");
+    }
+  }
+
+  async function organizeInbox() {
+    if (organizingInbox || running) return;
+    setOrganizingInbox(true);
+    setRunning(true);
+    setError("");
+    setRunSteps(["正在读取 inbox", "正在调用 LLM 分类"]);
+    try {
+      const res = await fetch("/api/inbox/classify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "整理 inbox 失败。");
+      const confirmed = (data.items || []).filter((item: PendingInboxItem) => item.status === "confirmed").length;
+      const pending = (data.items || []).filter((item: PendingInboxItem) => item.status === "pending").length;
+      const warningText = data.warnings?.length ? `，${data.warnings.length} 个文件需要检查` : "";
+      setMessages((items) => [
+        ...items,
+        { role: "assistant", content: `inbox 整理完成：已归档 ${confirmed} 项，待确认 ${pending} 项${warningText}。` }
+      ]);
+      setRunSteps(["LLM 分类完成", "资料库状态已刷新"]);
+      await loadWorkspace();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "整理 inbox 失败。";
+      setError(message);
+      setMessages((items) => [...items, { role: "system", content: message }]);
+    } finally {
+      setOrganizingInbox(false);
+      setRunning(false);
+    }
+  }
+
+  async function confirmInboxItem(item: PendingInboxItem) {
+    if (running || item.status !== "pending" || item.material_type === "unknown") return;
+    setRunning(true);
+    setError("");
+    setRunSteps(["正在确认分类", "正在写入资料库"]);
+    try {
+      const res = await fetch("/api/inbox/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: item.id,
+          material_type: item.material_type,
+          destination: item.destination
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "确认分类失败。");
+      setMessages((items) => [
+        ...items,
+        { role: "assistant", content: `已确认并归档：${data.item?.title || item.original_name || item.source_path}` }
+      ]);
+      setRunSteps(["分类已确认", "资料库状态已刷新"]);
+      await loadWorkspace();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "确认分类失败。";
+      setError(message);
+      setMessages((items) => [...items, { role: "system", content: message }]);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function runCareerAction(label: string, endpoint: string, payload: Record<string, unknown>) {
+    if (running) return;
+    setRunning(true);
+    setError("");
+    setRunSteps([`正在${label}`, "正在调用 LLM"]);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `${label}失败。`);
+      const path = data.path || data.items?.[0]?.path || data.record?.path || "";
+      setMessages((items) => [
+        ...items,
+        { role: "assistant", content: `${label}完成${path ? `：${path}` : "。"}` }
+      ]);
+      setRunSteps([`${label}完成`, "资料库状态已刷新"]);
+      if (path) await openFile(path);
+      await loadWorkspace();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `${label}失败。`;
+      setError(message);
+      setMessages((items) => [...items, { role: "system", content: message }]);
+    } finally {
+      setRunning(false);
     }
   }
 
@@ -228,6 +384,9 @@ function App() {
   }, [preview, status]);
 
   const indexTextByPath = useMemo(() => buildIndexText(status?.index.items || []), [status]);
+  const inboxCounts = inbox?.counts || {};
+  const inboxFileCount = inbox?.files?.length || 0;
+  const pendingInboxCount = inboxCounts.pending || 0;
 
   return (
     <main className="desktop-frame">
@@ -268,18 +427,52 @@ function App() {
         </aside>
 
         <section className="main">
-          <div className="tabs">
-            <button className="tab active" type="button">阅读</button>
-            <button className="tab" type="button">结构</button>
-            <button className="tab" type="button">图谱</button>
-            <button className="tab" type="button">结果</button>
-          </div>
           <article className="reader">
-            {preview ? <PreviewPane preview={preview} item={selectedItem} /> : <EmptyReader />}
+            {preview ? (
+              <PreviewPane preview={preview} item={selectedItem} query={query} />
+            ) : lastReport ? (
+              <ReportPane report={lastReport} query={query} />
+            ) : (
+              <EmptyReader />
+            )}
           </article>
         </section>
 
         <aside className="inspector">
+          <section className="panel inbox-panel">
+            <div className="panel-title-row">
+              <h2>Inbox</h2>
+              <span className="count-pill">{pendingInboxCount} 待确认</span>
+            </div>
+            <div className="inbox-summary">
+              <span>{inboxFileCount} 个文件</span>
+              <span>{inboxCounts.unclassified || 0} 未整理</span>
+              <span>{inboxCounts.confirmed || 0} 已归档</span>
+            </div>
+            <button className="organize-button" onClick={organizeInbox} disabled={running || organizingInbox || inboxFileCount === 0} type="button">
+              {organizingInbox ? <Loader2 className="spin" size={15} /> : <Sparkles size={15} />}
+              {organizingInbox ? "整理中" : "开始整理"}
+            </button>
+            <div className="inbox-list">
+              {(inbox?.pending_items || []).slice(0, 4).map((item) => (
+                <div className={`inbox-item ${item.status}`} key={item.id}>
+                  <div>
+                    <strong>{item.original_name || item.source_path}</strong>
+                    <span>{item.material_type || "unknown"} · {item.confidence || "-"}</span>
+                  </div>
+                  <p>{item.reason || item.source_excerpt || "等待确认"}</p>
+                  {item.status === "pending" && item.material_type !== "unknown" && (
+                    <button className="confirm-inbox-button" onClick={() => void confirmInboxItem(item)} disabled={running} type="button">
+                      确认归档
+                    </button>
+                  )}
+                </div>
+              ))}
+              {(!inbox?.pending_items || inbox.pending_items.length === 0) && (
+                <div className="muted">暂无待确认分类。</div>
+              )}
+            </div>
+          </section>
           <section className="panel">
             <h2>文件属性</h2>
             <KeyValue label="类型" value={selectedItem?.type || preview?.kind || "-"} />
@@ -291,6 +484,26 @@ function App() {
             <h2>Agent 建议</h2>
             <ActionButton text="生成问题清单" onClick={() => setInput("基于当前资料，生成接下来要准备的问题清单。")} />
             <ActionButton text="整理当前材料" onClick={() => setInput("请整理当前资料，并给出结构化摘要。")} />
+            <ActionButton
+              text="LLM 拆分当前 JD"
+              onClick={() => preview?.path && void runCareerAction("拆分 JD", "/api/jd/split", { source_path: preview.path })}
+            />
+            <ActionButton
+              text="刷新复习资料库"
+              onClick={() => void runCareerAction("刷新复习资料库", "/api/review-library/generate", { source_paths: preview?.path ? [preview.path] : [] })}
+            />
+            <ActionButton
+              text="生成项目专项"
+              onClick={() => void runCareerAction("生成项目专项", "/api/project-pack/generate", { project_name: selectedItem?.title || "项目专项", source_paths: preview?.path ? [preview.path] : [] })}
+            />
+            <ActionButton
+              text="生成面试作战包"
+              onClick={() => void runCareerAction("生成面试作战包", "/api/battle-pack/generate", { source_paths: preview?.path ? [preview.path] : [] })}
+            />
+            <ActionButton
+              text="抽取真实面试复盘"
+              onClick={() => void runCareerAction("抽取真实面试复盘", "/api/interview-review/extract", { target: selectedItem?.title || "真实面试复盘", source_paths: preview?.path ? [preview.path] : [] })}
+            />
           </section>
           <section className="panel">
             <h2>资料库状态</h2>
@@ -300,6 +513,11 @@ function App() {
               ))}
             </div>
             {error && <div className="risk">{error}</div>}
+            {!error && diagnostics[0] && (
+              <div className="risk">
+                最近诊断：{diagnostics[0].task_name} · {diagnostics[0].error}
+              </div>
+            )}
           </section>
         </aside>
 
@@ -313,9 +531,10 @@ function App() {
         >
           <section className="chat">
             <div className="messages">
-              {messages.slice(-3).map((message, index) => (
+              {messages.map((message, index) => (
                 <div className={`bubble ${message.role}`} key={`${message.role}-${index}`}>
-                  {message.content}
+                  <span className="prompt">{message.role === "user" ? "user" : message.role}</span>
+                  <span className="terminal-content">{message.content}</span>
                 </div>
               ))}
             </div>
@@ -332,7 +551,7 @@ function App() {
 	                }}
 	                placeholder="输入问题，Cmd+Enter 发送；也可以拖入文件..."
 	              />
-              <button className="send" onClick={sendMessage} disabled={running} type="button">
+              <button className="send" onClick={sendMessage} disabled={running} title="Command + Enter 发送" aria-label="发送，Command + Enter" type="button">
                 {running ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
                 {running ? "运行中" : "发送"}
               </button>
@@ -405,7 +624,7 @@ function TreeNode({
         {level > 0 && (
           <button className="tree-head" onClick={() => setOpen(!open)} type="button" style={{ paddingLeft: 8 + level * 12 }}>
             <ChevronRight className={open ? "chevron open" : "chevron"} size={14} />
-            <Folder size={15} /> {node.name}
+            <Folder size={15} /> <span className="name">{highlightText(node.name, query)}</span>
           </button>
         )}
         {(open || level === 0 || searching) && visibleChildren.map((child) => (
@@ -417,28 +636,28 @@ function TreeNode({
   return (
     <button className="tree-item" onClick={() => onOpen(node.path)} type="button" style={{ paddingLeft: 14 + level * 12 }}>
       <FileText size={14} />
-      <span className="name">{node.name}</span>
+      <span className="name">{highlightText(node.name, query)}</span>
     </button>
   );
 }
 
-function PreviewPane({ preview, item }: { preview: Preview; item: WorkspaceItem | null }) {
+function PreviewPane({ preview, item, query }: { preview: Preview; item: WorkspaceItem | null; query: string }) {
   return (
     <>
-      <div className="doc-kicker">{preview.kind} · {preview.path}</div>
-      <h1>{item?.title || preview.name}</h1>
+      <div className="doc-kicker">{highlightText(`${preview.kind} · ${preview.path}`, query)}</div>
+      <h1>{highlightText(item?.title || preview.name, query)}</h1>
       <div className="doc-meta">
         {(item?.tags || [preview.kind]).slice(0, 5).map((tag) => (
-          <span className="meta-tag" key={tag}>{tag}</span>
+          <span className="meta-tag" key={tag}>{highlightText(tag, query)}</span>
         ))}
       </div>
       {preview.content ? (
         preview.kind === "markdown" ? (
-          <div className="preview-markdown"><Markdown>{preview.content}</Markdown></div>
+          <HighlightedMarkdown content={preview.content} query={query} />
         ) : preview.kind === "json" ? (
-          <pre className="preview-json">{formatJSON(preview.content)}</pre>
+          <pre className="preview-json">{highlightText(formatJSON(preview.content), query)}</pre>
         ) : (
-          <pre className="preview-text">{preview.content}</pre>
+          <pre className="preview-text">{highlightText(preview.content, query)}</pre>
         )
       ) : (
         <div className="notice">
@@ -446,6 +665,40 @@ function PreviewPane({ preview, item }: { preview: Preview; item: WorkspaceItem 
         </div>
       )}
     </>
+  );
+}
+
+function ReportPane({ report, query }: { report: ReportView; query: string }) {
+  return (
+    <>
+      <div className="doc-kicker">Agent Report · {report.createdAt}</div>
+      <h1>输出报告</h1>
+      {report.logPath && <div className="doc-meta"><span className="meta-tag">{highlightText(report.logPath, query)}</span></div>}
+      <HighlightedMarkdown content={report.content} query={query} />
+    </>
+  );
+}
+
+function HighlightedMarkdown({ content, query }: { content: string; query: string }) {
+  return (
+    <div className="preview-markdown">
+      <Markdown
+        components={{
+          p: ({ children }) => <p>{highlightChildren(children, query)}</p>,
+          li: ({ children }) => <li>{highlightChildren(children, query)}</li>,
+          h1: ({ children }) => <h1>{highlightChildren(children, query)}</h1>,
+          h2: ({ children }) => <h2>{highlightChildren(children, query)}</h2>,
+          h3: ({ children }) => <h3>{highlightChildren(children, query)}</h3>,
+          h4: ({ children }) => <h4>{highlightChildren(children, query)}</h4>,
+          h5: ({ children }) => <h5>{highlightChildren(children, query)}</h5>,
+          h6: ({ children }) => <h6>{highlightChildren(children, query)}</h6>,
+          td: ({ children }) => <td>{highlightChildren(children, query)}</td>,
+          th: ({ children }) => <th>{highlightChildren(children, query)}</th>
+        }}
+      >
+        {content}
+      </Markdown>
+    </div>
   );
 }
 
@@ -507,6 +760,32 @@ function matchesNode(node: FileNode, query: string, indexTextByPath: Map<string,
   const ownText = [node.name, node.path, indexTextByPath.get(node.path)].filter(Boolean).join(" ").toLowerCase();
   if (ownText.includes(query)) return true;
   return (node.children || []).some((child) => matchesNode(child, query, indexTextByPath));
+}
+
+function highlightText(text: string, query: string): React.ReactNode {
+  const value = String(text || "");
+  const needle = query.trim();
+  if (!needle) return value;
+  const lower = value.toLowerCase();
+  const lowerNeedle = needle.toLowerCase();
+  const parts: React.ReactNode[] = [];
+  let cursor = 0;
+  let index = lower.indexOf(lowerNeedle);
+  while (index >= 0) {
+    if (index > cursor) parts.push(value.slice(cursor, index));
+    parts.push(<mark key={`${index}-${parts.length}`}>{value.slice(index, index + needle.length)}</mark>);
+    cursor = index + needle.length;
+    index = lower.indexOf(lowerNeedle, cursor);
+  }
+  if (cursor < value.length) parts.push(value.slice(cursor));
+  return parts.length ? parts : value;
+}
+
+function highlightChildren(children: React.ReactNode, query: string): React.ReactNode {
+  return React.Children.map(children, (child) => {
+    if (typeof child === "string") return highlightText(child, query);
+    return child;
+  });
 }
 
 createRoot(document.getElementById("root")!).render(

@@ -334,7 +334,7 @@ func TestRunInteractiveRecordsClassificationEventForModelTurn(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
+func TestRunInteractiveAnalyzeIntentDoesNotAutoArchiveInbox(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
 			ID:        "session-career",
@@ -366,16 +366,16 @@ func TestRunInteractiveAnalyzeIntentScansInboxAndWritesOutputs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 1 {
-		t.Fatalf("expected one model turn, got %d", len(app.appendRequests))
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected inbox analyze request to avoid model turn before classification confirmation, got %d", len(app.appendRequests))
 	}
 	for _, rel := range []string{filepath.Join(WorkspaceDirOutputs, "latest-report.md"), filepath.Join(WorkspaceDirOutputs, "latest-report.json")} {
-		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); err != nil {
-			t.Fatalf("expected output file %s: %v", rel, err)
+		if _, err := os.Stat(filepath.Join(workspaceRoot, rel)); !os.IsNotExist(err) {
+			t.Fatalf("expected no output file %s before confirmation, stat err=%v", rel, err)
 		}
 	}
-	if !strings.Contains(stdout.String(), "完成：完整匹配报告") {
-		t.Fatalf("expected completion summary, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "不会自动归档") {
+		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
 
@@ -411,8 +411,8 @@ func TestRunInteractiveIdentifyInboxScansInboxWithoutModelGuessing(t *testing.T)
 		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "已整理 inbox 文件到 JD") || !strings.Contains(output, "已整理这些资料") {
-		t.Fatalf("expected deterministic inbox ingest summary, got:\n%s", output)
+	if !strings.Contains(output, "不会自动归档") {
+		t.Fatalf("expected inbox confirmation warning, got:\n%s", output)
 	}
 }
 
@@ -447,8 +447,8 @@ func TestRunInteractiveMentionWorkspaceInboxScansInbox(t *testing.T) {
 	if len(app.appendRequests) != 0 {
 		t.Fatalf("expected inbox placement note to avoid model turn, got %d", len(app.appendRequests))
 	}
-	if !strings.Contains(stdout.String(), "已整理 inbox 文件到 简历") {
-		t.Fatalf("expected inbox scan confirmation, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "不会自动归档") {
+		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
 
@@ -491,14 +491,14 @@ func TestRunInteractiveSaveConfirmationScansInboxWithoutModelTurn(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if meta.ActiveJD == "" {
-		t.Fatalf("expected active JD to be updated")
+	if meta.ActiveJD != "" {
+		t.Fatalf("expected active JD to remain empty before classification confirmation, got %q", meta.ActiveJD)
 	}
-	if len(index.Items) == 0 || index.Items[0].Type != WorkspaceTypeJD {
-		t.Fatalf("expected JD item, got %+v", index.Items)
+	if len(index.Items) != 0 {
+		t.Fatalf("expected no indexed items before classification confirmation, got %+v", index.Items)
 	}
-	if !strings.Contains(stdout.String(), "已整理 inbox 文件到 JD") {
-		t.Fatalf("expected inbox scan confirmation, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "不会自动归档") {
+		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
 
@@ -977,7 +977,7 @@ func TestRunInteractiveExportCommand(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveRejectsUnsupportedAddType(t *testing.T) {
+func TestRunInteractiveAddsProjectPackType(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
 			ID:        "session-career",
@@ -1000,8 +1000,8 @@ func TestRunInteractiveRejectsUnsupportedAddType(t *testing.T) {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
 	output := stdout.String()
-	if !strings.Contains(output, `暂不支持归档类型 "project"`) {
-		t.Fatalf("expected unsupported type rejection, got:\n%s", output)
+	if !strings.Contains(output, "已添加 项目专项") {
+		t.Fatalf("expected project pack archive, got:\n%s", output)
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
@@ -1011,8 +1011,8 @@ func TestRunInteractiveRejectsUnsupportedAddType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Status() error = %v", err)
 	}
-	if len(index.Items) != 0 {
-		t.Fatalf("unsupported type should not archive material: %+v", index.Items)
+	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeProject {
+		t.Fatalf("expected project pack material: %+v", index.Items)
 	}
 }
 
@@ -1383,7 +1383,7 @@ func TestRunInteractiveInboxSignalScansInbox(t *testing.T) {
 		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "已整理 inbox 文件到 JD") {
-		t.Fatalf("expected inbox scan confirmation, got:\n%s", output)
+	if !strings.Contains(output, "不会自动归档") {
+		t.Fatalf("expected inbox confirmation warning, got:\n%s", output)
 	}
 }

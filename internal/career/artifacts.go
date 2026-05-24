@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string, error) {
@@ -15,11 +14,7 @@ func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string,
 	}
 	switch kind {
 	case "review-library", "interview-library":
-		result, err := workspace.GenerateReviewLibrary(time.Now())
-		if err != nil {
-			return "", "", err
-		}
-		return "Review Library", renderReviewLibraryExport(result), nil
+		return "", "", fmt.Errorf("review-library export requires LLM generation; use /library or /export review-library")
 	case "jd-match":
 		return "JD Match Report", renderJDMatch(workspace, index), nil
 	case "resume-review":

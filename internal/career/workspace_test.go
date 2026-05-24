@@ -309,7 +309,7 @@ func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
 	}
 }
 
-func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
+func TestArchivePublicInterviewExperienceDoesNotCreatePrepareMaterial(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC)
 	ws, err := OpenWorkspace(root, now)
@@ -324,8 +324,8 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 	if result.ExperienceItem.Type != WorkspaceTypeExperiences || !strings.HasPrefix(result.ExperienceItem.Path, WorkspaceDirExperiences+"/") {
 		t.Fatalf("unexpected experience item: %+v", result.ExperienceItem)
 	}
-	if result.PrepareItem.Type != WorkspaceTypePrepare || !strings.HasPrefix(result.PrepareItem.Path, WorkspaceDirPrepare+"/") {
-		t.Fatalf("expected prepare item, got %+v", result.PrepareItem)
+	if result.PrepareItem.ID != "" || result.PrepareItem.Path != "" {
+		t.Fatalf("public interview archive should not create prepare item, got %+v", result.PrepareItem)
 	}
 	for _, rel := range []string{
 		result.RecordRel,
@@ -352,7 +352,7 @@ func TestArchivePublicInterviewExperienceSplitsMaterial(t *testing.T) {
 	for _, item := range index.Items {
 		counts[item.Type]++
 	}
-	if counts[WorkspaceTypeExperiences] != 1 || counts[WorkspaceTypePrepare] != 1 || counts[WorkspaceTypeRecord] != 1 {
+	if counts[WorkspaceTypeExperiences] != 1 || counts[WorkspaceTypePrepare] != 0 || counts[WorkspaceTypeRecord] != 1 {
 		t.Fatalf("unexpected index counts: %+v", counts)
 	}
 }

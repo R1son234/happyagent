@@ -1,10 +1,17 @@
 package desktop
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"mime/multipart"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"happyagent/internal/career"
 )
@@ -82,6 +89,220 @@ func TestBuildTreeShowsUserVisibleMaterialDirectories(t *testing.T) {
 	}
 }
 
+func TestHandleFileUploadOnlySavesToInbox(t *testing.T) {
+	root := t.TempDir()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("files", "sample.md")
+	if err != nil {
+		t.Fatalf("CreateFormFile() error = %v", err)
+	}
+	if _, err := part.Write([]byte("# Sample\n公开面经：一面问示例问题。")); err != nil {
+		t.Fatalf("Write multipart file error = %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("Close multipart writer error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/files/upload", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	server := &Server{workspaceRoot: root}
+	server.handleFileUpload(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		SavedPaths []string               `json:"saved_paths"`
+		Items      []career.WorkspaceItem `json:"items"`
+		Warnings   []string               `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.SavedPaths) != 1 || len(resp.Items) != 0 || len(resp.Warnings) != 0 {
+		t.Fatalf("unexpected upload response: %+v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, "inbox", "sample.md")); err != nil {
+		t.Fatalf("expected uploaded file in inbox: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, career.WorkspaceInternalDir, "index.json")); !os.IsNotExist(err) {
+		t.Fatalf("upload should not ingest or create workspace index, stat err=%v", err)
+	}
+}
+
+func TestHandleFileImportOnlySavesToInbox(t *testing.T) {
+	root := t.TempDir()
+	sourceDir := t.TempDir()
+	sourcePath := filepath.Join(sourceDir, "experience.md")
+	mustWriteFile(t, sourcePath, "# 示例面经\n\n一面问示例问题。")
+
+	body, err := json.Marshal(map[string]any{"paths": []string{sourcePath}})
+	if err != nil {
+		t.Fatalf("Marshal request error = %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/files/import", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server := &Server{workspaceRoot: root}
+	server.handleFileImport(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		SavedPaths     []string               `json:"saved_paths"`
+		Items          []career.WorkspaceItem `json:"items"`
+		GeneratedPaths []string               `json:"generated_paths"`
+		Warnings       []string               `json:"warnings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.SavedPaths) != 1 || len(resp.Items) != 0 || len(resp.GeneratedPaths) != 0 || len(resp.Warnings) != 0 {
+		t.Fatalf("unexpected import response: %+v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, "inbox", "experience.md")); err != nil {
+		t.Fatalf("expected imported file in inbox: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, career.WorkspaceInternalDir, "index.json")); !os.IsNotExist(err) {
+		t.Fatalf("import should not ingest or create workspace index, stat err=%v", err)
+	}
+}
+
+func TestHandleInboxListsFilesAndPendingState(t *testing.T) {
+	now := time.Date(2026, 5, 24, 14, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	ws, err := career.OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	mustWriteFile(t, filepath.Join(root, "inbox", "resume.md"), "# Resume\n")
+	if err := ws.WriteInboxState(career.InboxState{Items: []career.PendingInboxItem{{
+		ID:         "pending-resume",
+		SourcePath: "inbox/resume.md",
+		Status:     career.InboxItemStatusPending,
+		Confidence: career.ConfidenceMedium,
+	}}}); err != nil {
+		t.Fatalf("WriteInboxState() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/inbox", nil)
+	rec := httptest.NewRecorder()
+	server := &Server{workspaceRoot: root}
+	server.handleInbox(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp career.InboxView
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.Files) != 1 || resp.Files[0].Path != "inbox/resume.md" || resp.Files[0].Status != career.InboxItemStatusPending {
+		t.Fatalf("unexpected inbox files: %+v", resp.Files)
+	}
+	if len(resp.PendingItems) != 1 || resp.Counts[career.InboxItemStatusPending] != 1 {
+		t.Fatalf("unexpected pending state response: %+v", resp)
+	}
+}
+
+func TestHandleInboxClassifyUsesCopilotService(t *testing.T) {
+	now := time.Date(2026, 5, 24, 14, 30, 0, 0, time.UTC)
+	root := t.TempDir()
+	if _, err := career.OpenWorkspace(root, now); err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	mustWriteFile(t, filepath.Join(root, "inbox", "jd.md"), "# 示例 JD\n\n岗位职责：负责示例系统。\n")
+	body := bytes.NewReader([]byte(`{"paths":["inbox/jd.md"]}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/classify", body)
+	rec := httptest.NewRecorder()
+	server := &Server{
+		workspaceRoot: root,
+		careerService: &career.CopilotService{
+			WorkspaceRoot: root,
+			Now:           func() time.Time { return now },
+			TaskRunner: fakeDesktopStructuredTaskRunner{
+				output: `{"files":[{"source_path":"inbox/jd.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"包含岗位职责。","source_excerpt":"岗位职责：负责示例系统。","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`,
+			},
+		},
+	}
+	server.handleInboxClassify(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp career.ClassifyInboxResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if len(resp.Items) != 1 || resp.Items[0].Status != career.InboxItemStatusConfirmed {
+		t.Fatalf("expected confirmed classification, got %+v", resp.Items)
+	}
+	if _, err := os.Stat(filepath.Join(root, "inbox", "jd.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected inbox source removed, err=%v", err)
+	}
+	ws, err := career.OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	_, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if len(index.Items) != 1 || index.Items[0].Type != career.WorkspaceTypeJD {
+		t.Fatalf("expected one JD item, got %+v", index.Items)
+	}
+}
+
+func TestHandleInboxConfirmUsesCopilotService(t *testing.T) {
+	now := time.Date(2026, 5, 24, 15, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	ws, err := career.OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	mustWriteFile(t, filepath.Join(root, "inbox", "note.md"), "# 复习笔记\n\n示例内容。")
+	if err := ws.WriteInboxState(career.InboxState{Items: []career.PendingInboxItem{{
+		ID:                    "pending-note",
+		SourcePath:            "inbox/note.md",
+		SourceHash:            "sha256:abc",
+		OriginalName:          "note.md",
+		MaterialType:          "unknown",
+		Confidence:            career.ConfidenceMedium,
+		NeedsUserConfirmation: true,
+		Status:                career.InboxItemStatusPending,
+	}}}); err != nil {
+		t.Fatalf("WriteInboxState() error = %v", err)
+	}
+	body := bytes.NewReader([]byte(`{"id":"pending-note","material_type":"review_note","destination":"复习资料库"}`))
+	req := httptest.NewRequest(http.MethodPost, "/api/inbox/confirm", body)
+	rec := httptest.NewRecorder()
+	server := &Server{
+		workspaceRoot: root,
+		careerService: &career.CopilotService{
+			WorkspaceRoot: root,
+			Now:           func() time.Time { return now },
+		},
+	}
+	server.handleInboxConfirm(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp career.ConfirmMaterialResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.Item.Type != career.WorkspaceTypeRecord || resp.RecordPath == "" || !resp.RemovedInbox {
+		t.Fatalf("unexpected confirm response: %+v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, "inbox", "note.md")); !os.IsNotExist(err) {
+		t.Fatalf("expected inbox source removed, err=%v", err)
+	}
+}
+
 func TestNormalizeConfigJSONFormatsValidJSON(t *testing.T) {
 	formatted, err := normalizeConfigJSON(`{"llm":{"model":"test"}}`)
 	if err != nil {
@@ -119,4 +340,20 @@ func findChild(node fileNode, name string) (fileNode, bool) {
 		}
 	}
 	return fileNode{}, false
+}
+
+type fakeDesktopStructuredTaskRunner struct {
+	output string
+}
+
+func (r fakeDesktopStructuredTaskRunner) RunStructuredTask(ctx context.Context, req career.StructuredTaskRequest) (career.StructuredTaskResult, error) {
+	_ = ctx
+	_ = req
+	return career.StructuredTaskResult{
+		Output:      r.output,
+		Model:       "fake-model",
+		RunID:       "fake-run",
+		SessionID:   "fake-session",
+		GeneratedAt: time.Date(2026, 5, 24, 14, 30, 0, 0, time.UTC),
+	}, nil
 }

@@ -1,6 +1,7 @@
 package career
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,17 +51,14 @@ func TestArchivePublicInterviewExperienceGeneratesDynamicDirections(t *testing.T
 	if first.Domain.Slug == second.Domain.Slug {
 		t.Fatalf("expected different dynamic domains, got first=%+v second=%+v", first.Domain, second.Domain)
 	}
-	for _, rel := range []string{
-		filepath.Join(WorkspaceDirPrepare, first.Domain.Slug, safeFileName(first.ExperienceItem.Title)+"题库.md"),
-		filepath.Join(WorkspaceDirPrepare, second.Domain.Slug, safeFileName(second.ExperienceItem.Title)+"题库.md"),
-	} {
-		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
-			t.Fatalf("expected generated question bank %s: %v", rel, err)
+	for _, paths := range [][]string{first.GeneratedPaths, second.GeneratedPaths} {
+		if strings.Contains(strings.Join(paths, "\n"), WorkspaceDirPrepare+"/") {
+			t.Fatalf("archive should not generate LLM question banks without generator: %+v", paths)
 		}
 	}
 	for _, paths := range [][]string{first.GeneratedPaths, second.GeneratedPaths} {
 		for _, path := range paths {
-			if strings.HasPrefix(path, WorkspaceDirExperiences+"/") && strings.Contains(path, "/") {
+			if strings.HasPrefix(path, WorkspaceDirExperiences+"/") && strings.Count(path, "/") > 1 {
 				t.Fatalf("public interview experience should not generate visible experience subdir paths: %+v", paths)
 			}
 		}
@@ -100,9 +98,9 @@ func TestReviewLibraryWritesDeepDocumentsFromResumeJDExperience(t *testing.T) {
 - 你的个人优势是什么？请结合经历说明。`, now); err != nil {
 		t.Fatalf("AddMaterial(experience) error = %v", err)
 	}
-	result, err := ws.GenerateReviewLibrary(now)
+	result, err := ws.GenerateReviewLibraryWithGenerator(context.Background(), now, fakeQuestionBankGenerator{})
 	if err != nil {
-		t.Fatalf("GenerateReviewLibrary() error = %v", err)
+		t.Fatalf("GenerateReviewLibraryWithGenerator() error = %v", err)
 	}
 	joined := strings.Join(result.Paths, "\n")
 	if strings.Contains(joined, WorkspaceDirMyInterviews+"/") {
@@ -116,7 +114,7 @@ func TestReviewLibraryWritesDeepDocumentsFromResumeJDExperience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected question bank %s: %v\npaths=%+v", bankPath, err, result.Paths)
 	}
-	for _, expected := range []string{"你如何设计一个可验证的示例系统", "示例项目一", "12 个示例场景", "风险 / 待补证据"} {
+	for _, expected := range []string{"LLM 标准答案", "示例项目一", "12 个示例场景", "风险 / 待补证据"} {
 		if !strings.Contains(string(bank), expected) {
 			t.Fatalf("question bank missing %q:\n%s", expected, bank)
 		}
@@ -150,9 +148,9 @@ func TestGenerateReviewLibraryUsesGeneralForUnknownDirection(t *testing.T) {
 	if _, err := ws.AddMaterial(WorkspaceTypeExperiences, "公开面经：一面问你如何准备、如何复盘、如何补齐证据。", now); err != nil {
 		t.Fatalf("AddMaterial() error = %v", err)
 	}
-	result, err := ws.GenerateReviewLibrary(now)
+	result, err := ws.GenerateReviewLibraryWithGenerator(context.Background(), now, fakeQuestionBankGenerator{})
 	if err != nil {
-		t.Fatalf("GenerateReviewLibrary() error = %v", err)
+		t.Fatalf("GenerateReviewLibraryWithGenerator() error = %v", err)
 	}
 	if len(result.Paths) == 0 {
 		t.Fatalf("expected generated review library paths")
@@ -162,7 +160,22 @@ func TestGenerateReviewLibraryUsesGeneralForUnknownDirection(t *testing.T) {
 	}
 }
 
-func TestGenerateReviewLibrarySplitsMultiJDMaterial(t *testing.T) {
+func TestGenerateReviewLibraryRequiresLLMForQuestionBanks(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 15, 12, 0, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if _, err := ws.AddMaterial(WorkspaceTypeExperiences, "公开面经：一面问你如何准备、如何复盘、如何补齐证据。", now); err != nil {
+		t.Fatalf("AddMaterial() error = %v", err)
+	}
+	if _, err := ws.GenerateReviewLibrary(now); err == nil || !strings.Contains(err.Error(), "requires LLM generator") {
+		t.Fatalf("expected missing LLM generator error, got %v", err)
+	}
+}
+
+func TestGenerateReviewLibraryDoesNotSplitMultiJDMaterialWithRules(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 15, 14, 0, 0, 0, time.UTC)
 	ws, err := OpenWorkspace(root, now)
@@ -184,10 +197,40 @@ func TestGenerateReviewLibrarySplitsMultiJDMaterial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateReviewLibrary() error = %v", err)
 	}
-	joined := strings.Join(result.Paths, "\n")
-	for _, expected := range []string{"示例公司A示例岗位A.md", "示例公司B示例岗位B.md"} {
-		if !strings.Contains(joined, expected) {
-			t.Fatalf("expected split JD path %q in %+v", expected, result.Paths)
+	if len(result.Paths) != 0 {
+		t.Fatalf("GenerateReviewLibrary should not split JD or generate paths without experiences, got %+v", result.Paths)
+	}
+	_, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	jdCount := 0
+	for _, item := range index.Items {
+		if item.Type == WorkspaceTypeJD {
+			jdCount++
 		}
 	}
+	if jdCount != 1 {
+		t.Fatalf("expected original multi-JD item only, got %d JD items: %+v", jdCount, index.Items)
+	}
+}
+
+type fakeQuestionBankGenerator struct{}
+
+func (fakeQuestionBankGenerator) GenerateQuestionBank(ctx context.Context, req ReviewQuestionBankRequest) (ReviewQuestionBank, error) {
+	question := firstQuestionLikeLine(req.Context.ExperienceContent)
+	return ReviewQuestionBank{
+		TopicName: req.Topic.Name,
+		Questions: []ReviewQuestion{
+			{
+				Question:              question,
+				ExamPoints:            []string{"LLM 考点：" + req.Topic.Name},
+				Answer:                "LLM 标准答案：" + question,
+				ResumeBasedAnswer:     "结合简历回答：示例项目一沉淀 12 个示例场景。",
+				Followups:             []string{"LLM 追问：你如何验证？"},
+				RiskOrMissingEvidence: []string{"待补证据：补充项目原始材料。"},
+				SourcePaths:           []string{req.SourceItem.Path, emptyIfBlank(req.Context.ResumePath), emptyIfBlank(req.Context.JDPath)},
+			},
+		},
+	}, nil
 }

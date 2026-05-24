@@ -12,22 +12,22 @@ import (
 	"happyagent/internal/terminal"
 )
 
-func handleExportCommand(output io.Writer, workspace *Workspace, input string) error {
+func handleExportCommand(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
 	kind := strings.TrimSpace(strings.TrimPrefix(input, "/export"))
 	if kind == "" {
-		fmt.Fprintln(output, "assistant> 用法：/export <类型>。支持 review-library、jd-match、resume-review、project-pitch、interview-review、review-material。")
+		fmt.Fprintln(deps.Stdout, "assistant> 用法：/export <类型>。支持 review-library、jd-match、resume-review、project-pitch、interview-review、review-material。")
 		return nil
 	}
 	if kind == "review-library" || kind == "interview-library" {
-		result, err := workspace.GenerateReviewLibrary(time.Now())
+		result, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, time.Now())
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(output, "assistant> 已刷新可复习资料库：面试资料库首页.md")
+		fmt.Fprintf(deps.Stdout, "assistant> 已刷新可复习资料库：面试资料库首页.md")
 		if len(result.Paths) > 0 {
-			fmt.Fprintf(output, "；更新 %d 个资料文件", len(result.Paths))
+			fmt.Fprintf(deps.Stdout, "；更新 %d 个资料文件", len(result.Paths))
 		}
-		fmt.Fprintln(output)
+		fmt.Fprintln(deps.Stdout)
 		return nil
 	}
 	title, content, err := RenderWorkspaceArtifact(workspace, kind)
@@ -38,7 +38,7 @@ func handleExportCommand(output io.Writer, workspace *Workspace, input string) e
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(output, "assistant> 已生成并保存 %s：%s\n", title, paths.LatestMarkdown)
+	fmt.Fprintf(deps.Stdout, "assistant> 已生成并保存 %s：%s\n", title, paths.LatestMarkdown)
 	return nil
 }
 

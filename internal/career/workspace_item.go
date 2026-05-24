@@ -165,12 +165,12 @@ func (w *Workspace) AddGuidedMaterial(input GuidedMaterialInput) (GuidedMaterial
 		if strings.TrimSpace(ctx.ExperienceContent) == "" {
 			ctx.ExperienceContent = libraryContent
 		}
-		paths, err := w.writeExperienceReviewLibrary(ctx, item, now)
+		paths, err := w.writeExperienceSourceOnly(ctx, item, now)
 		if err != nil {
 			return GuidedMaterialResult{}, err
 		}
 		if len(paths) > 0 {
-			syncActions = append(syncActions, "review_library:"+strings.Join(paths, ","))
+			syncActions = append(syncActions, "experience_source:"+strings.Join(paths, ","))
 		}
 	}
 	recordRel, err := w.writeClassificationRecord(item, classification, input.SourceLabel, now, syncActions)
@@ -248,7 +248,7 @@ func (w *Workspace) updateActivePointers(itemType string, sourceRel string, now 
 		meta.ActiveJD = filepath.ToSlash(sourceRel)
 	case WorkspaceTypeResume:
 		meta.CurrentResume = filepath.ToSlash(sourceRel)
-	case WorkspaceTypePrepare:
+	case WorkspaceTypePrepare, WorkspaceTypeProject:
 		meta.ActiveProject = filepath.ToSlash(sourceRel)
 	}
 	meta.UpdatedAt = now
@@ -261,7 +261,7 @@ func activePointerName(itemType string) string {
 		return "active_jd"
 	case WorkspaceTypeResume:
 		return "current_resume"
-	case WorkspaceTypePrepare:
+	case WorkspaceTypePrepare, WorkspaceTypeProject:
 		return "active_project"
 	default:
 		return ""
@@ -414,6 +414,8 @@ func workspaceTypeDir(itemType string) string {
 		return WorkspaceDirResume
 	case WorkspaceTypePrepare:
 		return WorkspaceDirPrepare
+	case WorkspaceTypeProject:
+		return WorkspaceDirProjectPack
 	case WorkspaceTypeExperiences:
 		return WorkspaceDirExperiences
 	case WorkspaceTypeMyInterviews:
@@ -458,6 +460,8 @@ func userVisibleMaterialDir(itemType string) string {
 		return WorkspaceDirResume
 	case WorkspaceTypePrepare:
 		return WorkspaceDirPrepare
+	case WorkspaceTypeProject:
+		return WorkspaceDirProjectPack
 	case WorkspaceTypeExperiences:
 		return WorkspaceDirExperiences
 	case WorkspaceTypeMyInterviews:
@@ -527,6 +531,8 @@ func renderUserVisibleMaterial(itemType string, title string, content string, in
 		return renderPlainMaterial(title, "我的简历", content)
 	case WorkspaceTypePrepare:
 		return renderPlainMaterial(title, "复习资料", content)
+	case WorkspaceTypeProject:
+		return renderPlainMaterial(title, "项目专项", content)
 	case WorkspaceTypeMyInterviews:
 		return renderPlainMaterial(title, "我的面试", content)
 	default:
@@ -564,24 +570,13 @@ func renderInterviewExperienceSummary(title string, content string, input Worksp
 	b.WriteString("- 整理时间：" + now.Format("2006-01-02") + "\n\n")
 	b.WriteString("## 原始内容摘要\n\n")
 	b.WriteString(summarizeMaterial(content) + "\n\n")
-	b.WriteString("## 面试问题与参考答案\n\n")
+	b.WriteString("## 抽取到的面试问题\n\n")
 	for i, question := range questions {
 		b.WriteString(fmt.Sprintf("### Q%d：%s\n\n", i+1, question))
-		b.WriteString("#### 参考答案\n\n")
-		b.WriteString(renderAnswerForQuestion(question, ReviewLibraryContext{ExperienceContent: content}) + "\n\n")
-		b.WriteString("#### 可追问问题\n\n")
-		followups := followupQuestions(question)
-		for _, followup := range followups {
-			b.WriteString("- " + followup + "\n")
-		}
-		b.WriteString("\n#### 追问参考答案\n\n")
-		for _, followup := range followups {
-			b.WriteString("- " + followup + "：先给结论，再结合已有材料说明证据；材料不足的部分标记为待补充。\n")
-		}
-		b.WriteString("\n")
 	}
-	b.WriteString("## 需要补充的材料\n\n")
-	b.WriteString("- 可验证的项目数据、截图、复盘文档或岗位背景信息。\n")
+	b.WriteString("## 说明\n\n")
+	b.WriteString("- 本文件只保存公开面经来源和问题抽取结果，不生成参考答案。\n")
+	b.WriteString("- 需要标准答案、结合简历的回答和追问分析时，必须通过 LLM 生成复习资料库题库。\n")
 	return b.String()
 }
 

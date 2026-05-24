@@ -29,15 +29,16 @@ func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, session
 		return err
 	}
 	if shouldScanInbox(intent) {
-		inboxResult, inboxErr := IngestInbox(context.Background(), workspace, time.Now())
+		paths, inboxErr := DiscoverInboxFiles(workspace)
 		if inboxErr != nil {
 			return inboxErr
 		}
-		for _, item := range inboxResult.Items {
-			autoArchived = append(autoArchived, item)
-			fmt.Fprintf(deps.Stdout, "assistant> 已整理 inbox 文件到 %s：%s（已保留 inbox 原件）\n", displayWorkspaceType(item.Type), item.Path)
+		if len(paths) > 0 {
+			ingestErrors = append(ingestErrors, fmt.Sprintf("发现 %d 个 inbox 文件；当前版本不会自动归档，后续需要通过分类确认流程整理。", len(paths)))
+			if intent.Intent == CareerIntentIngest || intent.Intent == CareerIntentAnalyze {
+				return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
+			}
 		}
-		ingestErrors = append(ingestErrors, inboxResult.Warnings...)
 	}
 	if classification.ShouldSave && len(autoArchived) == 0 {
 		item, err := saveMaterial(workspace, classification.Type, input)
@@ -108,7 +109,7 @@ func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionI
 	if err != nil {
 		return err
 	}
-	if _, err := workspace.GenerateReviewLibrary(now); err != nil {
+	if _, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, now); err != nil {
 		return err
 	}
 	printCompletionSummary(deps.Stdout, outputTitle, collectedInputPaths(workspace.Root, meta, autoArchived), paths)

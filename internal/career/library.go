@@ -1,6 +1,8 @@
 package career
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +13,33 @@ import (
 
 type ReviewLibraryResult struct {
 	Paths []string
+}
+
+type ReviewQuestionBankGenerator interface {
+	GenerateQuestionBank(ctx context.Context, req ReviewQuestionBankRequest) (ReviewQuestionBank, error)
+}
+
+type ReviewQuestionBankRequest struct {
+	WorkspaceRoot string
+	Domain        ReviewDomain
+	Topic         ReviewTopic
+	SourceItem    WorkspaceItem
+	Context       ReviewLibraryContext
+}
+
+type ReviewQuestionBank struct {
+	TopicName string           `json:"topic_name"`
+	Questions []ReviewQuestion `json:"questions"`
+}
+
+type ReviewQuestion struct {
+	Question              string   `json:"question"`
+	ExamPoints            []string `json:"exam_points"`
+	Answer                string   `json:"answer"`
+	ResumeBasedAnswer     string   `json:"resume_based_answer"`
+	Followups             []string `json:"followups"`
+	RiskOrMissingEvidence []string `json:"risk_or_missing_evidence"`
+	SourcePaths           []string `json:"source_paths"`
 }
 
 type ReviewDomain struct {
@@ -56,14 +85,14 @@ func (w *Workspace) EnsureReviewLibrarySkeleton(now time.Time) error {
 }
 
 func (w *Workspace) GenerateReviewLibrary(now time.Time) (ReviewLibraryResult, error) {
+	return w.GenerateReviewLibraryWithGenerator(context.Background(), now, nil)
+}
+
+func (w *Workspace) GenerateReviewLibraryWithGenerator(ctx context.Context, now time.Time, generator ReviewQuestionBankGenerator) (ReviewLibraryResult, error) {
 	if now.IsZero() {
 		now = time.Now()
 	}
 	if err := w.EnsureReviewLibrarySkeleton(now); err != nil {
-		return ReviewLibraryResult{}, err
-	}
-	splitItems, err := w.EnsureSplitJDMaterials(now)
-	if err != nil {
 		return ReviewLibraryResult{}, err
 	}
 	_, index, err := w.Status()
@@ -71,18 +100,18 @@ func (w *Workspace) GenerateReviewLibrary(now time.Time) (ReviewLibraryResult, e
 		return ReviewLibraryResult{}, err
 	}
 	var generated []string
-	for _, item := range splitItems {
-		generated = append(generated, item.Path)
-	}
 	for _, item := range index.Items {
 		if item.Type != WorkspaceTypeExperiences {
 			continue
 		}
-		ctx := w.buildReviewLibraryContext(item, index)
-		if strings.TrimSpace(ctx.ExperienceContent) == "" {
+		reviewCtx := w.buildReviewLibraryContext(item, index)
+		if strings.TrimSpace(reviewCtx.ExperienceContent) == "" {
 			continue
 		}
-		paths, err := w.writeExperienceReviewLibrary(ctx, item, now)
+		if generator == nil {
+			return ReviewLibraryResult{}, fmt.Errorf("review library question bank generation requires LLM generator")
+		}
+		paths, err := w.writeExperienceReviewLibrary(ctx, reviewCtx, item, now, generator)
 		if err != nil {
 			return ReviewLibraryResult{}, err
 		}
@@ -118,21 +147,36 @@ func (w *Workspace) buildReviewLibraryContext(experienceItem WorkspaceItem, inde
 	}
 }
 
-func (w *Workspace) writeExperienceReviewLibrary(ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time) ([]string, error) {
+func (w *Workspace) writeExperienceReviewLibrary(runCtx context.Context, ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time, generator ReviewQuestionBankGenerator) ([]string, error) {
+	if generator == nil {
+		return nil, fmt.Errorf("review question bank generation requires LLM generator")
+	}
 	domain := ctx.Domain
 	topics := ctx.Topics
 	var paths []string
-	sourceRel, err := w.writeExperienceSource(domain, sourceItem, ctx.ExperienceContent, now)
+	sourcePaths, err := w.writeExperienceSourceOnly(ctx, sourceItem, now)
 	if err != nil {
 		return nil, err
 	}
-	paths = append(paths, sourceRel)
+	paths = append(paths, sourcePaths...)
 
-	questionBankRel := filepath.Join(WorkspaceDirPrepare, domain.Slug, fmt.Sprintf("%s题库.md", safeFileName(sourceItem.Title)))
-	if err := w.writeWorkspaceText(questionBankRel, renderTopicQuestionBank(ctx, ReviewTopic{Name: sourceItem.Title, Slug: slugForPath(sourceItem.Title)}, sourceItem, now)); err != nil {
-		return nil, err
+	for _, topic := range topics {
+		bank, err := generator.GenerateQuestionBank(runCtx, ReviewQuestionBankRequest{
+			WorkspaceRoot: w.Root,
+			Domain:        domain,
+			Topic:         topic,
+			SourceItem:    sourceItem,
+			Context:       ctx,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("generate %s question bank with LLM: %w", topic.Name, err)
+		}
+		questionBankRel := filepath.Join(WorkspaceDirPrepare, domain.Slug, fmt.Sprintf("%s题库.md", safeFileName(firstNonEmpty(bank.TopicName, topic.Name))))
+		if err := w.writeWorkspaceText(questionBankRel, renderLLMQuestionBank(bank, ctx, topic, sourceItem)); err != nil {
+			return nil, err
+		}
+		paths = append(paths, filepath.ToSlash(questionBankRel))
 	}
-	paths = append(paths, filepath.ToSlash(questionBankRel))
 	if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
 		return nil, err
 	}
@@ -150,6 +194,17 @@ func (w *Workspace) writeExperienceReviewLibrary(ctx ReviewLibraryContext, sourc
 	}
 	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
 	return paths, nil
+}
+
+func (w *Workspace) writeExperienceSourceOnly(ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time) ([]string, error) {
+	sourceRel, err := w.writeExperienceSource(ctx.Domain, sourceItem, ctx.ExperienceContent, now)
+	if err != nil {
+		return nil, err
+	}
+	if err := w.refreshExperienceIndex(ctx.Domain, ctx.Topics, now); err != nil {
+		return nil, err
+	}
+	return []string{sourceRel, filepath.ToSlash(filepath.Join(WorkspaceDirExperiences, "面经总览.md"))}, nil
 }
 
 func (w *Workspace) writeExperienceSource(domain ReviewDomain, sourceItem WorkspaceItem, content string, now time.Time) (string, error) {
@@ -245,39 +300,115 @@ func renderExperienceObservations(domain ReviewDomain, sourceItem WorkspaceItem,
 	return b.String()
 }
 
-func renderTopicQuestionBank(ctx ReviewLibraryContext, topic ReviewTopic, sourceItem WorkspaceItem, now time.Time) string {
-	questions := inferQuestionsForTopic(topic.Name, ctx.ExperienceContent)
-	if len(questions) == 0 {
-		questions = []string{inferQuestionForTopic(topic.Name, ctx.ExperienceContent)}
-	}
+func renderLLMQuestionBank(bank ReviewQuestionBank, ctx ReviewLibraryContext, topic ReviewTopic, sourceItem WorkspaceItem) string {
+	topicName := firstNonEmpty(bank.TopicName, topic.Name)
 	var b strings.Builder
-	b.WriteString("# " + topic.Name + "题库\n\n")
-	b.WriteString(fmt.Sprintf("> 来源：`%s`。公开面经资料，不是用户真实面试记录。\n\n", sourceItem.Path))
-	for i, question := range questions {
+	b.WriteString("# " + topicName + "题库\n\n")
+	b.WriteString(fmt.Sprintf("> 来源：`%s`。公开面经资料，不是用户真实面试记录。正文由 LLM 基于当前资料生成。\n\n", sourceItem.Path))
+	for i, item := range bank.Questions {
+		question := strings.TrimSpace(item.Question)
+		if question == "" {
+			question = fmt.Sprintf("%s相关问题", topicName)
+		}
 		b.WriteString(fmt.Sprintf("## Q%d：%s\n\n", i+1, question))
 		b.WriteString("### 考点\n\n")
-		for _, point := range topicExamSignals(topic.Name) {
-			b.WriteString("- " + point + "\n")
-		}
+		writeBullets(&b, item.ExamPoints, []string{"待补充：LLM 输出缺少考点。"})
 		b.WriteString("\n### 标准答案\n\n")
-		b.WriteString(renderAnswerForQuestion(question, ctx))
+		b.WriteString(strings.TrimSpace(item.Answer))
 		b.WriteString("\n\n### 结合我的简历怎么答\n\n")
-		for _, evidence := range resumeEvidenceBullets(ctx.ResumeContent, 6) {
-			b.WriteString("- " + evidence + "\n")
-		}
-		b.WriteString("\n### 可追问\n\n")
-		for _, follow := range followupQuestions(question) {
-			b.WriteString("- " + follow + "\n")
-		}
+		b.WriteString(strings.TrimSpace(item.ResumeBasedAnswer))
+		b.WriteString("\n\n### 可追问\n\n")
+		writeBullets(&b, item.Followups, []string{"待补充：LLM 输出缺少追问。"})
 		b.WriteString("\n### 风险 / 待补证据\n\n")
-		b.WriteString("- 已有证据：" + evidenceBoundary(ctx.ResumeContent) + "\n")
-		b.WriteString("- 待补证据：目标岗位背景、项目原始材料、关键指标来源、复盘原文或可展示交付物。\n\n")
-		b.WriteString("### 关联资料\n\n")
-		b.WriteString(fmt.Sprintf("- 来源面经：`%s`\n", sourceItem.Path))
-		b.WriteString(fmt.Sprintf("- 当前简历：`%s`\n", emptyIfBlank(ctx.ResumePath)))
-		b.WriteString(fmt.Sprintf("- 当前 JD：`%s`\n\n", emptyIfBlank(ctx.JDPath)))
+		writeBullets(&b, item.RiskOrMissingEvidence, []string{"待补证据：需要补充可验证项目材料、截图、指标来源或复盘原文。"})
+		b.WriteString("\n### 关联资料\n\n")
+		sourcePaths := item.SourcePaths
+		if len(sourcePaths) == 0 {
+			sourcePaths = []string{sourceItem.Path, emptyIfBlank(ctx.ResumePath), emptyIfBlank(ctx.JDPath)}
+		}
+		writeBullets(&b, sourcePaths, []string{sourceItem.Path})
+		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+func writeBullets(b *strings.Builder, values []string, fallback []string) {
+	written := false
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		b.WriteString("- " + value + "\n")
+		written = true
+	}
+	if written {
+		return
+	}
+	for _, value := range fallback {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			b.WriteString("- " + value + "\n")
+		}
+	}
+}
+
+func ParseReviewQuestionBankJSON(data []byte) (ReviewQuestionBank, error) {
+	var bank ReviewQuestionBank
+	if err := json.Unmarshal(data, &bank); err != nil {
+		return ReviewQuestionBank{}, fmt.Errorf("parse review question bank json: %w", err)
+	}
+	if err := ValidateReviewQuestionBank(bank); err != nil {
+		return ReviewQuestionBank{}, err
+	}
+	return bank, nil
+}
+
+func ParseReviewQuestionBankString(output string) (ReviewQuestionBank, error) {
+	return ParseReviewQuestionBankJSON([]byte(strings.TrimSpace(output)))
+}
+
+func ValidateReviewQuestionBank(bank ReviewQuestionBank) error {
+	if strings.TrimSpace(bank.TopicName) == "" {
+		return fmt.Errorf("review question bank missing topic_name")
+	}
+	if len(bank.Questions) == 0 {
+		return fmt.Errorf("review question bank missing questions")
+	}
+	for i, question := range bank.Questions {
+		if strings.TrimSpace(question.Question) == "" {
+			return fmt.Errorf("review question bank questions[%d].question must not be empty", i)
+		}
+		if len(nonEmptyStrings(question.ExamPoints)) == 0 {
+			return fmt.Errorf("review question bank questions[%d].exam_points must not be empty", i)
+		}
+		if strings.TrimSpace(question.Answer) == "" {
+			return fmt.Errorf("review question bank questions[%d].answer must not be empty", i)
+		}
+		if strings.TrimSpace(question.ResumeBasedAnswer) == "" {
+			return fmt.Errorf("review question bank questions[%d].resume_based_answer must not be empty", i)
+		}
+		if len(nonEmptyStrings(question.Followups)) == 0 {
+			return fmt.Errorf("review question bank questions[%d].followups must not be empty", i)
+		}
+		if len(nonEmptyStrings(question.RiskOrMissingEvidence)) == 0 {
+			return fmt.Errorf("review question bank questions[%d].risk_or_missing_evidence must not be empty", i)
+		}
+		if len(nonEmptyStrings(question.SourcePaths)) == 0 {
+			return fmt.Errorf("review question bank questions[%d].source_paths must not be empty", i)
+		}
+	}
+	return nil
+}
+
+func nonEmptyStrings(values []string) []string {
+	var out []string
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 func renderSourceMaterial(sourceItem WorkspaceItem, content string, now time.Time) string {
@@ -676,21 +807,6 @@ func normalizeQuestion(line string) string {
 	return line
 }
 
-func topicExamSignals(topic string) []string {
-	return []string{
-		"是否能说明问题背后的核心能力要求",
-		"是否能把回答绑定到当前 JD 和简历证据",
-		"是否能讲清关键取舍、风险边界和后续验证方式",
-	}
-}
-
-func renderAnswerForQuestion(question string, ctx ReviewLibraryContext) string {
-	if strings.Contains(question, "自我介绍") {
-		return renderSelfIntro(ctx)
-	}
-	return "我会先给结论，再说明判断标准和关键取舍，最后绑定到当前简历里可验证的项目证据。没有材料支撑的经历、指标或结果不直接说成事实，而是标记为待补证据。"
-}
-
 func resumeEvidenceBullets(resume string, limit int) []string {
 	var out []string
 	inProjectSection := false
@@ -716,18 +832,6 @@ func resumeEvidenceBullets(resume string, limit int) []string {
 		out = append(out, "待确认：当前简历材料里还没有可直接映射的项目证据。")
 	}
 	return uniqueStrings(out)
-}
-
-func evidenceBoundary(resume string) string {
-	evidence := resumeEvidenceBullets(resume, 3)
-	return strings.Join(evidence, "；")
-}
-
-func followupQuestions(question string) []string {
-	if strings.Contains(question, "项目") || strings.Contains(question, "经历") {
-		return []string{"这个项目里你具体负责哪一块？", "最难的地方是什么？", "如果重做一次你会怎么优化？"}
-	}
-	return []string{"你有什么证据支撑这个判断？", "这个方案的边界和风险是什么？", "如果面试官继续追问细节，你会举哪个例子？"}
 }
 
 func renderSelfIntro(ctx ReviewLibraryContext) string {

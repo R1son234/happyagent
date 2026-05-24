@@ -93,6 +93,20 @@ func parseOrRepairReport(ctx context.Context, deps Dependencies, sessionID strin
 	return careerReport, repairedRecord, nil
 }
 
+func generateReviewLibraryWithLLM(deps Dependencies, workspace *Workspace, sessionID string, now time.Time) (ReviewLibraryResult, error) {
+	if deps.App == nil {
+		return ReviewLibraryResult{}, fmt.Errorf("review library generation requires LLM application")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), reviewLibraryTimeout(deps.Config))
+	defer cancel()
+	generator := &LLMReviewQuestionBankGenerator{
+		App:       deps.App,
+		Config:    deps.Config,
+		SessionID: sessionID,
+	}
+	return workspace.GenerateReviewLibraryWithGenerator(ctx, now, generator)
+}
+
 func saveMaterial(workspace *Workspace, itemType string, content string) (WorkspaceItem, error) {
 	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeExperiences {
 		result, err := workspace.ArchivePublicInterviewExperience(content, time.Now())

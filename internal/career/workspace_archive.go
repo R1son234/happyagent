@@ -20,20 +20,13 @@ func (w *Workspace) ArchivePublicInterviewExperience(content string, now time.Ti
 		return PublicInterviewArchiveResult{}, err
 	}
 	result := PublicInterviewArchiveResult{ExperienceItem: experienceItem}
-	if containsPrepareSignals(content) {
-		prepareItem, err := w.AddMaterial(WorkspaceTypePrepare, content, now)
-		if err != nil {
-			return PublicInterviewArchiveResult{}, err
-		}
-		result.PrepareItem = prepareItem
-	}
 	_, index, err := w.Status()
 	if err != nil {
 		return PublicInterviewArchiveResult{}, err
 	}
 	ctx := w.buildReviewLibraryContext(experienceItem, index)
 	result.Domain = ctx.Domain
-	generatedPaths, err := w.writeExperienceReviewLibrary(ctx, experienceItem, now)
+	generatedPaths, err := w.writeExperienceSourceOnly(ctx, experienceItem, now)
 	if err != nil {
 		return PublicInterviewArchiveResult{}, err
 	}
@@ -122,14 +115,4 @@ func (w *Workspace) writeClassificationRecord(item WorkspaceItem, classification
 		return "", err
 	}
 	return filepath.ToSlash(rel), nil
-}
-
-func containsPrepareSignals(content string) bool {
-	lower := strings.ToLower(content)
-	for _, signal := range []string{"项目", "project", "项目追问", "项目亮点", "项目难点", "技术方案", "证据口径"} {
-		if strings.Contains(lower, strings.ToLower(signal)) {
-			return true
-		}
-	}
-	return false
 }

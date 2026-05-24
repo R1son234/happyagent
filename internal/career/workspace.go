@@ -20,6 +20,7 @@ var workspaceDirs = []string{
 	WorkspaceDirJD,
 	WorkspaceDirExperiences,
 	WorkspaceDirPrepare,
+	WorkspaceDirProjectPack,
 	WorkspaceDirMyInterviews,
 	WorkspaceDirArchive,
 	WorkspaceDirOutputs,
@@ -30,6 +31,7 @@ var workspaceDirs = []string{
 	filepath.Join(WorkspaceInternalDir, "record", "imports"),
 	filepath.Join(WorkspaceInternalDir, "record", "unclassified"),
 	filepath.Join(WorkspaceInternalDir, "record", "generated"),
+	filepath.Join(WorkspaceInternalDir, WorkspaceDiagnosticsDir),
 }
 
 const (
@@ -37,6 +39,7 @@ const (
 	WorkspaceDirJD           = "岗位明细"
 	WorkspaceDirExperiences  = "面经汇总"
 	WorkspaceDirPrepare      = "复习资料库"
+	WorkspaceDirProjectPack  = "项目专项"
 	WorkspaceDirMyInterviews = "我的面试"
 	WorkspaceDirArchive      = "已归档"
 	WorkspaceDirOutputs      = "输出报告"
@@ -329,6 +332,7 @@ func migrateWorkspaceToUserVisibleLayout(root string, now time.Time) error {
 		{"jd", WorkspaceDirJD},
 		{"experiences", WorkspaceDirExperiences},
 		{"prepare", WorkspaceDirPrepare},
+		{"project", WorkspaceDirProjectPack},
 		{"my-interviews", WorkspaceDirMyInterviews},
 		{"outputs", WorkspaceDirOutputs},
 		{"record", filepath.Join(WorkspaceInternalDir, "record")},
@@ -483,6 +487,7 @@ func rewriteVisibleRel(path string) string {
 		{"jd/", WorkspaceDirJD + "/"},
 		{"experiences/", WorkspaceDirExperiences + "/"},
 		{"prepare/", WorkspaceDirPrepare + "/"},
+		{"project/", WorkspaceDirProjectPack + "/"},
 		{"my-interviews/", WorkspaceDirMyInterviews + "/"},
 		{"outputs/", WorkspaceDirOutputs + "/"},
 		{"record/", WorkspaceInternalDir + "/record/"},

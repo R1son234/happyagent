@@ -31,6 +31,7 @@ const defaultProfile = "career-copilot"
 type Server struct {
 	cfg           config.Config
 	app           *app.Application
+	careerService *career.CopilotService
 	workspaceRoot string
 	staticDir     string
 	mux           *http.ServeMux
@@ -107,6 +108,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/files/preview", s.handleFilePreview)
 	s.mux.HandleFunc("POST /api/files/import", s.handleFileImport)
 	s.mux.HandleFunc("POST /api/files/upload", s.handleFileUpload)
+	s.mux.HandleFunc("GET /api/inbox", s.handleInbox)
+	s.mux.HandleFunc("POST /api/inbox/classify", s.handleInboxClassify)
+	s.mux.HandleFunc("POST /api/inbox/confirm", s.handleInboxConfirm)
+	s.mux.HandleFunc("POST /api/jd/split", s.handleJDSplit)
+	s.mux.HandleFunc("POST /api/review-library/generate", s.handleReviewLibraryGenerate)
+	s.mux.HandleFunc("POST /api/project-pack/generate", s.handleProjectPackGenerate)
+	s.mux.HandleFunc("POST /api/battle-pack/generate", s.handleBattlePackGenerate)
+	s.mux.HandleFunc("POST /api/interview-review/extract", s.handleInterviewReviewExtract)
+	s.mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	s.mux.HandleFunc("GET /api/graph", s.handleGraph)
 	s.mux.HandleFunc("POST /api/chat/sessions", s.handleCreateChatSession)
 	s.mux.HandleFunc("POST /api/chat/runs", s.handleChatRun)
@@ -131,6 +141,20 @@ func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (s *Server) copilotService() *career.CopilotService {
+	if s.careerService != nil {
+		return s.careerService
+	}
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	return &career.CopilotService{
+		WorkspaceRoot: s.workspaceRoot,
+		App:           s.app,
+		Config:        cfg,
+	}
 }
 
 func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
@@ -298,7 +322,7 @@ func shouldHideWorkspaceEntry(parentRel string, name string) bool {
 	parentRel = filepath.ToSlash(parentRel)
 	if parentRel == "" {
 		switch name {
-		case "resume", "jd", "experiences", "prepare", "my-interviews", "outputs":
+		case "resume", "jd", "experiences", "prepare", "project", "my-interviews", "outputs":
 			return true
 		}
 	}
@@ -398,40 +422,46 @@ func (s *Server) handleFileImport(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
-	if err != nil {
+	inboxRoot := filepath.Join(s.workspaceRoot, "inbox")
+	if err := os.MkdirAll(inboxRoot, 0o755); err != nil {
 		writeError(w, err)
 		return
 	}
-	var items []career.WorkspaceItem
+	var savedPaths []string
 	var warnings []string
 	for _, path := range req.Paths {
-		result, err := career.IngestFile(r.Context(), ws, career.IngestRequest{
-			Path:      path,
-			HintType:  req.HintType,
-			UserInput: filepath.Base(path),
-			Now:       time.Now(),
-		})
-		if result.Item.ID != "" {
-			items = append(items, result.Item)
-		}
+		absPath, err := filepath.Abs(strings.TrimSpace(path))
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
+			continue
 		}
+		info, err := os.Stat(absPath)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
+			continue
+		}
+		if info.IsDir() {
+			warnings = append(warnings, fmt.Sprintf("%s: is a directory, expected a file", path))
+			continue
+		}
+		name := safeUploadName(filepath.Base(absPath))
+		dstPath := uniqueInboxPath(inboxRoot, name)
+		if err := copyFileToPath(absPath, dstPath); err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
+			continue
+		}
+		savedPaths = append(savedPaths, dstPath)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":    items,
-		"warnings": warnings,
+		"saved_paths":     savedPaths,
+		"items":           []career.WorkspaceItem{},
+		"generated_paths": []string{},
+		"warnings":        warnings,
 	})
 }
 
 func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		writeError(w, err)
-		return
-	}
-	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
-	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -441,7 +471,6 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var savedPaths []string
-	var items []career.WorkspaceItem
 	var warnings []string
 	for _, headers := range r.MultipartForm.File {
 		for _, header := range headers {
@@ -465,24 +494,164 @@ func (s *Server) handleFileUpload(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			savedPaths = append(savedPaths, dstPath)
-			result, err := career.IngestFile(r.Context(), ws, career.IngestRequest{
-				Path:      dstPath,
-				UserInput: filepath.Base(dstPath),
-				Now:       time.Now(),
-			})
-			if result.Item.ID != "" {
-				items = append(items, result.Item)
-			}
-			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("%s: %v", header.Filename, err))
-			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"saved_paths": savedPaths,
-		"items":       items,
+		"items":       []career.WorkspaceItem{},
 		"warnings":    warnings,
 	})
+}
+
+func (s *Server) handleInbox(w http.ResponseWriter, r *http.Request) {
+	view, err := s.copilotService().ListInbox(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, view)
+}
+
+func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
+	var req career.ClassifyInboxRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().ClassifyInbox(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleInboxConfirm(w http.ResponseWriter, r *http.Request) {
+	var req career.ConfirmMaterialRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().ConfirmMaterialClassification(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleJDSplit(w http.ResponseWriter, r *http.Request) {
+	var req career.SplitJDRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().SplitJobDescriptions(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleReviewLibraryGenerate(w http.ResponseWriter, r *http.Request) {
+	var req career.GenerateReviewLibraryRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().GenerateReviewLibrary(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleProjectPackGenerate(w http.ResponseWriter, r *http.Request) {
+	var req career.GenerateProjectPackRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().GenerateProjectPack(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleBattlePackGenerate(w http.ResponseWriter, r *http.Request) {
+	var req career.GenerateBattlePackRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().GenerateBattlePack(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleInterviewReviewExtract(w http.ResponseWriter, r *http.Request) {
+	var req career.ExtractInterviewReviewRequest
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	result, err := s.copilotService().ExtractInterviewReview(r.Context(), req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	result, err := s.copilotService().ListDiagnostics(r.Context(), career.ListDiagnosticsRequest{Limit: 10})
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, items []career.WorkspaceItem) ([]string, []string) {
+	hasExperience := false
+	for _, item := range items {
+		if item.Type == career.WorkspaceTypeExperiences {
+			hasExperience = true
+			break
+		}
+	}
+	if !hasExperience {
+		return nil, nil
+	}
+	session, err := s.app.CreateSession(defaultProfile)
+	if err != nil {
+		return nil, []string{"复习资料库未刷新：创建 LLM 会话失败：" + err.Error()}
+	}
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	timeout := time.Duration(cfg.Engine.RunTimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 180 * time.Second
+	}
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	result, err := ws.GenerateReviewLibraryWithGenerator(runCtx, time.Now(), &career.LLMReviewQuestionBankGenerator{
+		App:       s.app,
+		Config:    cfg,
+		SessionID: session.ID,
+	})
+	if err != nil {
+		return nil, []string{"复习资料库未刷新：" + err.Error()}
+	}
+	return result.Paths, nil
 }
 
 func safeUploadName(name string) string {
@@ -513,6 +682,21 @@ func uniqueInboxPath(inboxRoot string, name string) string {
 		}
 		candidate = filepath.Join(inboxRoot, fmt.Sprintf("%s-%d%s", base, i, ext))
 	}
+}
+
+func copyFileToPath(srcPath string, dstPath string) error {
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(dst, src)
+	closeErr := dst.Close()
+	return errors.Join(copyErr, closeErr)
 }
 
 func (s *Server) handleGraph(w http.ResponseWriter, r *http.Request) {

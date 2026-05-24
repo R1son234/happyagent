@@ -124,7 +124,7 @@ func RunInteractive(deps Dependencies) error {
 			}
 			continue
 		case "/library":
-			result, err := workspace.GenerateReviewLibrary(time.Now())
+			result, err := generateReviewLibraryWithLLM(deps, workspace, session.ID, time.Now())
 			if err != nil {
 				return err
 			}
@@ -140,7 +140,7 @@ func RunInteractive(deps Dependencies) error {
 			continue
 		}
 		if strings.HasPrefix(input, "/export") {
-			if err := handleExportCommand(deps.Stdout, workspace, input); err != nil {
+			if err := handleExportCommand(deps, workspace, session.ID, input); err != nil {
 				return err
 			}
 			continue
