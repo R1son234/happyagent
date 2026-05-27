@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { createRoot } from "react-dom/client";
 import {
   Bot,
@@ -38,7 +39,15 @@ type Preview = {
 type WorkspaceStatus = {
   root: string;
   counts: Record<string, number>;
+  meta: {
+    current_resume?: string;
+    active_jd?: string;
+  };
   index: { items: WorkspaceItem[] };
+  pending_count: number;
+  current_target_jd?: { path?: string; title?: string };
+  stale_items?: StaleItem[];
+  latest_run_summary?: LatestRunSummary;
 };
 
 type WorkspaceItem = {
@@ -58,6 +67,7 @@ type ChatMessage = {
 type ReportView = {
   content: string;
   logPath?: string;
+  generatedPaths?: string[];
   createdAt: string;
 };
 
@@ -95,6 +105,22 @@ type PendingInboxItem = {
   status: string;
 };
 
+type StaleItem = {
+  path: string;
+  kind: string;
+  reason: string;
+};
+
+type LatestRunSummary = {
+  id: string;
+  task_name: string;
+  status: string;
+  primary_path?: string;
+  generated_paths?: string[];
+  log_path?: string;
+  warnings?: string[];
+};
+
 type DiagnosticRecord = {
   id: string;
   task_name: string;
@@ -128,6 +154,8 @@ function App() {
   const [settingsMessage, setSettingsMessage] = useState("");
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [organizingInbox, setOrganizingInbox] = useState(false);
+  const [tooltipVisible, setTooltipVisible] = useState(false);
+  const [editingInboxItems, setEditingInboxItems] = useState<Record<string, PendingInboxItem>>({});
 
   useEffect(() => {
     void loadWorkspace();
@@ -151,6 +179,14 @@ function App() {
       setDiagnostics(data.items || []);
     }
   }
+
+  useEffect(() => {
+    const next: Record<string, PendingInboxItem> = {};
+    (inbox?.pending_items || []).forEach((item) => {
+      next[item.id] = next[item.id] || { ...item };
+    });
+    setEditingInboxItems(next);
+  }, [inbox?.pending_items]);
 
   async function openFile(path: string) {
     if (!path) return;
@@ -192,10 +228,16 @@ function App() {
         ...items,
         { role: "assistant", content: output }
       ]);
-      setPreview(null);
+      const primaryPath = data.primary_path || data.generated_paths?.[0] || "";
+      if (primaryPath) {
+        await openFile(primaryPath);
+      } else {
+        setPreview(null);
+      }
       setLastReport({
         content: output,
         logPath: data.log_path,
+        generatedPaths: data.generated_paths || [],
         createdAt: new Date().toLocaleString()
       });
       await loadWorkspace();
@@ -275,6 +317,16 @@ function App() {
         { role: "assistant", content: `inbox 整理完成：已归档 ${confirmed} 项，待确认 ${pending} 项${warningText}。` }
       ]);
       setRunSteps(["LLM 分类完成", "资料库状态已刷新"]);
+      const primaryPath = data.primary_path || data.generated_paths?.[0] || "";
+      if (primaryPath) {
+        await openFile(primaryPath);
+        setLastReport({
+          content: `整理完成。新增结果：${(data.generated_paths || []).join("、") || primaryPath}`,
+          logPath: data.log_path,
+          generatedPaths: data.generated_paths || [],
+          createdAt: new Date().toLocaleString()
+        });
+      }
       await loadWorkspace();
     } catch (err) {
       const message = err instanceof Error ? err.message : "整理 inbox 失败。";
@@ -318,6 +370,26 @@ function App() {
     }
   }
 
+  async function selectTargetJD(path: string) {
+    if (!path || running) return;
+    setRunning(true);
+    setError("");
+    try {
+      const res = await fetch("/api/workspace/target-jd", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "设置目标 JD 失败。");
+      await loadWorkspace();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "设置目标 JD 失败。");
+    } finally {
+      setRunning(false);
+    }
+  }
+
   async function runCareerAction(label: string, endpoint: string, payload: Record<string, unknown>) {
     if (running) return;
     setRunning(true);
@@ -331,13 +403,21 @@ function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `${label}失败。`);
-      const path = data.path || data.items?.[0]?.path || data.record?.path || "";
+      const path = data.primary_path || data.path || data.generated_paths?.[0] || data.items?.[0]?.path || data.record?.path || "";
       setMessages((items) => [
         ...items,
         { role: "assistant", content: `${label}完成${path ? `：${path}` : "。"}` }
       ]);
       setRunSteps([`${label}完成`, "资料库状态已刷新"]);
-      if (path) await openFile(path);
+      if (path) {
+        await openFile(path);
+        setLastReport({
+          content: `${label}完成。`,
+          logPath: data.log_path,
+          generatedPaths: data.generated_paths || (path ? [path] : []),
+          createdAt: new Date().toLocaleString()
+        });
+      }
       await loadWorkspace();
     } catch (err) {
       const message = err instanceof Error ? err.message : `${label}失败。`;
@@ -387,6 +467,7 @@ function App() {
   const inboxCounts = inbox?.counts || {};
   const inboxFileCount = inbox?.files?.length || 0;
   const pendingInboxCount = inboxCounts.pending || 0;
+  const jdOptions = (status?.index.items || []).filter((item) => item.type === "jd");
 
   return (
     <main className="desktop-frame">
@@ -400,6 +481,7 @@ function App() {
           HappyAgent <span>/ {status?.root || "资料库"}</span>
         </div>
         <div className="top-actions">
+          <div className="pill">目标 JD：{status?.current_target_jd?.title || "未选择"}</div>
           <div className="pill"><CheckCircle2 size={14} /> {modelName || "模型已连接"}</div>
           <button className="pill icon-button" onClick={openSettings} type="button"><Settings size={14} /> 设置</button>
         </div>
@@ -431,7 +513,7 @@ function App() {
             {preview ? (
               <PreviewPane preview={preview} item={selectedItem} query={query} />
             ) : lastReport ? (
-              <ReportPane report={lastReport} query={query} />
+              <ReportPane report={lastReport} query={query} onOpen={openFile} />
             ) : (
               <EmptyReader />
             )}
@@ -454,20 +536,61 @@ function App() {
               {organizingInbox ? "整理中" : "开始整理"}
             </button>
             <div className="inbox-list">
-              {(inbox?.pending_items || []).slice(0, 4).map((item) => (
+              {(inbox?.pending_items || []).map((item) => {
+                const editable = editingInboxItems[item.id] || item;
+                return (
                 <div className={`inbox-item ${item.status}`} key={item.id}>
                   <div>
                     <strong>{item.original_name || item.source_path}</strong>
-                    <span>{item.material_type || "unknown"} · {item.confidence || "-"}</span>
+                    <span>{editable.material_type || "unknown"} · {item.confidence || "-"}</span>
                   </div>
                   <p>{item.reason || item.source_excerpt || "等待确认"}</p>
+                  <div className="inbox-path">{item.source_path}</div>
+                  <div className="inbox-controls">
+                    <label>
+                      <span>类型</span>
+                      <select
+                        value={editable.material_type}
+                        onChange={(event) => setEditingInboxItems((items) => ({
+                          ...items,
+                          [item.id]: { ...editable, material_type: event.target.value }
+                        }))}
+                      >
+                        {["resume", "jd", "public_interview_experience", "project_material", "real_interview_record", "review_note", "unknown"].map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      <span>目录</span>
+                      <select
+                        value={editable.destination}
+                        onChange={(event) => setEditingInboxItems((items) => ({
+                          ...items,
+                          [item.id]: { ...editable, destination: event.target.value }
+                        }))}
+                      >
+                        {["我的简历", "岗位明细", "面经汇总", "项目专项", "我的面试", "复习资料库", "已归档", "待确认"].map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  {item.source_excerpt && <div className="inbox-excerpt">{item.source_excerpt}</div>}
+                  {!!item.questions_for_user?.length && (
+                    <div className="inbox-questions">
+                      {item.questions_for_user.map((question) => (
+                        <span key={question}>{question}</span>
+                      ))}
+                    </div>
+                  )}
                   {item.status === "pending" && item.material_type !== "unknown" && (
-                    <button className="confirm-inbox-button" onClick={() => void confirmInboxItem(item)} disabled={running} type="button">
+                    <button className="confirm-inbox-button" onClick={() => void confirmInboxItem(editable)} disabled={running} type="button">
                       确认归档
                     </button>
                   )}
                 </div>
-              ))}
+              )})}
               {(!inbox?.pending_items || inbox.pending_items.length === 0) && (
                 <div className="muted">暂无待确认分类。</div>
               )}
@@ -479,6 +602,15 @@ function App() {
             <KeyValue label="路径" value={preview?.path || "-"} />
             <KeyValue label="大小" value={preview ? formatBytes(preview.size) : "-"} />
             <KeyValue label="来源" value="本地资料库" />
+          </section>
+          <section className="panel">
+            <h2>目标 JD</h2>
+            <select className="target-select" value={status?.current_target_jd?.path || ""} onChange={(event) => void selectTargetJD(event.target.value)}>
+              <option value="">未选择</option>
+              {jdOptions.map((item) => (
+                <option key={item.id} value={item.path}>{item.title}</option>
+              ))}
+            </select>
           </section>
           <section className="panel">
             <h2>Agent 建议</h2>
@@ -512,6 +644,21 @@ function App() {
                 <span key={key}>{key}: {value}</span>
               ))}
             </div>
+            {!!status?.stale_items?.length && (
+              <div className="stale-list">
+                {status.stale_items.map((item) => (
+                  <div className="risk" key={item.path}>过期：{item.path} · {item.reason}</div>
+                ))}
+              </div>
+            )}
+            {!!status?.latest_run_summary?.task_name && (
+              <div className="notice compact">
+                最近运行：{status?.latest_run_summary?.task_name}
+                {status?.latest_run_summary?.primary_path ? (
+                  <button className="inline-link" onClick={() => void openFile(status.latest_run_summary?.primary_path || "")} type="button">打开结果</button>
+                ) : null}
+              </div>
+            )}
             {error && <div className="risk">{error}</div>}
             {!error && diagnostics[0] && (
               <div className="risk">
@@ -551,10 +698,13 @@ function App() {
 	                }}
 	                placeholder="输入问题，Cmd+Enter 发送；也可以拖入文件..."
 	              />
-              <button className="send" onClick={sendMessage} disabled={running} title="Command + Enter 发送" aria-label="发送，Command + Enter" type="button">
+              <div className="send-wrap" onMouseEnter={() => setTooltipVisible(true)} onMouseLeave={() => setTooltipVisible(false)}>
+              <button className="send" onClick={sendMessage} disabled={running} aria-label="发送，Command + Enter" type="button">
                 {running ? <Loader2 className="spin" size={16} /> : <Send size={16} />}
                 {running ? "运行中" : "发送"}
               </button>
+              {tooltipVisible && <div className="send-tooltip">Command + Enter 发送</div>}
+              </div>
             </div>
           </section>
           <section className="run">
@@ -668,12 +818,30 @@ function PreviewPane({ preview, item, query }: { preview: Preview; item: Workspa
   );
 }
 
-function ReportPane({ report, query }: { report: ReportView; query: string }) {
+function ReportPane({ report, query, onOpen }: { report: ReportView; query: string; onOpen: (path: string) => void }) {
   return (
     <>
       <div className="doc-kicker">Agent Report · {report.createdAt}</div>
       <h1>输出报告</h1>
-      {report.logPath && <div className="doc-meta"><span className="meta-tag">{highlightText(report.logPath, query)}</span></div>}
+      {(report.logPath || report.generatedPaths?.length) && (
+        <div className="doc-meta">
+          {report.logPath && (
+            <button className="meta-tag meta-link" onClick={() => onOpen(report.logPath || "")} type="button">
+              {highlightText(report.logPath, query)}
+            </button>
+          )}
+          {(report.generatedPaths || []).slice(0, 4).map((path) => (
+            <button className="meta-tag meta-link result-tag" key={path} onClick={() => onOpen(path)} type="button">
+              {highlightText(path, query)}
+            </button>
+          ))}
+        </div>
+      )}
+      {(!report.generatedPaths || report.generatedPaths.length === 0) && report.logPath && (
+        <div className="notice">
+          本轮没有生成工作区报告文件。可以先打开运行日志查看失败原因或产物落盘情况。
+        </div>
+      )}
       <HighlightedMarkdown content={report.content} query={query} />
     </>
   );
@@ -683,6 +851,7 @@ function HighlightedMarkdown({ content, query }: { content: string; query: strin
   return (
     <div className="preview-markdown">
       <Markdown
+        remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <p>{highlightChildren(children, query)}</p>,
           li: ({ children }) => <li>{highlightChildren(children, query)}</li>,

@@ -1351,6 +1351,30 @@ func TestBuildInteractivePromptForMemoryIntentPrefersMemoryTools(t *testing.T) {
 	}
 }
 
+func TestBuildInteractivePromptRewritesLegacyWorkspacePointers(t *testing.T) {
+	classification := InputClassification{
+		Type:       string(CareerIntentAnalyze),
+		Confidence: 0.95,
+		Signals:    []string{"分析"},
+	}
+	meta := WorkspaceMetadata{
+		CurrentResume: "resume/current.md",
+		ActiveJD:      "jd/aliyun-wuying.md",
+		ActiveProject: "prepare/prepare-aliyun-agent/interview-brief.md",
+	}
+	prompt := BuildInteractivePromptWithAutoSaved("帮我分析一下", classification, nil, nil, meta, true, "career-workspace")
+	for _, expected := range []string{
+		"career-workspace/我的简历/current.md",
+		"career-workspace/岗位明细/aliyun-wuying.md",
+		"career-workspace/复习资料库/prepare-aliyun-agent/interview-brief.md",
+		"legacy paths such as prepare/",
+	} {
+		if !strings.Contains(prompt, expected) {
+			t.Fatalf("prompt missing %q:\n%s", expected, prompt)
+		}
+	}
+}
+
 func TestRunInteractiveInboxSignalScansInbox(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{

@@ -56,7 +56,7 @@ func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification In
 	}
 	analysisSection := ""
 	if analysisRequested && !isMemory {
-		analysisSection = "\n  <analysis_priority>\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read all listed stored_path and current workspace pointer files directly, preferably in one multi-tool step when more than one file is needed.\n- Do not call file_list or file_search to rediscover files that are already listed in this prompt.\n- Do not inspect record directories just to verify saving; the application layer saves generated analysis artifacts after the model response.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- Keep user-provided facts separate from suggestions.\n  </analysis_priority>"
+		analysisSection = "\n  <analysis_priority>\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read all listed stored_path and current workspace pointer files directly, preferably in one multi-tool step when more than one file is needed.\n- Do not call file_list or file_search to rediscover files that are already listed in this prompt.\n- Do not inspect record directories just to verify saving; the application layer saves generated analysis artifacts after the model response.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- If memory or prior conversation mentions legacy paths such as prepare/, resume/, jd/, my-interviews/, or outputs/, treat them as migrated aliases and prefer the current workspace pointers in this prompt.\n- Keep user-provided facts separate from suggestions.\n  </analysis_priority>"
 	}
 	deliverySection := "\n  <delivery_policy>\n- If the user asks to save, write, generate, or place a document in the workspace, only say it was saved after the relevant write tool succeeds.\n- If a write tool fails or is unavailable, say the file was not written and include the full recoverable content or exact next recovery step.\n- Do not describe a failed write as a permissions problem unless the tool error explicitly says permission was denied.\n  </delivery_policy>"
 	groundingSection := "\n  <implementation_grounding>\n- Treat implementation details, repository paths, field names, storage engines, protocols, metrics, CI jobs, and evaluation claims as facts only after reading evidence that supports them.\n- If an implementation detail is useful but not evidenced, label it as a suggested design or a point needing user confirmation.\n  </implementation_grounding>"
@@ -82,7 +82,7 @@ func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification In
 }
 
 func promptWorkspacePath(workspaceRoot string, storedPath string) string {
-	storedPath = strings.TrimSpace(storedPath)
+	storedPath = rewriteVisibleRel(strings.TrimSpace(storedPath))
 	if storedPath == "" {
 		return ""
 	}

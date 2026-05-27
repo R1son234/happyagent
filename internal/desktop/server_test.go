@@ -13,7 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"happyagent/internal/app"
 	"happyagent/internal/career"
+	"happyagent/internal/config"
+	"happyagent/internal/store"
 )
 
 func TestIsWithin(t *testing.T) {
@@ -323,6 +326,83 @@ func TestNormalizeConfigJSONRejectsInvalidJSON(t *testing.T) {
 	}
 }
 
+func TestWorkspacePathAllowsAbsoluteLogFile(t *testing.T) {
+	root := t.TempDir()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	logPath := filepath.Join(cwd, "logs", "test-preview-log.md")
+	t.Cleanup(func() { _ = os.Remove(logPath) })
+	mustWriteFile(t, logPath, "# Test Log\n")
+	server := &Server{workspaceRoot: root}
+	abs, err := server.workspacePath(logPath)
+	if err != nil {
+		t.Fatalf("workspacePath() error = %v", err)
+	}
+	if abs != logPath {
+		t.Fatalf("workspacePath() = %q, want %q", abs, logPath)
+	}
+}
+
+func TestHandleChatRunReturnsGeneratedPathsAndLogPath(t *testing.T) {
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	root := t.TempDir()
+	ws, err := career.OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if _, err := ws.AddMaterial(career.WorkspaceTypeJD, "# 示例 JD\n\n岗位职责：负责示例 Agent 系统。", now); err != nil {
+		t.Fatalf("AddMaterial(jd) error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/chat/runs", bytes.NewReader([]byte(`{"session_id":"session-test","profile":"career-copilot","input":"帮我生成面试准备材料"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	server := &Server{
+		cfg:           config.Default(),
+		workspaceRoot: root,
+		careerService: &career.CopilotService{
+			WorkspaceRoot: root,
+			App: fakeDesktopCareerApplication{
+				sessionID: "session-test",
+				output:    "# 面试准备材料\n\n## 复习计划\n- 先看 JD 关键词。\n",
+			},
+			Now: func() time.Time { return now },
+		},
+	}
+	server.cfg.Engine.RunTimeoutSeconds = 60
+	server.handleChatRun(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		SessionID      string   `json:"session_id"`
+		GeneratedPaths []string `json:"generated_paths"`
+		PrimaryPath    string   `json:"primary_path"`
+		LogPath        string   `json:"log_path"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("parse response: %v", err)
+	}
+	if resp.SessionID != "session-test" {
+		t.Fatalf("unexpected session id: %+v", resp)
+	}
+	if resp.PrimaryPath == "" || len(resp.GeneratedPaths) == 0 {
+		t.Fatalf("expected generated paths, got %+v", resp)
+	}
+	if resp.LogPath == "" {
+		t.Fatalf("expected log path, got %+v", resp)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(resp.PrimaryPath))); err != nil {
+		t.Fatalf("expected generated primary file: %v", err)
+	}
+	if _, err := os.Stat(resp.LogPath); err != nil {
+		t.Fatalf("expected chat log file: %v", err)
+	}
+}
+
 func mustWriteFile(t *testing.T, path string, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -356,4 +436,34 @@ func (r fakeDesktopStructuredTaskRunner) RunStructuredTask(ctx context.Context, 
 		SessionID:   "fake-session",
 		GeneratedAt: time.Date(2026, 5, 24, 14, 30, 0, 0, time.UTC),
 	}, nil
+}
+
+type fakeDesktopCareerApplication struct {
+	sessionID string
+	output    string
+}
+
+func (f fakeDesktopCareerApplication) CreateSession(profileName string) (store.SessionRecord, error) {
+	_ = profileName
+	return store.SessionRecord{ID: f.sessionID}, nil
+}
+
+func (f fakeDesktopCareerApplication) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
+	_ = ctx
+	return store.RunRecord{
+		ID:        "run-test",
+		SessionID: firstNonEmptyTest(req.SessionID, f.sessionID, "session-test"),
+		Profile:   req.ProfileName,
+		Input:     req.Input,
+		Output:    f.output,
+	}, nil
+}
+
+func firstNonEmptyTest(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

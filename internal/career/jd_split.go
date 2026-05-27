@@ -2,6 +2,7 @@ package career
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -10,6 +11,8 @@ type JDSplitSection struct {
 	Title   string
 	Content string
 }
+
+var jdSectionPrefixPattern = regexp.MustCompile(`^\s*[0-9]+[.、)]`)
 
 func (w *Workspace) EnsureSplitJDMaterials(now time.Time) ([]WorkspaceItem, error) {
 	_, index, err := w.Status()
@@ -81,7 +84,7 @@ func SplitJDSections(content string) []JDSplitSection {
 			end = candidates[i+1].start
 		}
 		body := strings.TrimSpace(strings.Join(lines[c.start:end], "\n"))
-		if body == "" || !containsJDStructure(body) {
+		if body == "" || !containsJDStructure(body) || !isSplitJDBodyComplete(body) {
 			continue
 		}
 		if !strings.HasPrefix(strings.TrimSpace(body), "#") {
@@ -97,7 +100,7 @@ func SplitJDSections(content string) []JDSplitSection {
 
 func looksLikeJDSectionTitle(lines []string, idx int) bool {
 	line := strings.TrimSpace(strings.Trim(lines[idx], "# 　\t"))
-	if line == "" || containsJDMarker(line) {
+	if line == "" || containsJDMarker(line) || looksLikeJDFragmentTitle(line) {
 		return false
 	}
 	lookaheadEnd := idx + 8
@@ -113,19 +116,51 @@ func looksLikeJDSectionTitle(lines []string, idx int) bool {
 }
 
 func containsJDStructure(content string) bool {
+	return countJDMarkers(content) >= 1
+}
+
+func isSplitJDBodyComplete(content string) bool {
+	return countJDMarkers(content) >= 2
+}
+
+func countJDMarkers(content string) int {
 	count := 0
 	for _, line := range strings.Split(content, "\n") {
 		if containsJDMarker(line) {
 			count++
 		}
 	}
-	return count >= 1
+	return count
 }
 
 func containsJDMarker(line string) bool {
 	markers := []string{"职位描述", "岗位描述", "岗位职责", "工作职责", "职位要求", "岗位要求", "任职要求", "任职资格", "基本要求", "加分项"}
 	for _, marker := range markers {
 		if strings.Contains(line, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeJDFragmentTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return true
+	}
+	if jdSectionPrefixPattern.MatchString(title) {
+		return true
+	}
+	lower := strings.ToLower(title)
+	if lower == "ai" || lower == "jd" || lower == "job description" || lower == "job-description" {
+		return true
+	}
+	rejectSignals := []string{
+		"负责", "熟悉", "关注", "参与", "推动", "完成需求", "优秀的", "具备",
+		"责任心", "沟通能力", "自驱力", "加分项", "任职要求", "岗位职责", "职位要求",
+	}
+	for _, signal := range rejectSignals {
+		if strings.Contains(title, signal) {
 			return true
 		}
 	}

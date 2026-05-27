@@ -161,3 +161,30 @@ func TestFileReadToolRejectsInvalidLineRange(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestFileReadToolReadsLegacyWorkspaceAliasPath(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "复习资料库", "prepare-aliyun-agent", "interview-brief.md")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("# Interview Brief\n"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+
+	tool, err := NewFileReadTool(root)
+	if err != nil {
+		t.Fatalf("NewFileReadTool() error = %v", err)
+	}
+
+	result, err := tool.Execute(context.Background(), Call{
+		Name:      "file_read",
+		Arguments: []byte(`{"path":"prepare/prepare-aliyun-agent/interview-brief.md"}`),
+	})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(result.Output, "# Interview Brief") {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+}

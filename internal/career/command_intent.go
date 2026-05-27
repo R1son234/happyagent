@@ -9,7 +9,20 @@ import (
 	"time"
 )
 
+type NaturalLanguageResult struct {
+	Output         string
+	GeneratedPaths []string
+	PrimaryPath    string
+	OutputPaths    UserOutputPaths
+	RunSummaryPath string
+}
+
 func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
+	_, err := executeNaturalLanguageInput(deps, workspace, sessionID, input)
+	return err
+}
+
+func executeNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) (NaturalLanguageResult, error) {
 	intent := ClassifyIntent(input)
 
 	// Memory intent: skip inbox scan and archive, route directly to model with memory-focused prompt.
@@ -21,41 +34,41 @@ func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, session
 
 	guide, err := workspace.LoadGuide()
 	if err != nil {
-		return err
+		return NaturalLanguageResult{}, err
 	}
 	classification := ClassifyInputWithGuide(input, guide)
 	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(context.Background(), deps.Stdout, workspace, input)
 	if err != nil {
-		return err
+		return NaturalLanguageResult{}, err
 	}
 	if shouldScanInbox(intent) {
 		paths, inboxErr := DiscoverInboxFiles(workspace)
 		if inboxErr != nil {
-			return inboxErr
+			return NaturalLanguageResult{}, inboxErr
 		}
 		if len(paths) > 0 {
 			ingestErrors = append(ingestErrors, fmt.Sprintf("发现 %d 个 inbox 文件；当前版本不会自动归档，后续需要通过分类确认流程整理。", len(paths)))
 			if intent.Intent == CareerIntentIngest || intent.Intent == CareerIntentAnalyze {
-				return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
+				return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
 			}
 		}
 	}
 	if classification.ShouldSave && len(autoArchived) == 0 {
 		item, err := saveMaterial(workspace, classification.Type, input)
 		if err != nil {
-			return err
+			return NaturalLanguageResult{}, err
 		}
 		autoArchived = append(autoArchived, item)
 		fmt.Fprintf(deps.Stdout, "assistant> 已识别并归档为 %s：%s\n", displayWorkspaceType(item.Type), item.Path)
 		if intent.Intent == CareerIntentChat || intent.Intent == CareerIntentIngest {
-			return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
+			return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
 		}
 	}
 	switch intent.Intent {
 	case CareerIntentStatus:
-		return printWorkspaceStatus(deps.Stdout, workspace)
+		return NaturalLanguageResult{}, printWorkspaceStatus(deps.Stdout, workspace)
 	case CareerIntentIngest:
-		return printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
+		return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
 	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
 		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
 	default:
@@ -63,30 +76,30 @@ func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, session
 	}
 }
 
-func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) error {
+func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) (NaturalLanguageResult, error) {
 	meta, err := workspace.ReadMetadata()
 	if err != nil {
-		return err
+		return NaturalLanguageResult{}, err
 	}
 	if message := readinessMessage(workspace, meta, intent.Intent); message != "" {
 		fmt.Fprintln(deps.Stdout, message)
-		return nil
+		return NaturalLanguageResult{Output: strings.TrimPrefix(message, "assistant> ")}, nil
 	}
 	guide, err := workspace.LoadGuide()
 	if err != nil {
-		return err
+		return NaturalLanguageResult{}, err
 	}
 	record, err := runCareerTurn(deps, sessionID, BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root, guide), classification)
 	if err != nil {
 		if record.ID != "" {
 			fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
 		}
-		return fmt.Errorf("run career turn: %w", err)
+		return NaturalLanguageResult{}, fmt.Errorf("run career turn: %w", err)
 	}
 	fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
 	fmt.Fprintf(deps.Stdout, "assistant> %s\n", record.Output)
 	if !shouldGenerateOutput(intent.Intent) {
-		return nil
+		return NaturalLanguageResult{Output: record.Output}, nil
 	}
 	now := time.Now()
 	jsonContent := []byte(nil)
@@ -107,13 +120,56 @@ func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionI
 	outputKind, outputTitle := outputSpec(intent.Intent)
 	paths, err := workspace.WriteUserOutput(outputKind, outputTitle, record.Output, jsonContent, now)
 	if err != nil {
-		return err
+		return NaturalLanguageResult{}, err
 	}
-	if _, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, now); err != nil {
-		return err
+	reviewLibrary, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, now)
+	if err != nil {
+		return NaturalLanguageResult{}, err
 	}
 	printCompletionSummary(deps.Stdout, outputTitle, collectedInputPaths(workspace.Root, meta, autoArchived), paths)
-	return nil
+	generatedPaths := appendGeneratedPaths(paths, reviewLibrary.Paths)
+	runSummaryPath, _ := workspace.WriteRunSummary(RunSummaryRecord{
+		TaskName:    string(intent.Intent),
+		Status:      RunSummaryStatusSuccess,
+		CreatedAt:   now,
+		InputPaths:  collectedInputPaths(workspace.Root, meta, autoArchived),
+		Generated:   generatedPaths,
+		PrimaryPath: firstNonEmpty(paths.LatestMarkdown, firstString(reviewLibrary.Paths)),
+		NextActions: []string{"检查输出报告和新增题库", "如已锁定岗位，可生成项目专项或面试作战包"},
+	})
+	generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
+	return NaturalLanguageResult{
+		Output:         record.Output,
+		GeneratedPaths: generatedPaths,
+		PrimaryPath:    firstNonEmpty(runSummaryPath, paths.LatestMarkdown, firstString(reviewLibrary.Paths)),
+		OutputPaths:    paths,
+		RunSummaryPath: runSummaryPath,
+	}, nil
+}
+
+func appendGeneratedPaths(paths UserOutputPaths, extra []string) []string {
+	result := make([]string, 0, 4+len(extra))
+	for _, candidate := range []string{paths.LatestMarkdown, paths.TimestampedMarkdown, paths.LatestJSON, paths.TimestampedJSON} {
+		if strings.TrimSpace(candidate) != "" {
+			result = append(result, filepath.ToSlash(candidate))
+		}
+	}
+	for _, candidate := range extra {
+		candidate = filepath.ToSlash(strings.TrimSpace(candidate))
+		if candidate != "" {
+			result = append(result, candidate)
+		}
+	}
+	return uniqueStrings(result)
+}
+
+func firstString(values []string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func detectWorkspaceTypeHint(input string) string {

@@ -110,7 +110,7 @@ func (w *Workspace) AddMaterialFromFile(input WorkspaceFileInput) (WorkspaceItem
 	if err := w.upsertIndexItem(item); err != nil {
 		return WorkspaceItem{}, err
 	}
-	if err := w.updateActivePointers(itemType, sourceRel, now); err != nil {
+	if err := w.updateActivePointers(item, sourceRel, sourceContent, now); err != nil {
 		return WorkspaceItem{}, err
 	}
 	return item, nil
@@ -232,20 +232,25 @@ func (w *Workspace) addMaterial(itemType string, content string, now time.Time) 
 	if err := w.upsertIndexItem(item); err != nil {
 		return WorkspaceItem{}, err
 	}
-	if err := w.updateActivePointers(itemType, sourceRel, now); err != nil {
+	if err := w.updateActivePointers(item, sourceRel, content, now); err != nil {
 		return WorkspaceItem{}, err
 	}
 	return item, nil
 }
 
-func (w *Workspace) updateActivePointers(itemType string, sourceRel string, now time.Time) error {
+func (w *Workspace) updateActivePointers(item WorkspaceItem, sourceRel string, content string, now time.Time) error {
 	meta, err := w.ReadMetadata()
 	if err != nil {
 		return err
 	}
+	itemType := strings.ToLower(strings.TrimSpace(item.Type))
 	switch itemType {
 	case WorkspaceTypeJD:
-		meta.ActiveJD = filepath.ToSlash(sourceRel)
+		currentPromotable := w.isPromotableActiveJD(meta.ActiveJD)
+		newPromotable := shouldPromoteActiveJD(item.Title, content)
+		if strings.TrimSpace(meta.ActiveJD) == "" || (!currentPromotable && newPromotable) {
+			meta.ActiveJD = filepath.ToSlash(sourceRel)
+		}
 	case WorkspaceTypeResume:
 		meta.CurrentResume = filepath.ToSlash(sourceRel)
 	case WorkspaceTypePrepare, WorkspaceTypeProject:
@@ -253,6 +258,19 @@ func (w *Workspace) updateActivePointers(itemType string, sourceRel string, now 
 	}
 	meta.UpdatedAt = now
 	return w.writeJSON(w.metadataPath(), meta)
+}
+
+func (w *Workspace) isPromotableActiveJD(sourceRel string) bool {
+	sourceRel = filepath.ToSlash(strings.TrimSpace(sourceRel))
+	if sourceRel == "" {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(w.Root, filepath.FromSlash(sourceRel)))
+	if err != nil {
+		return false
+	}
+	content := strings.TrimSpace(string(data))
+	return shouldPromoteActiveJD(inferJDTitle(content), content)
 }
 
 func activePointerName(itemType string) string {
@@ -365,6 +383,21 @@ func inferJDTitle(content string) string {
 		return line
 	}
 	return "job-description"
+}
+
+func shouldPromoteActiveJD(title string, content string) bool {
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" || content == "" {
+		return false
+	}
+	if looksLikeJDFragmentTitle(title) {
+		return false
+	}
+	if len(SplitJDSections(content)) > 1 {
+		return false
+	}
+	return countJDMarkers(content) >= 2
 }
 
 func inferMaterialTags(itemType string, content string) []string {

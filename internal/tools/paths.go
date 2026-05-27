@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type RootedPathResolver struct {
@@ -82,4 +83,30 @@ func (r *RootedPathResolver) resolveSymlinksWithinRoot(target string) (string, e
 		unresolved = append(unresolved, filepath.Base(current))
 		current = filepath.Dir(current)
 	}
+}
+
+func legacyWorkspacePathAliases(path string) []string {
+	trimmed := filepath.ToSlash(strings.TrimSpace(path))
+	if trimmed == "" || strings.HasPrefix(trimmed, "/") {
+		return nil
+	}
+	replacements := []struct {
+		from string
+		to   string
+	}{
+		{"prepare/", "复习资料库/"},
+		{"resume/", "我的简历/"},
+		{"jd/", "岗位明细/"},
+		{"experiences/", "面经汇总/"},
+		{"project/", "项目专项/"},
+		{"my-interviews/", "我的面试/"},
+		{"outputs/", "输出报告/"},
+	}
+	var aliases []string
+	for _, replacement := range replacements {
+		if strings.HasPrefix(trimmed, replacement.from) {
+			aliases = append(aliases, replacement.to+strings.TrimPrefix(trimmed, replacement.from))
+		}
+	}
+	return aliases
 }

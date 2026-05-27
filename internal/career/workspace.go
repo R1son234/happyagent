@@ -176,6 +176,9 @@ func OpenWorkspace(root string, now time.Time) (*Workspace, error) {
 	if err := ws.EnsureReviewLibrarySkeleton(now); err != nil {
 		return nil, err
 	}
+	if err := ws.normalizeActiveJDPointer(now); err != nil {
+		return nil, err
+	}
 	return ws, nil
 }
 
@@ -189,6 +192,53 @@ func (w *Workspace) Status() (WorkspaceMetadata, WorkspaceIndex, error) {
 		return WorkspaceMetadata{}, WorkspaceIndex{}, err
 	}
 	return meta, index, nil
+}
+
+func (w *Workspace) SetActiveJD(path string, now time.Time) error {
+	meta, err := w.ReadMetadata()
+	if err != nil {
+		return err
+	}
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	if path != "" {
+		if err := validateWorkspaceRelPath(path); err != nil {
+			return err
+		}
+		if !strings.HasPrefix(path, WorkspaceDirJD+"/") {
+			item, found, findErr := w.FindIndexItemByPath(path)
+			if findErr != nil {
+				return findErr
+			}
+			if !found || item.Type != WorkspaceTypeJD {
+				return fmt.Errorf("active jd path %q must reference a JD item", path)
+			}
+			sourceRel, ok := w.sourceRelForItem(item)
+			if !ok {
+				return fmt.Errorf("active jd item %q is missing source metadata", item.ID)
+			}
+			path = filepath.ToSlash(sourceRel)
+		}
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	meta.ActiveJD = path
+	meta.UpdatedAt = now
+	return w.writeJSON(w.metadataPath(), meta)
+}
+
+func (w *Workspace) FindIndexItemByPath(path string) (WorkspaceItem, bool, error) {
+	index, err := w.ReadIndex()
+	if err != nil {
+		return WorkspaceItem{}, false, err
+	}
+	path = filepath.ToSlash(strings.TrimSpace(path))
+	for _, item := range index.Items {
+		if filepath.ToSlash(item.Path) == path {
+			return item, true, nil
+		}
+	}
+	return WorkspaceItem{}, false, nil
 }
 
 func (w *Workspace) ReadMetadata() (WorkspaceMetadata, error) {
@@ -217,6 +267,53 @@ func (w *Workspace) indexPath() string {
 
 func (w *Workspace) guidePath() string {
 	return filepath.Join(w.Root, WorkspaceInternalDir, WorkspaceGuideFileName)
+}
+
+func (w *Workspace) normalizeActiveJDPointer(now time.Time) error {
+	meta, err := w.ReadMetadata()
+	if err != nil {
+		return err
+	}
+	if w.isPromotableActiveJD(meta.ActiveJD) {
+		return nil
+	}
+	index, err := w.ReadIndex()
+	if err != nil {
+		return err
+	}
+	for _, item := range index.Items {
+		if item.Type != WorkspaceTypeJD {
+			continue
+		}
+		content := readExcerpt(w, item.Path, 0)
+		if !shouldPromoteActiveJD(item.Title, content) {
+			continue
+		}
+		sourceRel, ok := w.sourceRelForItem(item)
+		if !ok {
+			continue
+		}
+		meta.ActiveJD = filepath.ToSlash(sourceRel)
+		meta.UpdatedAt = now
+		return w.writeJSON(w.metadataPath(), meta)
+	}
+	return nil
+}
+
+func (w *Workspace) sourceRelForItem(item WorkspaceItem) (string, bool) {
+	if item.ID == "" {
+		return "", false
+	}
+	metaPath := filepath.Join(w.Root, internalItemRelDir(item.ID), "metadata.json")
+	var meta WorkspaceItemMetadata
+	if err := w.readJSON(metaPath, &meta); err != nil {
+		return "", false
+	}
+	sourceRel := filepath.ToSlash(strings.TrimSpace(meta.Source))
+	if sourceRel == "" {
+		return "", false
+	}
+	return sourceRel, true
 }
 
 func (w *Workspace) writeJSON(path string, value any) error {

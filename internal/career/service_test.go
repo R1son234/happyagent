@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"happyagent/internal/app"
+	"happyagent/internal/config"
+	"happyagent/internal/store"
 )
 
 func TestInboxStateReadWriteRoundTrip(t *testing.T) {
@@ -289,6 +293,63 @@ func TestCopilotServiceConfirmMaterialClassificationWritesPendingItem(t *testing
 	}
 }
 
+func TestCopilotServiceRunChatTurnWritesWorkspaceOutput(t *testing.T) {
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, "# 示例 JD\n\n岗位职责：负责示例 Agent 系统。", now); err != nil {
+		t.Fatalf("AddMaterial(jd) error = %v", err)
+	}
+	service := CopilotService{
+		WorkspaceRoot: root,
+		App: fakeCareerApplication{
+			sessionID: "session-test",
+			output:    "# 面试准备材料\n\n## 复习计划\n- 先看 JD 关键词。\n",
+		},
+		Now: func() time.Time { return now },
+	}
+	result, err := service.RunChatTurn(context.Background(), ChatTurnRequest{
+		SessionID: "session-test",
+		Input:     "帮我生成面试准备材料",
+	})
+	if err != nil {
+		t.Fatalf("RunChatTurn() error = %v", err)
+	}
+	if result.Output == "" {
+		t.Fatalf("expected chat output, got empty result: %+v", result)
+	}
+	if result.PrimaryPath != filepath.ToSlash(filepath.Join(WorkspaceDirOutputs, "latest-interview-brief.md")) {
+		t.Fatalf("unexpected primary path: %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(result.PrimaryPath))); err != nil {
+		t.Fatalf("expected generated primary file, stat err=%v", err)
+	}
+}
+
+type fakeCareerApplication struct {
+	sessionID string
+	output    string
+}
+
+func (f fakeCareerApplication) CreateSession(profileName string) (store.SessionRecord, error) {
+	_ = profileName
+	return store.SessionRecord{ID: firstNonEmpty(f.sessionID, "fake-session")}, nil
+}
+
+func (f fakeCareerApplication) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
+	_ = ctx
+	return store.RunRecord{
+		ID:        "run-test",
+		SessionID: firstNonEmpty(req.SessionID, f.sessionID, "fake-session"),
+		Profile:   req.ProfileName,
+		Input:     req.Input,
+		Output:    f.output,
+	}, nil
+}
+
 func TestCopilotServiceConfirmMaterialClassificationRejectsUnsupportedType(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	ws, err := OpenWorkspace(root, time.Now())
@@ -370,7 +431,7 @@ func TestCopilotServiceGenerateProjectPackWritesGeneratedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMaterial() error = %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"title":"示例项目专项","markdown":"# 示例项目专项\n\n## 一句话介绍\n基于来源资料整理。\n\n## 待补证据\n- 指标待补。","source_refs":[{"path":"` + resume.Path + `","version":"sha256:test","excerpt":"示例项目","evidence_spans":["示例项目"]}],"risk_flags":[],"missing_info":["指标"]}`}
+	runner := fakeStructuredTaskRunner{output: `{"title":"示例项目专项","primary_document":"项目专项/示例项目-interview-qa.md","documents":[{"path":"项目专项/示例项目-interview-qa.md","title":"示例项目专项","markdown":"# 示例项目专项\n\n## 一句话介绍\n基于来源资料整理。\n\n## 待补证据\n- 指标待补。"}],"source_refs":[{"path":"` + resume.Path + `","version":"sha256:test","excerpt":"示例项目","evidence_spans":["示例项目"]}],"risk_flags":[],"missing_info":["指标"]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
 	result, err := service.GenerateProjectPack(context.Background(), GenerateProjectPackRequest{ProjectName: "示例项目", SourcePaths: []string{resume.Path}})
 	if err != nil {
@@ -484,4 +545,54 @@ func (r fakeStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 		SessionID:   "fake-session",
 		GeneratedAt: time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC),
 	}, nil
+}
+
+type captureStructuredTaskApp struct {
+	sessionID string
+	reqs      []app.AppendTurnRequest
+	output    string
+}
+
+func (c *captureStructuredTaskApp) CreateSession(profileName string) (store.SessionRecord, error) {
+	_ = profileName
+	return store.SessionRecord{ID: firstNonEmpty(c.sessionID, "structured-session")}, nil
+}
+
+func (c *captureStructuredTaskApp) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
+	_ = ctx
+	c.reqs = append(c.reqs, req)
+	return store.RunRecord{
+		ID:        "run-structured",
+		SessionID: firstNonEmpty(req.SessionID, c.sessionID, "structured-session"),
+		Output:    firstNonEmpty(c.output, `{"files":[]}`),
+	}, nil
+}
+
+func TestStructuredTaskRunnerUsesLeanPromptAndNoTools(t *testing.T) {
+	app := &captureStructuredTaskApp{output: `{"files":[{"source_path":"inbox/test.md","source_hash":"sha256:test","material_type":"jd","confidence":"high","reason":"x","source_excerpt":"x","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
+	runner := &appStructuredTaskRunner{
+		App:    app,
+		Config: config.Default(),
+		Now:    func() time.Time { return time.Date(2026, 5, 26, 11, 0, 0, 0, time.UTC) },
+	}
+	_, err := runner.RunStructuredTask(context.Background(), StructuredTaskRequest{
+		TaskName:      "classify_inbox",
+		PromptVersion: PromptVersionFileClassification,
+		Input:         `{"files":[]}`,
+	})
+	if err != nil {
+		t.Fatalf("RunStructuredTask() error = %v", err)
+	}
+	if len(app.reqs) != 1 {
+		t.Fatalf("expected one append request, got %d", len(app.reqs))
+	}
+	if app.reqs[0].ProfileName != "" {
+		t.Fatalf("expected blank profile for structured task, got %q", app.reqs[0].ProfileName)
+	}
+	if len(app.reqs[0].ApprovedTools) != 0 {
+		t.Fatalf("expected no approved tools, got %v", app.reqs[0].ApprovedTools)
+	}
+	if !strings.Contains(app.reqs[0].SystemPrompt, "Never call tools.") {
+		t.Fatalf("expected lean structured system prompt, got %q", app.reqs[0].SystemPrompt)
+	}
 }

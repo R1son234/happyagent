@@ -57,6 +57,18 @@ func (t *FileReadTool) Execute(ctx context.Context, call Call) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+		for _, alias := range legacyWorkspacePathAliases(input.Path) {
+			aliasPath, aliasErr := t.resolver.Resolve(alias)
+			if aliasErr != nil {
+				continue
+			}
+			if _, aliasStatErr := os.Stat(aliasPath); aliasStatErr == nil {
+				path = aliasPath
+				break
+			}
+		}
+	}
 
 	output, err := readFilePreview(path, normalizeFileReadLimit(input.MaxBytes), input.StartLine, input.EndLine)
 	if err != nil {

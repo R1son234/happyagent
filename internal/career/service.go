@@ -1,8 +1,10 @@
 package career
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,9 +86,13 @@ type ExtractInterviewReviewRequest struct {
 }
 
 type GeneratedDocumentResult struct {
-	Path     string                  `json:"path"`
-	Record   GeneratedArtifactRecord `json:"record"`
-	Warnings []string                `json:"warnings"`
+	Path           string                    `json:"path,omitempty"`
+	PrimaryPath    string                    `json:"primary_path,omitempty"`
+	GeneratedPaths []string                  `json:"generated_paths,omitempty"`
+	Record         GeneratedArtifactRecord   `json:"record,omitempty"`
+	Records        []GeneratedArtifactRecord `json:"records,omitempty"`
+	RunSummaryPath string                    `json:"run_summary_path,omitempty"`
+	Warnings       []string                  `json:"warnings"`
 }
 
 type ListDiagnosticsRequest struct {
@@ -95,6 +101,32 @@ type ListDiagnosticsRequest struct {
 
 type ListDiagnosticsResult struct {
 	Items []DiagnosticRecord `json:"items"`
+}
+
+type ChatTurnRequest struct {
+	SessionID string `json:"session_id"`
+	Input     string `json:"input"`
+}
+
+type ChatTurnResult struct {
+	SessionID      string   `json:"session_id"`
+	Output         string   `json:"output"`
+	GeneratedPaths []string `json:"generated_paths"`
+	PrimaryPath    string   `json:"primary_path"`
+	RunSummaryPath string   `json:"run_summary_path,omitempty"`
+}
+
+type CleanupGeneratedArtifactsResult struct {
+	RemovedPaths   []string `json:"removed_paths"`
+	RunSummaryPath string   `json:"run_summary_path,omitempty"`
+	LegacyFindings []string `json:"legacy_findings,omitempty"`
+}
+
+type RebuildGeneratedArtifactsResult struct {
+	GeneratedPaths []string `json:"generated_paths"`
+	PrimaryPath    string   `json:"primary_path,omitempty"`
+	RunSummaryPath string   `json:"run_summary_path,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
 func (s *CopilotService) ListInbox(ctx context.Context) (InboxView, error) {
@@ -388,16 +420,37 @@ func (s *CopilotService) SplitJobDescriptions(ctx context.Context, req SplitJDRe
 }
 
 func (s *CopilotService) GenerateReviewLibrary(ctx context.Context, req GenerateReviewLibraryRequest) (GeneratedDocumentResult, error) {
-	return s.generateMarkdownDocument(ctx, generateMarkdownSpec{
-		TaskName:      "generate_review_library",
-		PromptVersion: PromptVersionReviewLibrary,
-		Kind:          "question_bank",
-		OutputDir:     filepath.Join(WorkspaceDirPrepare, "LLM题库"),
-		FallbackName:  "复习资料库",
-		SourcePaths:   req.SourcePaths,
-		DefaultTypes:  []string{WorkspaceTypeExperiences, WorkspaceTypeJD, WorkspaceTypeResume, WorkspaceTypeProject, WorkspaceTypePrepare},
-		Instructions:  "生成可复习的题库与增量复习资料。必须包含考点、标准答案、结合简历回答、追问问答、风险点和来源证据。",
+	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
+	if err != nil {
+		return GeneratedDocumentResult{}, err
+	}
+	result, err := ws.GenerateReviewLibraryWithGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{
+		App:       s.App,
+		Config:    s.Config,
+		SessionID: "",
 	})
+	if err != nil {
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: "generate_review_library", PromptVersion: PromptVersionReviewLibrary, SourcePaths: req.SourcePaths, Error: err.Error()})
+		return GeneratedDocumentResult{}, err
+	}
+	runSummaryPath, summaryErr := s.writeRunSummary(ws, RunSummaryRecord{
+		TaskName:    "刷新复习资料库",
+		Status:      RunSummaryStatusSuccess,
+		CreatedAt:   s.now(),
+		InputPaths:  req.SourcePaths,
+		Generated:   result.Paths,
+		PrimaryPath: firstString(result.Paths),
+		NextActions: []string{"检查新增题库主题是否符合预期", "如有目标岗位，可继续生成项目专项和面试作战包"},
+	})
+	if summaryErr == nil {
+		result.Paths = uniqueStrings(append(result.Paths, runSummaryPath))
+	}
+	return GeneratedDocumentResult{
+		Path:           firstString(result.Paths),
+		PrimaryPath:    firstNonEmpty(runSummaryPath, firstString(result.Paths)),
+		GeneratedPaths: uniqueStrings(result.Paths),
+		RunSummaryPath: runSummaryPath,
+	}, nil
 }
 
 func (s *CopilotService) GenerateProjectPack(ctx context.Context, req GenerateProjectPackRequest) (GeneratedDocumentResult, error) {
@@ -405,15 +458,15 @@ func (s *CopilotService) GenerateProjectPack(ctx context.Context, req GeneratePr
 	if name == "" {
 		name = "项目专项"
 	}
-	return s.generateMarkdownDocument(ctx, generateMarkdownSpec{
+	return s.generateDocumentBundle(ctx, generateBundleSpec{
 		TaskName:      "generate_project_pack",
 		PromptVersion: PromptVersionProjectPack,
 		Kind:          "project_pack",
 		OutputDir:     WorkspaceDirProjectPack,
-		FallbackName:  name + "-interview-qa",
 		SourcePaths:   req.SourcePaths,
-		DefaultTypes:  []string{WorkspaceTypeResume, WorkspaceTypePrepare, WorkspaceTypeProject},
-		Instructions:  "生成项目专项面试材料。必须包含一句话介绍、一分钟版本、三分钟版本、架构链路、关键模块、取舍、失败模式、数据证据、迁移讲法、高频追问；缺少证据必须写待补证据。",
+		DefaultTypes:  []string{WorkspaceTypeResume, WorkspaceTypeProject, WorkspaceTypePrepare},
+		Instructions:  "识别当前资料中的项目，并为每个项目生成一个单独文件。每个文件都必须包含一句话介绍、一分钟版本、三分钟版本、架构链路、关键模块、关键取舍、失败模式、数据与证据边界、迁移讲法、高频追问和回答。documents[].path 必须放在 项目专项/ 下，并包含项目名。",
+		FallbackTitle: name,
 	})
 }
 
@@ -422,16 +475,16 @@ func (s *CopilotService) GenerateBattlePack(ctx context.Context, req GenerateBat
 	if strings.TrimSpace(req.JDPath) != "" {
 		sourcePaths = append(sourcePaths, req.JDPath)
 	}
-	return s.generateMarkdownDocument(ctx, generateMarkdownSpec{
+	return s.generateDocumentBundle(ctx, generateBundleSpec{
 		TaskName:      "generate_battle_pack",
 		PromptVersion: PromptVersionBattlePack,
 		Kind:          "battle_pack",
 		OutputDir:     WorkspaceDirMyInterviews,
-		FallbackName:  "面试作战包",
 		SourcePaths:   sourcePaths,
 		DefaultTypes:  []string{WorkspaceTypeResume, WorkspaceTypeJD, WorkspaceTypeExperiences, WorkspaceTypeProject},
 		RequireTypes:  []string{WorkspaceTypeResume, WorkspaceTypeJD},
-		Instructions:  "生成岗位面试作战包。必须包含 JD 画像、候选人主线、证据矩阵、风险清单、临阵复习顺序、项目映射、反问问题和来源证据。",
+		Instructions:  "为明确目标岗位生成完整作战包。必须输出 documents[]，包含 00-JD结构化画像.md、01-临阵抗拷打主文档.md、02-复习计划.md、03-面经来源与JD关联补充.md、以及 <公司岗位>岗作战页.md。documents[].path 必须放在 我的面试/<公司岗位>/ 下。",
+		FallbackTitle: "面试作战包",
 	})
 }
 
@@ -483,6 +536,45 @@ func (s *CopilotService) ListDiagnostics(ctx context.Context, req ListDiagnostic
 		records = append(records, record)
 	}
 	return ListDiagnosticsResult{Items: records}, nil
+}
+
+func (s *CopilotService) RunChatTurn(ctx context.Context, req ChatTurnRequest) (ChatTurnResult, error) {
+	_ = ctx
+	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
+	if err != nil {
+		return ChatTurnResult{}, err
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	if sessionID == "" {
+		session, err := s.App.CreateSession(ProfileName)
+		if err != nil {
+			return ChatTurnResult{}, fmt.Errorf("create career chat session: %w", err)
+		}
+		sessionID = session.ID
+	}
+	var stdout bytes.Buffer
+	deps := Dependencies{
+		App:           s.App,
+		Config:        s.Config,
+		Stdout:        &stdout,
+		Stderr:        io.Discard,
+		WorkspaceRoot: ws.Root,
+	}
+	result, err := executeNaturalLanguageInput(deps, ws, sessionID, req.Input)
+	if err != nil {
+		return ChatTurnResult{}, err
+	}
+	output := strings.TrimSpace(result.Output)
+	if output == "" {
+		output = compactAssistantOutput(stdout.String())
+	}
+	return ChatTurnResult{
+		SessionID:      sessionID,
+		Output:         output,
+		GeneratedPaths: uniqueStrings(result.GeneratedPaths),
+		PrimaryPath:    filepath.ToSlash(strings.TrimSpace(result.PrimaryPath)),
+		RunSummaryPath: result.RunSummaryPath,
+	}, nil
 }
 
 func (s *CopilotService) prepareInboxClassificationFiles(ctx context.Context, ws *Workspace, paths []string) ([]InboxFileForClassification, []string, error) {
@@ -645,6 +737,18 @@ type generateMarkdownSpec struct {
 	Instructions  string
 }
 
+type generateBundleSpec struct {
+	TaskName      string
+	PromptVersion string
+	Kind          string
+	OutputDir     string
+	SourcePaths   []string
+	DefaultTypes  []string
+	RequireTypes  []string
+	Instructions  string
+	FallbackTitle string
+}
+
 func (s *CopilotService) generateMarkdownDocument(ctx context.Context, spec generateMarkdownSpec) (GeneratedDocumentResult, error) {
 	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
 	if err != nil {
@@ -709,7 +813,143 @@ func (s *CopilotService) generateMarkdownDocument(ctx context.Context, spec gene
 	if err := ws.WriteGeneratedState(state); err != nil {
 		return GeneratedDocumentResult{}, err
 	}
-	return GeneratedDocumentResult{Path: rel, Record: record}, nil
+	runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
+		TaskName:    spec.TaskName,
+		Status:      RunSummaryStatusSuccess,
+		CreatedAt:   s.now(),
+		InputPaths:  sourceRefPaths(sources),
+		Generated:   []string{rel},
+		PrimaryPath: rel,
+		Warnings:    parsed.RiskFlags,
+		NextActions: nextActionsForKind(spec.Kind),
+	})
+	paths := uniqueStrings(append([]string{rel}, runSummaryPath))
+	return GeneratedDocumentResult{
+		Path:           rel,
+		PrimaryPath:    firstNonEmpty(runSummaryPath, rel),
+		GeneratedPaths: paths,
+		Record:         record,
+		Records:        []GeneratedArtifactRecord{record},
+		RunSummaryPath: runSummaryPath,
+		Warnings:       parsed.RiskFlags,
+	}, nil
+}
+
+func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec generateBundleSpec) (GeneratedDocumentResult, error) {
+	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
+	if err != nil {
+		return GeneratedDocumentResult{}, err
+	}
+	sources, contents, err := collectGenerationSources(ws, spec.SourcePaths, spec.DefaultTypes)
+	if err != nil {
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: spec.SourcePaths, Error: err.Error()})
+		return GeneratedDocumentResult{}, err
+	}
+	if len(sources) == 0 {
+		err := fmt.Errorf("%s requires at least one source", spec.TaskName)
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, Error: err.Error()})
+		return GeneratedDocumentResult{}, err
+	}
+	if err := ensureRequiredSourceTypes(ws, sources, spec.RequireTypes); err != nil {
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
+		return GeneratedDocumentResult{}, err
+	}
+	result, err := s.structuredTaskRunner().RunStructuredTask(ctx, StructuredTaskRequest{
+		TaskName:      spec.TaskName,
+		PromptVersion: spec.PromptVersion,
+		Input:         buildGeneratedDocumentBundlePrompt(spec.TaskName, spec.Instructions, spec.OutputDir, sources, contents),
+		SourcePaths:   sourceRefPaths(sources),
+	})
+	if err != nil {
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
+		return GeneratedDocumentResult{}, err
+	}
+	parsed, err := parseGeneratedDocumentBundleOutput(result.Output)
+	if err != nil {
+		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error(), RawOutput: result.Output})
+		return GeneratedDocumentResult{}, err
+	}
+	var generatedPaths []string
+	var records []GeneratedArtifactRecord
+	for _, doc := range parsed.Documents {
+		docPath := filepath.ToSlash(strings.TrimSpace(doc.Path))
+		if !strings.HasPrefix(docPath, filepath.ToSlash(spec.OutputDir)+"/") && docPath != filepath.ToSlash(spec.OutputDir) {
+			return GeneratedDocumentResult{}, fmt.Errorf("%s document %q must stay inside %s", spec.TaskName, docPath, spec.OutputDir)
+		}
+		if err := ws.writeWorkspaceText(docPath, doc.Markdown); err != nil {
+			return GeneratedDocumentResult{}, err
+		}
+		record := GeneratedArtifactRecord{
+			Path:       docPath,
+			Kind:       spec.Kind,
+			SourceRefs: parsed.SourceRefs,
+			Meta:       LLMTraceMeta{GeneratedAt: result.GeneratedAt, Model: result.Model, PromptVersion: spec.PromptVersion},
+		}
+		if len(record.SourceRefs) == 0 {
+			record.SourceRefs = sources
+		}
+		records = append(records, record)
+		generatedPaths = append(generatedPaths, docPath)
+	}
+	if len(records) == 0 {
+		return GeneratedDocumentResult{}, fmt.Errorf("%s returned no documents", spec.TaskName)
+	}
+	state, err := ws.ReadGeneratedState()
+	if err != nil {
+		return GeneratedDocumentResult{}, err
+	}
+	for _, record := range records {
+		state = upsertGeneratedRecord(state, record)
+	}
+	if err := ws.WriteGeneratedState(state); err != nil {
+		return GeneratedDocumentResult{}, err
+	}
+	primaryPath := filepath.ToSlash(strings.TrimSpace(parsed.PrimaryDocument))
+	if primaryPath == "" {
+		primaryPath = generatedPaths[0]
+	}
+	runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
+		TaskName:    spec.TaskName,
+		Status:      RunSummaryStatusSuccess,
+		CreatedAt:   s.now(),
+		InputPaths:  sourceRefPaths(sources),
+		Generated:   generatedPaths,
+		PrimaryPath: primaryPath,
+		Warnings:    parsed.RiskFlags,
+		NextActions: nextActionsForKind(spec.Kind),
+	})
+	generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
+	return GeneratedDocumentResult{
+		Path:           primaryPath,
+		PrimaryPath:    firstNonEmpty(runSummaryPath, primaryPath),
+		GeneratedPaths: generatedPaths,
+		Record:         records[0],
+		Records:        records,
+		RunSummaryPath: runSummaryPath,
+		Warnings:       parsed.RiskFlags,
+	}, nil
+}
+
+func (s *CopilotService) writeRunSummary(ws *Workspace, record RunSummaryRecord) (string, error) {
+	if ws == nil {
+		return "", fmt.Errorf("workspace must not be nil")
+	}
+	return ws.WriteRunSummary(record)
+}
+
+func nextActionsForKind(kind string) []string {
+	switch strings.TrimSpace(kind) {
+	case "question_bank":
+		return []string{"检查题库主题是否需要合并或重命名", "选择目标 JD 后生成面试作战包"}
+	case "project_pack":
+		return []string{"逐个检查项目专项是否覆盖证据边界", "结合目标 JD 继续生成作战包"}
+	case "battle_pack":
+		return []string{"优先阅读作战页和临阵主文档", "如果简历更新，请重新生成作战包"}
+	case "interview_review":
+		return []string{"区分原始回答与建议改写", "必要时把通用问题并入复习资料库"}
+	default:
+		return nil
+	}
 }
 
 func collectGenerationSources(ws *Workspace, explicit []string, defaultTypes []string) ([]SourceRef, map[string]string, error) {
@@ -894,6 +1134,19 @@ func (s *CopilotService) writeDiagnostic(ws *Workspace, record DiagnosticRecord)
 	return err
 }
 
+func compactAssistantOutput(raw string) string {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	var cleaned []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		line = strings.TrimPrefix(line, "assistant> ")
+		if line != "" {
+			cleaned = append(cleaned, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
+}
+
 func (s *CopilotService) workspaceRoot() string {
 	if s == nil || s.WorkspaceRoot == "" {
 		return DefaultWorkspaceRoot
@@ -906,4 +1159,143 @@ func (s *CopilotService) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func (s *CopilotService) CleanupGeneratedArtifacts(ctx context.Context) (CleanupGeneratedArtifactsResult, error) {
+	_ = ctx
+	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
+	if err != nil {
+		return CleanupGeneratedArtifactsResult{}, err
+	}
+	state, err := ws.ReadGeneratedState()
+	if err != nil {
+		return CleanupGeneratedArtifactsResult{}, err
+	}
+	var removed []string
+	for _, item := range state.Items {
+		abs := filepath.Join(ws.Root, filepath.FromSlash(item.Path))
+		if removeErr := os.Remove(abs); removeErr == nil || os.IsNotExist(removeErr) {
+			removed = append(removed, item.Path)
+		}
+	}
+	legacyFindings, _ := detectLegacyPollutedArtifacts(ws)
+	_ = filepath.Walk(filepath.Join(ws.Root, WorkspaceDirOutputs, "runs"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil || info == nil || info.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(ws.Root, path)
+		if relErr != nil {
+			return nil
+		}
+		if removeErr := os.Remove(path); removeErr == nil || os.IsNotExist(removeErr) {
+			removed = append(removed, filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	if err := ws.WriteGeneratedState(GeneratedState{Version: generatedStateVersion, Items: []GeneratedArtifactRecord{}}); err != nil {
+		return CleanupGeneratedArtifactsResult{}, err
+	}
+	if err := ws.WriteRunSummaryState(RunSummaryState{Version: runSummaryStateVersion, Items: []RunSummaryRecord{}}); err != nil {
+		return CleanupGeneratedArtifactsResult{}, err
+	}
+	runSummaryPath, _ := ws.WriteRunSummary(RunSummaryRecord{
+		TaskName:    "cleanup_generated_artifacts",
+		Status:      RunSummaryStatusSuccess,
+		CreatedAt:   s.now(),
+		Generated:   nil,
+		Warnings:    legacyFindings,
+		NextActions: []string{"如需恢复资料，请执行重建生成产物"},
+	})
+	return CleanupGeneratedArtifactsResult{
+		RemovedPaths:   uniqueStrings(removed),
+		RunSummaryPath: runSummaryPath,
+		LegacyFindings: legacyFindings,
+	}, nil
+}
+
+func (s *CopilotService) RebuildGeneratedArtifacts(ctx context.Context) (RebuildGeneratedArtifactsResult, error) {
+	ws, err := OpenWorkspace(s.workspaceRoot(), s.now())
+	if err != nil {
+		return RebuildGeneratedArtifactsResult{}, err
+	}
+	var generatedPaths []string
+	var warnings []string
+	if result, err := ws.GenerateReviewLibraryWithGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{App: s.App, Config: s.Config}); err == nil {
+		generatedPaths = append(generatedPaths, result.Paths...)
+	} else {
+		warnings = append(warnings, "复习资料库未重建："+err.Error())
+	}
+	if _, index, err := ws.Status(); err == nil {
+		if latestItemOfType(index, WorkspaceTypeResume).ID != "" {
+			if result, err := s.GenerateProjectPack(ctx, GenerateProjectPackRequest{}); err == nil {
+				generatedPaths = append(generatedPaths, result.GeneratedPaths...)
+			} else {
+				warnings = append(warnings, "项目专项未重建："+err.Error())
+			}
+		}
+		meta, metaErr := ws.ReadMetadata()
+		if metaErr == nil && meta.CurrentResume != "" && meta.ActiveJD != "" {
+			if result, err := s.GenerateBattlePack(ctx, GenerateBattlePackRequest{JDPath: meta.ActiveJD}); err == nil {
+				generatedPaths = append(generatedPaths, result.GeneratedPaths...)
+			} else {
+				warnings = append(warnings, "面试作战包未重建："+err.Error())
+			}
+		}
+	}
+	status := RunSummaryStatusSuccess
+	if len(generatedPaths) == 0 && len(warnings) > 0 {
+		status = RunSummaryStatusFailed
+	} else if len(warnings) > 0 {
+		status = RunSummaryStatusPartialSuccess
+	}
+	runSummaryPath, _ := ws.WriteRunSummary(RunSummaryRecord{
+		TaskName:    "rebuild_generated_artifacts",
+		Status:      status,
+		CreatedAt:   s.now(),
+		Generated:   uniqueStrings(generatedPaths),
+		PrimaryPath: firstString(generatedPaths),
+		Warnings:    warnings,
+	})
+	generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
+	return RebuildGeneratedArtifactsResult{
+		GeneratedPaths: generatedPaths,
+		PrimaryPath:    firstNonEmpty(runSummaryPath, firstString(generatedPaths)),
+		RunSummaryPath: runSummaryPath,
+		Warnings:       warnings,
+	}, nil
+}
+
+func detectLegacyPollutedArtifacts(ws *Workspace) ([]string, error) {
+	var findings []string
+	root := filepath.Join(ws.Root, WorkspaceDirPrepare)
+	_ = filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(ws.Root, path)
+		if relErr != nil {
+			return nil
+		}
+		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		if strings.HasPrefix(base, "Q") || strings.Contains(base, "interview-qa") || strings.HasPrefix(base, "material-") {
+			findings = append(findings, "疑似污染复习资料库文件："+filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	jdRoot := filepath.Join(ws.Root, WorkspaceDirJD)
+	_ = filepath.Walk(jdRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info == nil || info.IsDir() || filepath.Ext(path) != ".md" {
+			return nil
+		}
+		rel, relErr := filepath.Rel(ws.Root, path)
+		if relErr != nil {
+			return nil
+		}
+		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		if looksLikeJDFragmentTitle(base) {
+			findings = append(findings, "疑似污染岗位文件："+filepath.ToSlash(rel))
+		}
+		return nil
+	})
+	return uniqueStrings(findings), nil
 }

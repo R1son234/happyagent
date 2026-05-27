@@ -309,6 +309,127 @@ func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
 	}
 }
 
+func TestSplitJDSectionsSkipsResponsibilityFragments(t *testing.T) {
+	content := `# JD 汇总
+
+阿里云-无影
+职位描述
+1. 负责 Agent 平台建设。
+职位要求
+1. 熟悉 Go 和系统服务开发。
+
+阿里千问
+岗位描述
+1. 负责 Agent 应用研发。
+岗位要求
+1. 熟悉 RAG。
+
+3、负责项目的核心代码研发，以高标准高质量完成需求
+职位要求
+1、有优秀的逻辑分析能力。
+`
+	sections := SplitJDSections(content)
+	if len(sections) != 2 {
+		t.Fatalf("expected two valid JD sections, got %+v", sections)
+	}
+	if sections[0].Title != "阿里云-无影" || sections[1].Title != "阿里千问" {
+		t.Fatalf("unexpected JD section title: %+v", sections)
+	}
+}
+
+func TestAddMaterialPromotesCompleteSplitJDOverGenericImportedJD(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 25, 13, 32, 49, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+
+	rawJD := `阿里云-无影
+职位描述
+1. 负责 Agent 平台建设。
+职位要求
+1. 熟悉 Go。
+
+阿里千问
+岗位描述
+1. 负责 Agent 应用研发。
+岗位要求
+1. 熟悉 RAG。`
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, rawJD, now); err != nil {
+		t.Fatalf("AddMaterial(rawJD) error = %v", err)
+	}
+	completeJD := `# 阿里云-无影
+
+职位描述
+1. 负责 Agent 平台建设。
+
+职位要求
+1. 熟悉 Go 和系统服务开发。`
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, completeJD, now.Add(time.Second)); err != nil {
+		t.Fatalf("AddMaterial(completeJD) error = %v", err)
+	}
+	fragmentJD := `# 3、负责项目的核心代码研发，以高标准高质量完成需求
+
+职位要求
+1. 有优秀的逻辑分析能力。`
+	if _, err := ws.AddMaterial(WorkspaceTypeJD, fragmentJD, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("AddMaterial(fragmentJD) error = %v", err)
+	}
+
+	meta, err := ws.ReadMetadata()
+	if err != nil {
+		t.Fatalf("ReadMetadata() error = %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(meta.ActiveJD)))
+	if err != nil {
+		t.Fatalf("read active jd: %v", err)
+	}
+	if !strings.Contains(string(data), "阿里云-无影") {
+		t.Fatalf("expected active_jd to stay on complete JD, got:\n%s", data)
+	}
+	if strings.Contains(string(data), "高标准高质量完成需求") {
+		t.Fatalf("fragment JD should not become active_jd:\n%s", data)
+	}
+}
+
+func TestOpenWorkspaceRepairsFragmentActiveJDPointer(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "career")
+	now := time.Date(2026, 5, 25, 14, 0, 0, 0, time.UTC)
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	completeJD, err := ws.AddMaterial(WorkspaceTypeJD, "# 阿里云-无影\n\n职位描述\n1. 负责 Agent 平台建设。\n\n职位要求\n1. 熟悉 Go 和系统服务开发。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial(completeJD) error = %v", err)
+	}
+	fragmentJD, err := ws.AddMaterial(WorkspaceTypeJD, "# 3、负责项目的核心代码研发，以高标准高质量完成需求\n\n职位要求\n1. 有优秀的逻辑分析能力。", now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("AddMaterial(fragmentJD) error = %v", err)
+	}
+	meta, err := ws.ReadMetadata()
+	if err != nil {
+		t.Fatalf("ReadMetadata() error = %v", err)
+	}
+	meta.ActiveJD = filepath.ToSlash(fragmentJD.Metadata.Source)
+	if err := ws.writeJSON(ws.metadataPath(), meta); err != nil {
+		t.Fatalf("write polluted metadata: %v", err)
+	}
+
+	reopened, err := OpenWorkspace(root, now.Add(2*time.Second))
+	if err != nil {
+		t.Fatalf("reopen workspace: %v", err)
+	}
+	repairedMeta, err := reopened.ReadMetadata()
+	if err != nil {
+		t.Fatalf("ReadMetadata() after reopen error = %v", err)
+	}
+	if repairedMeta.ActiveJD != filepath.ToSlash(completeJD.Metadata.Source) {
+		t.Fatalf("expected active_jd repaired to %s, got %s", completeJD.Metadata.Source, repairedMeta.ActiveJD)
+	}
+}
+
 func TestArchivePublicInterviewExperienceDoesNotCreatePrepareMaterial(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 9, 21, 0, 0, 0, time.UTC)

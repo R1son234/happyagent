@@ -57,3 +57,25 @@ type GeneratedArtifactRecord struct {
 	StaleReason string       `json:"stale_reason"`
 	LastError   string       `json:"last_error,omitempty"`
 }
+
+type RunSummaryStatus string
+
+const (
+	RunSummaryStatusSuccess        RunSummaryStatus = "success"
+	RunSummaryStatusPartialSuccess RunSummaryStatus = "partial_success"
+	RunSummaryStatusFailed         RunSummaryStatus = "failed"
+)
+
+type RunSummaryRecord struct {
+	ID          string           `json:"id"`
+	TaskName    string           `json:"task_name"`
+	Status      RunSummaryStatus `json:"status"`
+	CreatedAt   time.Time        `json:"created_at"`
+	InputPaths  []string         `json:"input_paths,omitempty"`
+	Generated   []string         `json:"generated_paths,omitempty"`
+	PrimaryPath string           `json:"primary_path,omitempty"`
+	LogPath     string           `json:"log_path,omitempty"`
+	Warnings    []string         `json:"warnings,omitempty"`
+	Errors      []string         `json:"errors,omitempty"`
+	NextActions []string         `json:"next_actions,omitempty"`
+}

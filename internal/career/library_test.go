@@ -119,13 +119,8 @@ func TestReviewLibraryWritesDeepDocumentsFromResumeJDExperience(t *testing.T) {
 			t.Fatalf("question bank missing %q:\n%s", expected, bank)
 		}
 	}
-	projectPath := filepath.Join(root, WorkspaceDirPrepare, slugForPath("示例项目一")+"-interview-qa.md")
-	project, err := os.ReadFile(projectPath)
-	if err != nil {
-		t.Fatalf("expected project QA %s: %v\npaths=%+v", projectPath, err, result.Paths)
-	}
-	if !strings.Contains(string(project), "12 个示例场景") {
-		t.Fatalf("project QA should include resume evidence:\n%s", project)
+	if strings.Contains(joined, "-interview-qa.md") {
+		t.Fatalf("review library should not create project QA files under prepare: %+v", result.Paths)
 	}
 }
 

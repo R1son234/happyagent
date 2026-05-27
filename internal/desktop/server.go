@@ -23,7 +23,6 @@ import (
 	"happyagent/internal/runlog"
 	"happyagent/internal/runtime"
 	"happyagent/internal/store"
-	"happyagent/internal/tools"
 )
 
 const defaultProfile = "career-copilot"
@@ -111,11 +110,14 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	s.mux.HandleFunc("POST /api/inbox/classify", s.handleInboxClassify)
 	s.mux.HandleFunc("POST /api/inbox/confirm", s.handleInboxConfirm)
+	s.mux.HandleFunc("POST /api/workspace/target-jd", s.handleSelectTargetJD)
 	s.mux.HandleFunc("POST /api/jd/split", s.handleJDSplit)
 	s.mux.HandleFunc("POST /api/review-library/generate", s.handleReviewLibraryGenerate)
 	s.mux.HandleFunc("POST /api/project-pack/generate", s.handleProjectPackGenerate)
 	s.mux.HandleFunc("POST /api/battle-pack/generate", s.handleBattlePackGenerate)
 	s.mux.HandleFunc("POST /api/interview-review/extract", s.handleInterviewReviewExtract)
+	s.mux.HandleFunc("POST /api/workspace/cleanup-generated", s.handleCleanupGeneratedArtifacts)
+	s.mux.HandleFunc("POST /api/workspace/rebuild", s.handleRebuildGeneratedArtifacts)
 	s.mux.HandleFunc("GET /api/diagnostics", s.handleDiagnostics)
 	s.mux.HandleFunc("GET /api/graph", s.handleGraph)
 	s.mux.HandleFunc("POST /api/chat/sessions", s.handleCreateChatSession)
@@ -205,11 +207,35 @@ func (s *Server) handleWorkspaceStatus(w http.ResponseWriter, r *http.Request) {
 	for _, item := range index.Items {
 		counts[item.Type]++
 	}
+	inboxState, _ := ws.ReadInboxState()
+	pendingCount := 0
+	for _, item := range inboxState.Items {
+		if item.Status == career.InboxItemStatusPending {
+			pendingCount++
+		}
+	}
+	generatedState, _ := ws.ReadGeneratedState()
+	var staleItems []map[string]any
+	for _, item := range generatedState.Items {
+		if item.Stale {
+			staleItems = append(staleItems, map[string]any{
+				"path":   item.Path,
+				"kind":   item.Kind,
+				"reason": item.StaleReason,
+			})
+		}
+	}
+	runSummaries, _ := ws.ReadRunSummaryState()
+	currentTargetJD := resolveCurrentTargetJD(meta, index)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"root":   s.workspaceRoot,
-		"meta":   meta,
-		"index":  index,
-		"counts": counts,
+		"root":               s.workspaceRoot,
+		"meta":               meta,
+		"index":              index,
+		"counts":             counts,
+		"pending_count":      pendingCount,
+		"current_target_jd":  currentTargetJD,
+		"stale_items":        staleItems,
+		"latest_run_summary": firstRunSummary(runSummaries.Items),
 	})
 }
 
@@ -518,12 +544,52 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	logSession, logPath := initDesktopRunLog(cfg, "organize_inbox", "inbox", "开始整理 inbox")
+	if logSession != nil {
+		defer func() {
+			runlog.Disable()
+			_ = logSession.Close()
+		}()
+	}
 	result, err := s.copilotService().ClassifyInbox(r.Context(), req)
+	if err != nil {
+		runlog.Section("Error", err.Error())
+		writeError(w, err)
+		return
+	}
+	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	generatedPaths, warnings := s.postProcessInboxClassification(r.Context(), ws, result.Items)
+	status := career.RunSummaryStatusSuccess
+	if len(warnings) > 0 {
+		status = career.RunSummaryStatusPartialSuccess
+	}
+	runSummaryPath, _ := ws.WriteRunSummary(career.RunSummaryRecord{
+		TaskName:    "organize_inbox",
+		Status:      status,
+		CreatedAt:   time.Now(),
+		InputPaths:  req.Paths,
+		Generated:   generatedPaths,
+		PrimaryPath: firstPath(generatedPaths),
+		LogPath:     logPath,
+		Warnings:    warnings,
+		NextActions: []string{"确认待确认资料分类", "如目标岗位已明确，可选择 JD 后生成作战包"},
+	})
+	generatedPaths = uniquePaths(append(generatedPaths, runSummaryPath))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":            result.Items,
+		"warnings":         append(result.Warnings, warnings...),
+		"generated_paths":  generatedPaths,
+		"primary_path":     firstNonEmpty(runSummaryPath, firstPath(generatedPaths)),
+		"log_path":         logPath,
+		"run_summary_path": runSummaryPath,
+	})
 }
 
 func (s *Server) handleInboxConfirm(w http.ResponseWriter, r *http.Request) {
@@ -538,6 +604,26 @@ func (s *Server) handleInboxConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleSelectTargetJD(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Path string `json:"path"`
+	}
+	if err := readJSON(r.Body, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	if err := ws.SetActiveJD(req.Path, time.Now()); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (s *Server) handleJDSplit(w http.ResponseWriter, r *http.Request) {
@@ -610,6 +696,24 @@ func (s *Server) handleInterviewReviewExtract(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleCleanupGeneratedArtifacts(w http.ResponseWriter, r *http.Request) {
+	result, err := s.copilotService().CleanupGeneratedArtifacts(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRebuildGeneratedArtifacts(w http.ResponseWriter, r *http.Request) {
+	result, err := s.copilotService().RebuildGeneratedArtifacts(r.Context())
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	result, err := s.copilotService().ListDiagnostics(r.Context(), career.ListDiagnosticsRequest{Limit: 10})
 	if err != nil {
@@ -619,14 +723,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, items []career.WorkspaceItem) ([]string, []string) {
-	hasExperience := false
-	for _, item := range items {
-		if item.Type == career.WorkspaceTypeExperiences {
-			hasExperience = true
-			break
-		}
-	}
+func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, hasExperience bool) ([]string, []string) {
 	if !hasExperience {
 		return nil, nil
 	}
@@ -767,7 +864,6 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
 	defer cancel()
-	var events []map[string]any
 	logSession, logPath := initDesktopRunLog(cfg, profile, sessionID, req.Input)
 	if logSession != nil {
 		defer func() {
@@ -775,42 +871,41 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 			_ = logSession.Close()
 		}()
 	}
-	record, err := s.app.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     sessionID,
-		ProfileName:   profile,
-		Input:         req.Input,
-		SystemPrompt:  cfg.Engine.SystemPrompt,
-		ApprovedTools: cfg.Tools.ApprovedTools,
-		OnStepStart: func(stepIndex int) {
-			events = append(events, map[string]any{"type": "step_started", "step": stepIndex})
-		},
-		OnToolCallStart: func(toolName string) {
-			events = append(events, map[string]any{"type": "tool_started", "tool": toolName})
-		},
-		OnToolCallEnd: func(toolName string, succeeded bool) {
-			events = append(events, map[string]any{"type": "tool_finished", "tool": toolName, "succeeded": succeeded})
-		},
-		OnTodosUpdated: func(todos []tools.TodoItem) {
-			events = append(events, map[string]any{"type": "todos_updated", "todos": todos})
-		},
+	chat, err := s.copilotService().RunChatTurn(ctx, career.ChatTurnRequest{
+		SessionID: sessionID,
+		Input:     req.Input,
 	})
 	if err != nil {
 		runlog.Section("Error", err.Error())
 		writeJSON(w, http.StatusInternalServerError, map[string]any{
 			"error":      err.Error(),
-			"record":     record,
-			"events":     events,
 			"session_id": sessionID,
 			"log_path":   logPath,
 		})
 		return
 	}
-	runlog.Section("Final Output", record.Output)
+	runlog.Section("Final Output", chat.Output)
+	runSummaryPath := chat.RunSummaryPath
+	if runSummaryPath == "" {
+		ws, wsErr := career.OpenWorkspace(s.workspaceRoot, time.Now())
+		if wsErr == nil {
+			runSummaryPath, _ = ws.WriteRunSummary(career.RunSummaryRecord{
+				TaskName:    "chat_generate",
+				Status:      career.RunSummaryStatusSuccess,
+				CreatedAt:   time.Now(),
+				Generated:   chat.GeneratedPaths,
+				PrimaryPath: chat.PrimaryPath,
+				LogPath:     logPath,
+			})
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": sessionID,
-		"record":     record,
-		"events":     events,
-		"log_path":   logPath,
+		"session_id":       chat.SessionID,
+		"record":           map[string]any{"output": chat.Output},
+		"generated_paths":  uniquePaths(append(chat.GeneratedPaths, runSummaryPath)),
+		"primary_path":     firstNonEmpty(runSummaryPath, chat.PrimaryPath),
+		"log_path":         logPath,
+		"run_summary_path": runSummaryPath,
 	})
 }
 
@@ -831,6 +926,138 @@ func initDesktopRunLog(cfg config.Config, profile string, sessionID string, inpu
 	runlog.Linef("Session: `%s`", sessionID)
 	runlog.Linef("")
 	return session, session.Path()
+}
+
+func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.Workspace, items []career.PendingInboxItem) ([]string, []string) {
+	hasJD := false
+	hasResume := false
+	hasExperience := false
+	for _, item := range items {
+		if item.Status != career.InboxItemStatusConfirmed {
+			continue
+		}
+		switch item.MaterialType {
+		case "jd":
+			hasJD = true
+		case "resume":
+			hasResume = true
+		case "public_interview_experience":
+			hasExperience = true
+		}
+	}
+	var generatedPaths []string
+	var warnings []string
+	if hasExperience {
+		paths, generatedWarnings := s.refreshReviewLibraryAfterIngest(ctx, ws, hasExperience)
+		generatedPaths = append(generatedPaths, paths...)
+		warnings = append(warnings, generatedWarnings...)
+	}
+	meta, err := ws.ReadMetadata()
+	if err == nil && meta.CurrentResume != "" && meta.ActiveJD != "" && (hasResume || hasJD || hasExperience) {
+		projectName := "项目专项"
+		if strings.TrimSpace(meta.ActiveProject) != "" {
+			projectName = strings.TrimSuffix(filepath.Base(meta.ActiveProject), filepath.Ext(meta.ActiveProject))
+		}
+		projectPack, projectErr := s.copilotService().GenerateProjectPack(ctx, career.GenerateProjectPackRequest{ProjectName: projectName})
+		if projectErr != nil {
+			warnings = append(warnings, "项目专项未生成："+projectErr.Error())
+		} else if projectPack.Path != "" {
+			generatedPaths = append(generatedPaths, projectPack.Path)
+		}
+		battlePack, battleErr := s.copilotService().GenerateBattlePack(ctx, career.GenerateBattlePackRequest{JDPath: meta.ActiveJD})
+		if battleErr != nil {
+			warnings = append(warnings, "面试作战包未生成："+battleErr.Error())
+		} else if battlePack.Path != "" {
+			generatedPaths = append(generatedPaths, battlePack.Path)
+		}
+	}
+	return uniquePaths(generatedPaths), warnings
+}
+
+func resolveCurrentTargetJD(meta career.WorkspaceMetadata, index career.WorkspaceIndex) map[string]any {
+	active := filepath.ToSlash(strings.TrimSpace(meta.ActiveJD))
+	if active == "" {
+		return map[string]any{}
+	}
+	for _, item := range index.Items {
+		if item.Type != career.WorkspaceTypeJD {
+			continue
+		}
+		if item.Metadata.Source != "" && filepath.ToSlash(item.Metadata.Source) == active {
+			return map[string]any{"path": item.Path, "title": item.Title}
+		}
+	}
+	return map[string]any{"path": active}
+}
+
+func firstRunSummary(items []career.RunSummaryRecord) map[string]any {
+	if len(items) == 0 {
+		return map[string]any{}
+	}
+	item := items[0]
+	return map[string]any{
+		"id":              item.ID,
+		"task_name":       item.TaskName,
+		"status":          item.Status,
+		"created_at":      item.CreatedAt,
+		"primary_path":    item.PrimaryPath,
+		"generated_paths": item.Generated,
+		"log_path":        item.LogPath,
+		"warnings":        item.Warnings,
+	}
+}
+
+func relWorkspaceLogPath(workspaceRoot string, path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	absWorkspace, err := filepath.Abs(workspaceRoot)
+	if err == nil {
+		if rel, relErr := filepath.Rel(absWorkspace, path); relErr == nil && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	absCwd, err := os.Getwd()
+	if err == nil {
+		if rel, relErr := filepath.Rel(absCwd, path); relErr == nil {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(path)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func uniquePaths(paths []string) []string {
+	seen := map[string]bool{}
+	var result []string
+	for _, path := range paths {
+		path = filepath.ToSlash(strings.TrimSpace(path))
+		if path == "" || seen[path] {
+			continue
+		}
+		seen[path] = true
+		result = append(result, path)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func firstPath(paths []string) string {
+	for _, path := range paths {
+		if strings.TrimSpace(path) != "" {
+			return path
+		}
+	}
+	return ""
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -931,6 +1158,22 @@ func (s *Server) workspacePath(rel string) (string, error) {
 	root, err := filepath.Abs(s.workspaceRoot)
 	if err != nil {
 		return "", err
+	}
+	rel = strings.TrimSpace(rel)
+	if rel == "" {
+		return root, nil
+	}
+	if filepath.IsAbs(rel) {
+		abs := filepath.Clean(rel)
+		cwd, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			return "", cwdErr
+		}
+		logRoot := filepath.Join(cwd, "logs")
+		if isWithin(root, abs) || isWithin(logRoot, abs) {
+			return abs, nil
+		}
+		return "", fmt.Errorf("path escapes allowed roots")
 	}
 	rel = filepath.Clean(strings.TrimPrefix(rel, "/"))
 	if rel == "." {

@@ -30,6 +30,9 @@ type StructuredTaskRequest struct {
 	PromptVersion string   `json:"prompt_version"`
 	Input         string   `json:"input"`
 	SourcePaths   []string `json:"source_paths"`
+	SystemPrompt  string   `json:"system_prompt,omitempty"`  // Optional lean system prompt for bounded structured tasks.
+	ApprovedTools []string `json:"approved_tools,omitempty"` // Optional approved tools override; empty means no tools should be used.
+	ProfileName   string   `json:"profile_name,omitempty"`   // Optional profile override; blank keeps the task out of the general chat profile.
 }
 
 type StructuredTaskResult struct {
@@ -60,12 +63,17 @@ func (r *appStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 		sessionID = session.ID
 		r.SessionID = sessionID
 	}
+	systemPrompt := strings.TrimSpace(req.SystemPrompt)
+	if systemPrompt == "" {
+		systemPrompt = structuredTaskSystemPrompt(req.TaskName, req.PromptVersion)
+	}
+	profileName := strings.TrimSpace(req.ProfileName)
 	record, err := r.App.AppendUserTurn(ctx, app.AppendTurnRequest{
 		SessionID:     sessionID,
-		ProfileName:   ProfileName,
+		ProfileName:   profileName,
 		Input:         req.Input,
-		SystemPrompt:  r.Config.Engine.SystemPrompt,
-		ApprovedTools: r.Config.Tools.ApprovedTools,
+		SystemPrompt:  systemPrompt,
+		ApprovedTools: append([]string(nil), req.ApprovedTools...),
 	})
 	if err != nil {
 		return StructuredTaskResult{}, err
@@ -81,6 +89,31 @@ func (r *appStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 		SessionID:   record.SessionID,
 		GeneratedAt: now,
 	}, nil
+}
+
+func structuredTaskSystemPrompt(taskName string, promptVersion string) string {
+	taskName = strings.TrimSpace(taskName)
+	promptVersion = strings.TrimSpace(promptVersion)
+	if taskName == "" {
+		taskName = "structured_task"
+	}
+	if promptVersion == "" {
+		promptVersion = "unspecified"
+	}
+	return fmt.Sprintf(`<structured_task>
+  <task_name>%s</task_name>
+  <prompt_version>%s</prompt_version>
+  <role>You are running a bounded structured task for Career Copilot.</role>
+  <rules>
+    - Use only the user input provided in this run.
+    - Never call tools.
+    - Never activate skills.
+    - Never inspect or list directories.
+    - Never ask for additional files when the input already contains the material.
+    - Return the requested JSON only, with no markdown fences and no extra prose.
+    - If the input is insufficient, still return the best valid JSON allowed by the output contract and mark uncertainty in the contract fields.
+  </rules>
+</structured_task>`, xmlEscape(taskName), xmlEscape(promptVersion))
 }
 
 type fileClassificationOutput struct {
@@ -138,13 +171,23 @@ func buildFileClassificationPrompt(files []InboxFileForClassification) string {
 		b.WriteString("    <file>\n")
 		b.WriteString("      <source_path>" + xmlEscape(file.SourcePath) + "</source_path>\n")
 		b.WriteString("      <source_hash>" + xmlEscape(file.SourceHash) + "</source_hash>\n")
-		b.WriteString("      <content>\n" + xmlEscape(limitPromptContent(file.Content)) + "\n      </content>\n")
+		b.WriteString("      <content>\n" + xmlEscape(limitFileClassificationContent(file.Content)) + "\n      </content>\n")
 		b.WriteString("    </file>\n")
 	}
 	b.WriteString("  </files>\n")
 	b.WriteString(`  <output_contract>{"files":[{"source_path":"inbox/example.md","source_hash":"sha256:...","material_type":"jd","confidence":"high","reason":"...","source_excerpt":"...","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}</output_contract>` + "\n")
 	b.WriteString("</career_file_classification>")
 	return b.String()
+}
+
+func limitFileClassificationContent(content string) string {
+	content = strings.TrimSpace(content)
+	const maxRunes = 4000
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return content
+	}
+	return string(runes[:maxRunes]) + "\n...[truncated]"
 }
 
 type InboxFileForClassification struct {
@@ -213,6 +256,21 @@ type generatedMarkdownOutput struct {
 	MissingInfo []string    `json:"missing_info,omitempty"`
 }
 
+type generatedDocumentBundleOutput struct {
+	Title           string               `json:"title"`
+	PrimaryDocument string               `json:"primary_document"`
+	Documents       []generatedBundleDoc `json:"documents"`
+	SourceRefs      []SourceRef          `json:"source_refs"`
+	RiskFlags       []string             `json:"risk_flags,omitempty"`
+	MissingInfo     []string             `json:"missing_info,omitempty"`
+}
+
+type generatedBundleDoc struct {
+	Path     string `json:"path"`
+	Title    string `json:"title"`
+	Markdown string `json:"markdown"`
+}
+
 func parseGeneratedMarkdownOutput(output string) (generatedMarkdownOutput, error) {
 	var parsed generatedMarkdownOutput
 	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err != nil {
@@ -250,5 +308,63 @@ func buildGeneratedMarkdownPrompt(taskName string, instructions string, sources 
 	b.WriteString("  </sources>\n")
 	b.WriteString(`  <output_contract>{"title":"...","markdown":"...","source_refs":[{"path":"...","version":"...","excerpt":"...","evidence_spans":["..."]}],"risk_flags":[],"missing_info":[]}</output_contract>` + "\n")
 	b.WriteString("</career_generation_task>")
+	return b.String()
+}
+
+func parseGeneratedDocumentBundleOutput(output string) (generatedDocumentBundleOutput, error) {
+	var parsed generatedDocumentBundleOutput
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &parsed); err != nil {
+		return generatedDocumentBundleOutput{}, fmt.Errorf("parse generated document bundle json: %w", err)
+	}
+	if len(parsed.Documents) == 0 {
+		return generatedDocumentBundleOutput{}, fmt.Errorf("generated document bundle must include documents")
+	}
+	seen := map[string]bool{}
+	for i, doc := range parsed.Documents {
+		if strings.TrimSpace(doc.Path) == "" {
+			return generatedDocumentBundleOutput{}, fmt.Errorf("documents[%d].path must not be empty", i)
+		}
+		if strings.TrimSpace(doc.Markdown) == "" {
+			return generatedDocumentBundleOutput{}, fmt.Errorf("documents[%d].markdown must not be empty", i)
+		}
+		docPath := filepath.ToSlash(strings.TrimSpace(doc.Path))
+		if strings.HasPrefix(docPath, "/") || strings.HasPrefix(docPath, "..") {
+			return generatedDocumentBundleOutput{}, fmt.Errorf("documents[%d].path must be workspace-relative", i)
+		}
+		if seen[docPath] {
+			return generatedDocumentBundleOutput{}, fmt.Errorf("documents[%d].path duplicates %q", i, docPath)
+		}
+		seen[docPath] = true
+	}
+	for i, ref := range parsed.SourceRefs {
+		if err := validateWorkspaceRelPath(ref.Path); err != nil {
+			return generatedDocumentBundleOutput{}, fmt.Errorf("source_refs[%d].path: %w", i, err)
+		}
+	}
+	if strings.TrimSpace(parsed.PrimaryDocument) != "" && !seen[filepath.ToSlash(strings.TrimSpace(parsed.PrimaryDocument))] {
+		return generatedDocumentBundleOutput{}, fmt.Errorf("primary_document %q must match one of documents[].path", parsed.PrimaryDocument)
+	}
+	return parsed, nil
+}
+
+func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, outputDir string, sources []SourceRef, contents map[string]string) string {
+	var b strings.Builder
+	b.WriteString("<career_generation_bundle_task>\n")
+	b.WriteString("  <task_name>" + xmlEscape(taskName) + "</task_name>\n")
+	b.WriteString("  <output_dir>" + xmlEscape(outputDir) + "</output_dir>\n")
+	b.WriteString("  <instructions>" + xmlEscape(instructions) + "</instructions>\n")
+	b.WriteString("  <rules>Use only the provided sources. Do not invent facts, metrics, dates, companies, projects, or user experience. Return JSON only. Each documents[].path must be relative to the provided output_dir or its subdirectories.</rules>\n")
+	b.WriteString("  <sources>\n")
+	for _, ref := range sources {
+		content := contents[filepath.ToSlash(ref.Path)]
+		b.WriteString("    <source>\n")
+		b.WriteString("      <path>" + xmlEscape(ref.Path) + "</path>\n")
+		b.WriteString("      <version>" + xmlEscape(ref.Version) + "</version>\n")
+		b.WriteString("      <content>\n" + xmlEscape(limitPromptContent(content)) + "\n      </content>\n")
+		b.WriteString("    </source>\n")
+	}
+	b.WriteString("  </sources>\n")
+	b.WriteString(`  <output_contract>{"title":"...","primary_document":"项目专项/example.md","documents":[{"path":"项目专项/example.md","title":"...","markdown":"..."}],"source_refs":[{"path":"...","version":"...","excerpt":"...","evidence_spans":["..."]}],"risk_flags":[],"missing_info":[]}</output_contract>` + "\n")
+	b.WriteString("</career_generation_bundle_task>")
 	return b.String()
 }

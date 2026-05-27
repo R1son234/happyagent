@@ -180,11 +180,6 @@ func (w *Workspace) writeExperienceReviewLibrary(runCtx context.Context, ctx Rev
 	if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
 		return nil, err
 	}
-	projectPaths, err := w.writeProjectQADocuments(ctx, now)
-	if err != nil {
-		return nil, err
-	}
-	paths = append(paths, projectPaths...)
 	if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
 		return nil, err
 	}
