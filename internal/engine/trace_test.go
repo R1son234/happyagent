@@ -12,34 +12,36 @@ func TestBuildRunTraceAggregatesUsageAndToolCalls(t *testing.T) {
 	startedAt := time.Unix(100, 0)
 	finishedAt := startedAt.Add(2500 * time.Millisecond)
 
-	trace := buildRunTrace(startedAt, finishedAt, []StepRecord{
-		{
-			Index: 1,
-			Actions: []Action{
-				{Type: protocol.ActionToolCall, ToolName: "file_list"},
-				{Type: protocol.ActionToolCall, ToolName: "file_read"},
+	trace := buildRunTrace(startedAt, finishedAt, LoopState{
+		Steps: []StepRecord{
+			{
+				Index: 1,
+				Actions: []Action{
+					{Type: protocol.ActionToolCall, ToolName: "file_list"},
+					{Type: protocol.ActionToolCall, ToolName: "file_read"},
+				},
+				ToolCalls: []ToolCallRecord{
+					{ToolName: "file_list", Status: protocol.ToolCallStatusSucceeded},
+					{ToolName: "file_read", Status: protocol.ToolCallStatusFailed},
+					{ToolName: "file_write", Status: protocol.ToolCallStatusUnavailable},
+					{ToolName: "final_answer", Status: protocol.ToolCallStatusBlocked},
+				},
+				ModelUsage: llm.TokenUsage{
+					PromptTokens:     10,
+					CompletionTokens: 5,
+					TotalTokens:      15,
+				},
 			},
-			ToolCalls: []ToolCallRecord{
-				{ToolName: "file_list", Status: protocol.ToolCallStatusSucceeded},
-				{ToolName: "file_read", Status: protocol.ToolCallStatusFailed},
-				{ToolName: "file_write", Status: protocol.ToolCallStatusUnavailable},
-				{ToolName: "final_answer", Status: protocol.ToolCallStatusBlocked},
-			},
-			ModelUsage: llm.TokenUsage{
-				PromptTokens:     10,
-				CompletionTokens: 5,
-				TotalTokens:      15,
-			},
-		},
-		{
-			Index: 2,
-			Actions: []Action{
-				{Type: protocol.ActionFinalAnswer, Content: "done"},
-			},
-			ModelUsage: llm.TokenUsage{
-				PromptTokens:     8,
-				CompletionTokens: 4,
-				TotalTokens:      12,
+			{
+				Index: 2,
+				Actions: []Action{
+					{Type: protocol.ActionFinalAnswer, Content: "done"},
+				},
+				ModelUsage: llm.TokenUsage{
+					PromptTokens:     8,
+					CompletionTokens: 4,
+					TotalTokens:      12,
+				},
 			},
 		},
 	}, protocol.RunStatusCompleted)

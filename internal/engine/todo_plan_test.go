@@ -91,11 +91,13 @@ func TestRunnerAppendsTodoReminderToToolResultsWhileTodosAreUnfinished(t *testin
 			tools.NewWriteTodosTool().Definition(),
 			{Name: "file_read"},
 		},
-		Hooks: RunHooks{
-			OnTodosUpdated: func(todos []tools.TodoItem) {
+		Hooks: NewHookPipeline(HookHandlerFunc{HandlerName: "test_todos", Fn: func(ctx context.Context, event HookContext) (HookDecision, error) {
+			if event.Event == HookPostToolUse && event.ToolName == tools.WriteTodosToolName {
+				todos := event.State.Todos
 				todoUpdates = append(todoUpdates, todos)
-			},
-		},
+			}
+			return HookDecision{Kind: HookDecisionContinue}, nil
+		}}),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)

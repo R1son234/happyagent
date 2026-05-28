@@ -4,13 +4,15 @@
 
 ## Features
 
-- Agent loop with structured `plan` and `execute` steps.
+- Agent loop with structured hook events, context compaction, typed recovery, and traceable `plan` and `execute` steps.
 - Profile-aware runtime with scoped prompts, tools, skills, memory strategy, output schema, and eval suite configuration.
-- Local tools for file read/search/list/patch/write/delete, controlled shell execution, TODO planning, capability discovery, and final answers.
-- MCP stdio client that registers remote tools and reads MCP resources with output bounds.
+- Local tools for file read/search/list/patch/write/delete, controlled shell execution, TODO planning, durable tasks, teammate agents, worktree isolation, capability discovery, and final answers.
+- Shell commands can run in the background with later completion notifications when `run_in_background` is set.
+- MCP stdio client that registers remote tools as `mcp__server__tool` and reads MCP resources with output bounds.
 - On-demand skill loading through `list_capabilities` and `activate_skill`.
 - Session and run persistence under `.happyagent/store/`.
 - JSON run traces with step timing, tool-call status, token usage, and error categories.
+- Agent infra traces include hook decisions, context compaction events, recovery attempts, transcript paths, child-agent runs, and mailbox/task state.
 - Eval runner for smoke, profile, and Career Copilot scenarios.
 - HappyAgent Desktop for daily local workspace use: file tree, preview, ingestion, graph data, settings, and chat runs.
 - Career Copilot workspace for maintaining a local interview library of resumes, JDs, public interview experience, project preparation, real interview records, and operation records.
@@ -198,7 +200,9 @@ cmd/
   mcpdemo/           Small local MCP server for integration checks.
 desktop/             React frontend for HappyAgent Desktop.
 internal/
+  agents/            Multi-agent teammate state, child runs, and mailbox store.
   app/               Session-oriented application layer.
+  background/        Background job notification store.
   career/            Career Copilot workspace, prompts, ingestion, and generated records.
   config/            JSON config loading and environment overrides.
   engine/            Agent loop and action execution.
@@ -206,7 +210,9 @@ internal/
   llm/               Chat model interface and Eino/OpenAI adapter.
   mcp/               MCP client, manager, tools, and resources.
   runtime/           Runtime assembly for profiles, tools, MCP, skills, and engine.
+  tasks/             Durable task graph storage and claim/update rules.
   tools/             Built-in local tools and safety boundaries.
+  worktree/          Git worktree isolation helpers.
 docs/                Architecture, usage, and eval documentation.
 examples/career/    Synthetic inputs for Career Copilot evals.
 profiles/           Runtime profile definitions.
@@ -349,7 +355,11 @@ Add a server to `happyagent.local.json`:
 }
 ```
 
-Remote tools are registered as `<serverName>__<toolName>`. MCP resources are available through `list_capabilities` and `mcp_read_resource`, with byte and list-size limits from config.
+Remote tools are registered as `mcp__<server>__<tool>`. MCP resources are available through `list_capabilities` and `mcp_read_resource`, with byte and list-size limits from config. MCP servers are connected from local config during runtime assembly; the current tool surface does not expose `mcp_connect` or `mcp_disconnect` for model-initiated runtime server changes.
+
+## Current Agent Boundaries
+
+Durable tasks and teammate agents are explicit tools. The Lead can create tasks, pass a `task_id` into `agent_task` or `agent_spawn`, and check the append-only inbox for results or permission requests. Teammates do not run an autonomous idle loop that scans the task board and self-claims work; every child run starts from an explicit Lead delegation.
 
 ## Trace And Store
 

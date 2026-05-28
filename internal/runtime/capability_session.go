@@ -37,6 +37,7 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 		MCPResourcesTruncated    bool               `json:"mcp_resources_truncated"`
 		MCPPrompts               []mcp.PromptInfo   `json:"mcp_prompts"`
 		MCPPromptsTotal          int                `json:"mcp_prompts_total"`
+		MCPServers               []mcp.ServerStatus `json:"mcp_servers"`
 	}{
 		AvailableTools: []string{},
 		Skills:         []listedSkill{},
@@ -67,6 +68,9 @@ func (s *CapabilitySession) CapabilitiesJSON() (string, error) {
 	prompts := s.listMCPPrompts()
 	payload.MCPPrompts = prompts
 	payload.MCPPromptsTotal = len(prompts)
+	if s.mcpManager != nil {
+		payload.MCPServers = s.mcpManager.ServerStatuses()
+	}
 
 	data, err := json.MarshalIndent(payload, "", "  ")
 	if err != nil {

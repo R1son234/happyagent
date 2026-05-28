@@ -548,24 +548,26 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 	cfg := s.cfg
 	s.mu.Unlock()
 	logSession, logPath := initDesktopRunLog(cfg, "organize_inbox", "inbox", "开始整理 inbox")
-	if logSession != nil {
-		defer func() {
-			runlog.Disable()
-			_ = logSession.Close()
-		}()
-	}
 	result, err := s.copilotService().ClassifyInbox(r.Context(), req)
 	if err != nil {
 		runlog.Section("Error", err.Error())
+		if logSession != nil {
+			runlog.Disable()
+			_ = logSession.Close()
+		}
 		writeError(w, err)
 		return
+	}
+	if logSession != nil {
+		runlog.Disable()
+		_ = logSession.Close()
 	}
 	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	generatedPaths, warnings := s.postProcessInboxClassification(r.Context(), ws, result.Items)
+	generatedPaths, warnings := s.postProcessInboxClassification(r.Context(), ws, result.Items, cfg)
 	status := career.RunSummaryStatusSuccess
 	if len(warnings) > 0 {
 		status = career.RunSummaryStatusPartialSuccess
@@ -723,7 +725,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, hasExperience bool) ([]string, []string) {
+func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, hasExperience bool, cfg config.Config) ([]string, []string) {
 	if !hasExperience {
 		return nil, nil
 	}
@@ -731,20 +733,22 @@ func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career
 	if err != nil {
 		return nil, []string{"复习资料库未刷新：创建 LLM 会话失败：" + err.Error()}
 	}
-	s.mu.Lock()
-	cfg := s.cfg
-	s.mu.Unlock()
 	timeout := time.Duration(cfg.Engine.RunTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 180 * time.Second
 	}
+	subLog, _ := initDesktopRunLog(cfg, "generate_review_library", "post_process", "生成复习资料库题库")
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	result, err := ws.GenerateReviewLibraryWithGenerator(runCtx, time.Now(), &career.LLMReviewQuestionBankGenerator{
 		App:       s.app,
 		Config:    cfg,
 		SessionID: session.ID,
 	})
+	cancel()
+	if subLog != nil {
+		runlog.Disable()
+		_ = subLog.Close()
+	}
 	if err != nil {
 		return nil, []string{"复习资料库未刷新：" + err.Error()}
 	}
@@ -928,7 +932,7 @@ func initDesktopRunLog(cfg config.Config, profile string, sessionID string, inpu
 	return session, session.Path()
 }
 
-func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.Workspace, items []career.PendingInboxItem) ([]string, []string) {
+func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.Workspace, items []career.PendingInboxItem, cfg config.Config) ([]string, []string) {
 	hasJD := false
 	hasResume := false
 	hasExperience := false
@@ -948,7 +952,7 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 	var generatedPaths []string
 	var warnings []string
 	if hasExperience {
-		paths, generatedWarnings := s.refreshReviewLibraryAfterIngest(ctx, ws, hasExperience)
+		paths, generatedWarnings := s.refreshReviewLibraryAfterIngest(ctx, ws, hasExperience, cfg)
 		generatedPaths = append(generatedPaths, paths...)
 		warnings = append(warnings, generatedWarnings...)
 	}
@@ -958,13 +962,23 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 		if strings.TrimSpace(meta.ActiveProject) != "" {
 			projectName = strings.TrimSuffix(filepath.Base(meta.ActiveProject), filepath.Ext(meta.ActiveProject))
 		}
+		subLog, _ := initDesktopRunLog(cfg, "generate_project_pack", "post_process", "生成项目专项")
 		projectPack, projectErr := s.copilotService().GenerateProjectPack(ctx, career.GenerateProjectPackRequest{ProjectName: projectName})
+		if subLog != nil {
+			runlog.Disable()
+			_ = subLog.Close()
+		}
 		if projectErr != nil {
 			warnings = append(warnings, "项目专项未生成："+projectErr.Error())
 		} else if projectPack.Path != "" {
 			generatedPaths = append(generatedPaths, projectPack.Path)
 		}
-		battlePack, battleErr := s.copilotService().GenerateBattlePack(ctx, career.GenerateBattlePackRequest{JDPath: meta.ActiveJD})
+		subLog2, _ := initDesktopRunLog(cfg, "generate_battle_pack", "post_process", "生成面试作战包")
+		battlePack, battleErr := s.copilotService().GenerateBattlePack(ctx, career.GenerateBattlePackRequest{JDPath: meta.ActiveJD, SourcePaths: []string{meta.CurrentResume}})
+		if subLog2 != nil {
+			runlog.Disable()
+			_ = subLog2.Close()
+		}
 		if battleErr != nil {
 			warnings = append(warnings, "面试作战包未生成："+battleErr.Error())
 		} else if battlePack.Path != "" {

@@ -6,6 +6,8 @@ import (
 	"log"
 	"strings"
 
+	"happyagent/internal/agents"
+	"happyagent/internal/background"
 	"happyagent/internal/engine"
 	"happyagent/internal/mcp"
 	"happyagent/internal/memory"
@@ -13,8 +15,10 @@ import (
 	"happyagent/internal/policy"
 	"happyagent/internal/profile"
 	"happyagent/internal/skills"
+	"happyagent/internal/tasks"
 	"happyagent/internal/tools"
 	"happyagent/internal/validator"
+	"happyagent/internal/worktree"
 )
 
 type RunRequest struct {
@@ -30,6 +34,8 @@ type RunRequest struct {
 	OnToolCallStart func(toolName string)
 	OnToolCallEnd   func(toolName string, succeeded bool)
 	OnTodosUpdated  func(todos []tools.TodoItem)
+	ChildAgentID    string
+	ChildTaskID     string
 }
 
 type RunResult struct {
@@ -50,6 +56,10 @@ type Runtime struct {
 	skillLoader         *skills.Loader
 	profileDir          string
 	memoryStore         *memory.LongTermStore
+	taskStore           *tasks.Store
+	agentStore          *agents.Store
+	backgroundStore     *background.Store
+	worktreeManager     *worktree.Manager
 }
 
 func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
@@ -75,6 +85,12 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
+	taskProvider := runtimeTaskProvider{store: r.taskStore}
+	agentProvider := runtimeAgentProvider{runtime: r, parent: req, prepared: prepared, toolDefs: toolDefs}
+	ctx = tools.WithTaskProvider(ctx, taskProvider)
+	ctx = tools.WithAgentProvider(ctx, agentProvider)
+	ctx = tools.WithWorktreeProvider(ctx, runtimeWorktreeProvider{manager: r.worktreeManager})
+	ctx = tools.WithBackgroundStore(ctx, r.backgroundStore)
 
 	result, err := r.runner.Run(ctx, engine.RunInput{
 		Input:          req.Input,
@@ -85,14 +101,7 @@ func (r *Runtime) Run(ctx context.Context, req RunRequest) (RunResult, error) {
 			MaxObservationBytes: r.maxObservationBytes,
 			Offload:             prepared.offload,
 		},
-		Hooks: engine.RunHooks{
-			BeforeToolCall:      prepared.beforeToolCall(recorder),
-			ValidateFinalAnswer: prepared.validateFinalAnswer(recorder),
-			OnStepStart:         req.OnStepStart,
-			OnToolCallStart:     req.OnToolCallStart,
-			OnToolCallEnd:       req.OnToolCallEnd,
-			OnTodosUpdated:      req.OnTodosUpdated,
-		},
+		Hooks: prepared.hookPipeline(req, recorder),
 	})
 	if err != nil {
 		recorder.Add("run_error", err.Error(), map[string]string{
@@ -154,6 +163,9 @@ type preparedRun struct {
 	outputSchema   string
 	policy         *policy.Engine
 	offload        engine.OffloadConfig
+	policyRules    []policy.Rule
+	background     *background.Store
+	agentStore     *agents.Store
 }
 
 func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
@@ -164,6 +176,8 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		skillLoader:  baseSkillLoader,
 		policy:       policy.New(req.ApprovedTools, nil),
 		offload:      r.offload,
+		background:   r.backgroundStore,
+		agentStore:   r.agentStore,
 	}
 	prepared.offload.RunID = req.RunID
 	if req.ProfileName == "" {
@@ -187,6 +201,12 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 			prepared.outputSchema = strings.TrimSpace(string(resolved.OutputSchema))
 		}
 	}
+	if len(resolved.PolicyRules) > 0 {
+		if err := json.Unmarshal(resolved.PolicyRules, &prepared.policyRules); err != nil {
+			return preparedRun{}, err
+		}
+	}
+	prepared.policy = policy.New(req.ApprovedTools, nil, prepared.policyRules...)
 	memoryResult := memory.Build(req.History, parseMemoryStrategy(resolved.MemoryStrategy))
 	prepared.runtimeContext = assembleRuntimeContext(memoryResult, req.MemorySnapshot)
 	return prepared, nil
@@ -202,42 +222,140 @@ func filterToolDefinitions(defs []tools.Definition, allowed map[string]struct{})
 	return filtered
 }
 
-func (p preparedRun) beforeToolCall(recorder *observe.Recorder) func(ctx context.Context, action engine.Action, input *engine.RunInput) (string, bool, error) {
-	return func(ctx context.Context, action engine.Action, input *engine.RunInput) (string, bool, error) {
-		for _, def := range input.ToolDefs {
-			if def.Name != action.ToolName {
-				continue
-			}
-			decision, reason := p.policy.Decide(def)
-			if decision == policy.DecisionAllow {
-				recorder.Add("tool_allowed", "tool allowed", map[string]string{"tool": def.Name})
-				return "", false, nil
-			}
-			recorder.Add("tool_denied", reason, map[string]string{
-				"tool":     def.Name,
-				"decision": string(decision),
-			})
-			return "tool error: " + reason, true, nil
+func (p preparedRun) hookPipeline(req RunRequest, recorder *observe.Recorder) engine.HookPipeline {
+	return engine.NewHookPipeline(
+		engine.HookHandlerFunc{HandlerName: "runtime_callbacks", Fn: runtimeCallbackHook(req)},
+		engine.HookHandlerFunc{HandlerName: "background_notifications", Fn: p.backgroundNotificationHook()},
+		engine.HookHandlerFunc{HandlerName: "policy", Fn: p.policyHook(req, recorder)},
+		engine.HookHandlerFunc{HandlerName: "output_validator", Fn: p.finalAnswerHook(recorder)},
+	)
+}
+
+func (p preparedRun) backgroundNotificationHook() func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+	return func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+		_ = ctx
+		if event.Event != engine.HookBeforeModelCall || p.background == nil {
+			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
 		}
-		return "", false, nil
+		jobs := p.background.UnconsumedFinished()
+		if len(jobs) == 0 {
+			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+		}
+		data, err := json.MarshalIndent(jobs, "", "  ")
+		if err != nil {
+			return engine.HookDecision{}, err
+		}
+		return engine.HookDecision{
+			Kind:        engine.HookDecisionInjectMessage,
+			MessageRole: "system",
+			Message:     "<background_notifications>\n" + string(data) + "\n</background_notifications>",
+			Reason:      "background jobs finished",
+		}, nil
 	}
 }
 
-func (p preparedRun) validateFinalAnswer(recorder *observe.Recorder) func(content string) error {
-	return func(content string) error {
-		if err := validator.ValidateOutput(p.outputSchema, content); err != nil {
-			recorder.Add("output_validation_failed", err.Error(), map[string]string{
-				"schema": p.outputSchema,
+func runtimeCallbackHook(req RunRequest) func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+	return func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+		_ = ctx
+		switch event.Event {
+		case engine.HookBeforeModelCall:
+			if req.OnStepStart != nil {
+				req.OnStepStart(event.StepIndex)
+			}
+		case engine.HookPreToolUse:
+			if req.OnToolCallStart != nil {
+				req.OnToolCallStart(event.ToolName)
+			}
+		case engine.HookPostToolUse:
+			if req.OnToolCallEnd != nil {
+				req.OnToolCallEnd(event.ToolName, event.Err == nil)
+			}
+			if event.ToolName == tools.WriteTodosToolName && req.OnTodosUpdated != nil && event.State != nil {
+				req.OnTodosUpdated(event.State.Todos)
+			}
+		}
+		return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+	}
+}
+
+func (p preparedRun) policyHook(req RunRequest, recorder *observe.Recorder) func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+	return func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+		_ = ctx
+		if event.Event != engine.HookPreToolUse || event.ToolDef == nil || event.Action == nil {
+			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+		}
+		decision, reason := p.policy.DecideRequest(policy.Request{
+			Tool:    *event.ToolDef,
+			Args:    event.Action.Arguments,
+			Profile: p.profileName,
+		})
+		if decision == policy.DecisionAllow || decision == policy.DecisionPassthrough {
+			recorder.Add("tool_allowed", "tool allowed", map[string]string{"tool": event.ToolDef.Name})
+			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+		}
+		recorder.Add("tool_denied", reason, map[string]string{
+			"tool":     event.ToolDef.Name,
+			"decision": string(decision),
+		})
+		if decision == policy.DecisionAsk && req.ChildAgentID != "" && p.agentStore != nil {
+			_, _ = p.agentStore.AppendMessage(agents.MailboxMessage{
+				From:    req.ChildAgentID,
+				To:      leadAgentID,
+				Kind:    "permission_request",
+				Content: permissionRequestContent(event.ToolDef.Name, event.Action.Arguments, reason, req.ChildTaskID),
 			})
-			return err
+		}
+		return engine.HookDecision{
+			Kind:        engine.HookDecisionBlockWithObservation,
+			Observation: "tool error: " + reason,
+			Reason:      reason,
+		}, nil
+	}
+}
+
+func (p preparedRun) finalAnswerHook(recorder *observe.Recorder) func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+	return func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+		_ = ctx
+		if event.Event != engine.HookBeforeFinalAnswer {
+			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+		}
+		if err := validator.ValidateOutput(p.outputSchema, event.Content); err != nil {
+			recorder.Add("output_validation_failed", err.Error(), map[string]string{"schema": p.outputSchema})
+			return engine.HookDecision{
+				Kind:        engine.HookDecisionBlockWithObservation,
+				Observation: err.Error(),
+				Reason:      err.Error(),
+			}, nil
 		}
 		if p.outputSchema != "" {
-			recorder.Add("output_validation_passed", "output schema validated", map[string]string{
-				"schema": p.outputSchema,
-			})
+			recorder.Add("output_validation_passed", "output schema validated", map[string]string{"schema": p.outputSchema})
 		}
-		return nil
+		return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
 	}
+}
+
+func permissionRequestContent(toolName string, args json.RawMessage, reason string, taskID string) string {
+	payload := map[string]string{
+		"tool":             toolName,
+		"argument_summary": truncateString(string(args), 500),
+		"risk_reason":      reason,
+	}
+	if taskID != "" {
+		payload["task_id"] = taskID
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return reason
+	}
+	return string(data)
+}
+
+func truncateString(value string, max int) string {
+	value = strings.TrimSpace(value)
+	if max <= 0 || len(value) <= max {
+		return value
+	}
+	return value[:max] + "...[truncated]"
 }
 
 func parseMemoryStrategy(raw json.RawMessage) memory.Strategy {

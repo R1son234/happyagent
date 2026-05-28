@@ -31,7 +31,7 @@ func NewToolAdapter(client *Client, tool *sdk.Tool) (*ToolAdapter, error) {
 		client:     client,
 		remoteName: tool.Name,
 		definition: tools.Definition{
-			Name:        client.name + "__" + tool.Name,
+			Name:        CanonicalToolName(client.name, tool.Name),
 			Description: tool.Description,
 			InputSchema: string(schemaBytes),
 			Dangerous:   client.toolDangerous(tool.Name),

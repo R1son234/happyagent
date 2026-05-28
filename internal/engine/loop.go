@@ -27,10 +27,8 @@ const defaultMaxObservationBytes = 8 * 1024
 
 func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopState) (PlanStepResult, error) {
 	startedAt := time.Now()
-	resp, err := r.client.Chat(ctx, llm.ChatRequest{
-		Messages: BuildMessages(input, *state),
-		Tools:    BuildToolSpecs(input.ToolDefs),
-	})
+	manageContext(state, input)
+	resp, err := r.chatWithRecovery(ctx, input, state)
 	if err != nil {
 		return PlanStepResult{}, fmt.Errorf("chat with model: %w", err)
 	}
@@ -42,12 +40,23 @@ func (r *loopRunner) planStep(ctx context.Context, input RunInput, state *LoopSt
 		var action Action
 		action, err = ParseAction(resp.Message.Content)
 		if err != nil {
-			action = Action{
-				Type:    actionInvalidResponse,
-				Content: invalidResponseMessage,
+			recovered, recoveredActions, ok, recoverErr := r.recoverInvalidStructuredResponse(ctx, input, state, resp, err)
+			if recoverErr != nil {
+				return PlanStepResult{}, recoverErr
 			}
+			if ok {
+				resp = recovered
+				actions = recoveredActions
+			} else {
+				action = Action{
+					Type:    actionInvalidResponse,
+					Content: invalidResponseMessage,
+				}
+				actions = []Action{action}
+			}
+		} else {
+			actions = []Action{action}
 		}
-		actions = []Action{action}
 	}
 
 	state.Messages = append(state.Messages, MessageEnvelope{
@@ -73,6 +82,13 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 	}
 
 	if len(actions) == 1 && actions[0].Type == protocol.ActionFinalAnswer {
+		if decision, err := input.Hooks.Emit(ctx, HookContext{Event: HookBeforeFinalAnswer, RunInput: input, State: state, Action: &actions[0], Content: actions[0].Content}); err != nil {
+			return StepResult{}, err
+		} else if decision.Kind == HookDecisionBlockWithObservation {
+			observation := truncateObservation(decision.Observation, input.Config.MaxObservationBytes)
+			state.Messages = append(state.Messages, MessageEnvelope{Role: protocol.RoleUser, Content: observation})
+			return StepResult{Observation: observation}, nil
+		}
 		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
 			appendSystemReminder(state, reminder)
 			return StepResult{Observation: reminder}, nil
@@ -80,16 +96,6 @@ func (r *loopRunner) executeStep(ctx context.Context, state *LoopState, input *R
 		if reminder, ok := unresolvedDeliveryFailureFinalAnswerReminder(state, actions[0].Content); ok {
 			appendSystemReminder(state, reminder)
 			return StepResult{Observation: reminder}, nil
-		}
-		if input.Hooks.ValidateFinalAnswer != nil {
-			if err := input.Hooks.ValidateFinalAnswer(actions[0].Content); err != nil {
-				observation := truncateObservation(err.Error(), input.Config.MaxObservationBytes)
-				state.Messages = append(state.Messages, MessageEnvelope{
-					Role:    protocol.RoleUser,
-					Content: observation,
-				})
-				return StepResult{Observation: observation}, nil
-			}
 		}
 		return StepResult{
 			Done:   true,
@@ -172,6 +178,16 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		}, nil
 	}
 	if action.ToolName == tools.FinalAnswerToolName {
+		if decision, err := input.Hooks.Emit(ctx, HookContext{Event: HookBeforeFinalAnswer, RunInput: input, State: state, Action: &action, Content: finalAnswerContentFromAction(action)}); err != nil {
+			return toolCallOutcome{}, err
+		} else if decision.Kind == HookDecisionBlockWithObservation {
+			observation := truncateObservation(decision.Observation, input.Config.MaxObservationBytes)
+			appendToolObservation(state, action, observation)
+			return toolCallOutcome{
+				Observation: observation,
+				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
+			}, nil
+		}
 		if reminder, ok := unfinishedTodoFinalAnswerReminder(state); ok {
 			observation := truncateObservation(reminder, input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
@@ -190,32 +206,24 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}, nil
 		}
 	}
-	if input.Hooks.BeforeToolCall != nil {
-		observation, handled, err := input.Hooks.BeforeToolCall(ctx, action, input)
-		if err != nil {
-			return toolCallOutcome{}, err
-		}
-		if handled {
-			observation = truncateObservation(observation, input.Config.MaxObservationBytes)
-			appendToolObservation(state, action, observation)
-			return toolCallOutcome{
-				Observation: observation,
-				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
-			}, nil
-		}
+	toolDef := findToolDef(input.ToolDefs, action.ToolName)
+	if decision, err := input.Hooks.Emit(ctx, HookContext{Event: HookPreToolUse, RunInput: input, State: state, Action: &action, ToolDef: toolDef, ToolName: action.ToolName, StepIndex: stepIndex}); err != nil {
+		return toolCallOutcome{}, err
+	} else if decision.Kind == HookDecisionBlockWithObservation {
+		observation := truncateObservation(decision.Observation, input.Config.MaxObservationBytes)
+		appendToolObservation(state, action, observation)
+		return toolCallOutcome{
+			Observation: observation,
+			ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusBlocked},
+		}, nil
 	}
 
-	if input.Hooks.OnToolCallStart != nil {
-		input.Hooks.OnToolCallStart(action.ToolName)
-	}
 	result, err := r.registry.Execute(ctx, tools.Call{
 		Name:      action.ToolName,
 		Arguments: action.Arguments,
 	})
 	if err != nil {
-		if input.Hooks.OnToolCallEnd != nil {
-			input.Hooks.OnToolCallEnd(action.ToolName, false)
-		}
+		_, _ = input.Hooks.Emit(ctx, HookContext{Event: HookPostToolUse, RunInput: input, State: state, Action: &action, ToolDef: toolDef, ToolName: action.ToolName, StepIndex: stepIndex, Err: err})
 		observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 		appendToolObservation(state, action, observation)
 		recordDeliveryToolFailure(state, action.ToolName, protocol.ToolCallStatusFailed, observation)
@@ -227,9 +235,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	if action.ToolName == tools.WriteTodosToolName {
 		todos, err := tools.DecodeWriteTodosArguments(action.Arguments)
 		if err != nil {
-			if input.Hooks.OnToolCallEnd != nil {
-				input.Hooks.OnToolCallEnd(action.ToolName, false)
-			}
+			_, _ = input.Hooks.Emit(ctx, HookContext{Event: HookPostToolUse, RunInput: input, State: state, Action: &action, ToolDef: toolDef, ToolName: action.ToolName, StepIndex: stepIndex, Err: err})
 			observation := truncateObservation("tool error: "+err.Error(), input.Config.MaxObservationBytes)
 			appendToolObservation(state, action, observation)
 			recordDeliveryToolFailure(state, action.ToolName, protocol.ToolCallStatusFailed, observation)
@@ -239,14 +245,6 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 			}, nil
 		}
 		state.Todos = todos
-		if input.Hooks.OnTodosUpdated != nil {
-			input.Hooks.OnTodosUpdated(todos)
-		}
-	}
-	if input.Hooks.AfterToolCall != nil {
-		if err := input.Hooks.AfterToolCall(ctx, action.ToolName, nil, input); err != nil {
-			return toolCallOutcome{}, err
-		}
 	}
 	rawOutput := result.Output
 	observation := rawOutput
@@ -278,29 +276,25 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 	if action.ToolName != tools.FinalAnswerToolName && action.ToolName != tools.WriteTodosToolName {
 		observation = appendTodoProgressReminder(observation, state)
 	}
-	if action.ToolName == tools.FinalAnswerToolName && input.Hooks.ValidateFinalAnswer != nil {
-		if err := input.Hooks.ValidateFinalAnswer(rawOutput); err != nil {
-			if input.Hooks.OnToolCallEnd != nil {
-				input.Hooks.OnToolCallEnd(action.ToolName, false)
-			}
-			observation = truncateObservation(err.Error(), input.Config.MaxObservationBytes)
-			appendToolObservation(state, action, observation)
-			return toolCallOutcome{
-				Observation: observation,
-				ToolCall:    ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusFailed},
-			}, nil
-		}
-	}
 	appendToolObservation(state, action, observation)
 	clearDeliveryToolFailure(state, action.ToolName)
-	if input.Hooks.OnToolCallEnd != nil {
-		input.Hooks.OnToolCallEnd(action.ToolName, true)
+	if _, err := input.Hooks.Emit(ctx, HookContext{Event: HookPostToolUse, RunInput: input, State: state, Action: &action, ToolDef: toolDef, ToolName: action.ToolName, StepIndex: stepIndex, Observation: observation}); err != nil {
+		return toolCallOutcome{}, err
 	}
 	return toolCallOutcome{
 		Observation: observation,
 		Output:      rawOutput,
 		ToolCall:    toolCall,
 	}, nil
+}
+
+func findToolDef(defs []tools.Definition, name string) *tools.Definition {
+	for i := range defs {
+		if defs[i].Name == name {
+			return &defs[i]
+		}
+	}
+	return nil
 }
 
 func appendToolObservation(state *LoopState, action Action, observation string) {

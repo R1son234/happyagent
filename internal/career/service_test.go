@@ -153,7 +153,7 @@ func TestCopilotServiceClassifyInboxAutoConfirmsHighConfidence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, sourceRel), []byte("# 示例 JD\n岗位职责：负责示例系统。\n任职要求：熟悉示例工程。"), 0o644); err != nil {
 		t.Fatalf("write jd: %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/jd.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"包含岗位职责和任职要求。","source_excerpt":"岗位职责：负责示例系统。","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
+	runner := &fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/jd.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"包含岗位职责和任职要求。","source_excerpt":"岗位职责：负责示例系统。","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
 	result, err := service.ClassifyInbox(context.Background(), ClassifyInboxRequest{})
 	if err != nil {
@@ -188,7 +188,7 @@ func TestCopilotServiceClassifyInboxKeepsMediumPending(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, sourceRel), []byte("# 示例资料\n可能是岗位，也可能是复习笔记。"), 0o644); err != nil {
 		t.Fatalf("write mixed: %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/mixed.md","source_hash":"sha256:fake","material_type":"review_note","confidence":"medium","reason":"资料类型不够明确。","source_excerpt":"可能是岗位，也可能是复习笔记。","destination":"待确认","needs_user_confirmation":true,"questions_for_user":["这份资料要作为复习笔记还是岗位资料？"]}]}`}
+	runner := &fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/mixed.md","source_hash":"sha256:fake","material_type":"review_note","confidence":"medium","reason":"资料类型不够明确。","source_excerpt":"可能是岗位，也可能是复习笔记。","destination":"待确认","needs_user_confirmation":true,"questions_for_user":["这份资料要作为复习笔记还是岗位资料？"]}]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
 	result, err := service.ClassifyInbox(context.Background(), ClassifyInboxRequest{})
 	if err != nil {
@@ -228,7 +228,7 @@ func TestCopilotServiceClassifyInboxRejectsUnknownSourceFromLLM(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "inbox", "jd.md"), []byte("# JD\n岗位职责：示例。"), 0o644); err != nil {
 		t.Fatalf("write jd: %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/other.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"x","source_excerpt":"x","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
+	runner := &fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/other.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"x","source_excerpt":"x","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner}
 	_, err := service.ClassifyInbox(context.Background(), ClassifyInboxRequest{})
 	if err == nil || !strings.Contains(err.Error(), "unknown source_path") {
@@ -399,7 +399,7 @@ func TestCopilotServiceSplitJobDescriptionsUsesLLM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMaterial() error = %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"job_descriptions":[{"title":"平台工程师","company":"示例公司","team":"平台组","role":"工程师","responsibilities":["负责平台"],"requirements":["熟悉 Go"],"keywords":["Go"],"source_excerpt":"岗位 A：负责平台。","confidence":"high"},{"title":"数据工程师","company":"示例公司","team":"数据组","role":"工程师","responsibilities":["负责数据"],"requirements":["熟悉 SQL"],"keywords":["SQL"],"source_excerpt":"岗位 B：负责数据。","confidence":"medium"}]}`}
+	runner := &fakeStructuredTaskRunner{output: `{"job_descriptions":[{"title":"平台工程师","company":"示例公司","team":"平台组","role":"工程师","responsibilities":["负责平台"],"requirements":["熟悉 Go"],"keywords":["Go"],"source_excerpt":"岗位 A：负责平台。","confidence":"high"},{"title":"数据工程师","company":"示例公司","team":"数据组","role":"工程师","responsibilities":["负责数据"],"requirements":["熟悉 SQL"],"keywords":["SQL"],"source_excerpt":"岗位 B：负责数据。","confidence":"medium"}]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
 	result, err := service.SplitJobDescriptions(context.Background(), SplitJDRequest{SourcePath: jd.Path})
 	if err != nil {
@@ -431,7 +431,7 @@ func TestCopilotServiceGenerateProjectPackWritesGeneratedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AddMaterial() error = %v", err)
 	}
-	runner := fakeStructuredTaskRunner{output: `{"title":"示例项目专项","primary_document":"项目专项/示例项目-interview-qa.md","documents":[{"path":"项目专项/示例项目-interview-qa.md","title":"示例项目专项","markdown":"# 示例项目专项\n\n## 一句话介绍\n基于来源资料整理。\n\n## 待补证据\n- 指标待补。"}],"source_refs":[{"path":"` + resume.Path + `","version":"sha256:test","excerpt":"示例项目","evidence_spans":["示例项目"]}],"risk_flags":[],"missing_info":["指标"]}`}
+	runner := &fakeStructuredTaskRunner{output: `{"title":"示例项目专项","primary_document":"项目专项/示例项目-interview-qa.md","documents":[{"path":"项目专项/示例项目-interview-qa.md","title":"示例项目专项","markdown":"# 示例项目专项\n\n## 一句话介绍\n基于来源资料整理。\n\n## 待补证据\n- 指标待补。"}],"source_refs":[{"path":"` + resume.Path + `","version":"sha256:test","excerpt":"示例项目","evidence_spans":["示例项目"]}],"risk_flags":[],"missing_info":["指标"]}`}
 	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
 	result, err := service.GenerateProjectPack(context.Background(), GenerateProjectPackRequest{ProjectName: "示例项目", SourcePaths: []string{resume.Path}})
 	if err != nil {
@@ -452,13 +452,45 @@ func TestCopilotServiceGenerateProjectPackWritesGeneratedState(t *testing.T) {
 	}
 }
 
+func TestCopilotServiceGenerateProjectPackRepairsTruncatedBundleJSON(t *testing.T) {
+	now := time.Date(2026, 5, 25, 10, 30, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	resume, err := ws.AddMaterial(WorkspaceTypeResume, "# 简历\n\n示例项目：负责链路治理。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial() error = %v", err)
+	}
+	valid := `{"title":"示例项目专项","primary_document":"项目专项/示例项目.md","documents":[{"path":"项目专项/示例项目.md","title":"示例项目专项","markdown":"# 示例项目专项\n\n基于来源资料整理。"}],"source_refs":[{"path":"` + resume.Path + `","version":"sha256:test","excerpt":"示例项目","evidence_spans":["示例项目"]}],"risk_flags":[],"missing_info":[]}`
+	runner := &fakeStructuredTaskRunner{outputs: []string{
+		`{"title":"示例项目专项","documents":[{"path":"项目专项/示例项目.md"`,
+		valid,
+	}}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
+	result, err := service.GenerateProjectPack(context.Background(), GenerateProjectPackRequest{ProjectName: "示例项目", SourcePaths: []string{resume.Path}})
+	if err != nil {
+		t.Fatalf("GenerateProjectPack() error = %v", err)
+	}
+	if result.Path != "项目专项/示例项目.md" {
+		t.Fatalf("unexpected generated path: %s", result.Path)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected repair call after truncated JSON, got %d", len(runner.calls))
+	}
+	if !strings.Contains(runner.calls[1].Input, "previous document bundle JSON was truncated") {
+		t.Fatalf("expected repair prompt, got %q", runner.calls[1].Input)
+	}
+}
+
 func TestCopilotServiceGenerateBattlePackRequiresResumeAndJD(t *testing.T) {
 	now := time.Date(2026, 5, 25, 11, 0, 0, 0, time.UTC)
 	root := filepath.Join(t.TempDir(), "career")
 	if _, err := OpenWorkspace(root, now); err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
-	service := CopilotService{WorkspaceRoot: root, TaskRunner: fakeStructuredTaskRunner{output: `{}`}, Now: func() time.Time { return now }}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: &fakeStructuredTaskRunner{output: `{}`}, Now: func() time.Time { return now }}
 	_, err := service.GenerateBattlePack(context.Background(), GenerateBattlePackRequest{})
 	if err == nil || !strings.Contains(err.Error(), "requires at least one source") {
 		t.Fatalf("expected missing source error, got %v", err)
@@ -533,13 +565,21 @@ func TestCopilotServiceConfirmNewResumeMarksBattlePackStale(t *testing.T) {
 }
 
 type fakeStructuredTaskRunner struct {
-	output string
+	output  string
+	outputs []string
+	calls   []StructuredTaskRequest
 }
 
-func (r fakeStructuredTaskRunner) RunStructuredTask(ctx context.Context, req StructuredTaskRequest) (StructuredTaskResult, error) {
+func (r *fakeStructuredTaskRunner) RunStructuredTask(ctx context.Context, req StructuredTaskRequest) (StructuredTaskResult, error) {
 	_ = ctx
+	r.calls = append(r.calls, req)
+	output := r.output
+	if len(r.outputs) > 0 {
+		output = r.outputs[0]
+		r.outputs = r.outputs[1:]
+	}
 	return StructuredTaskResult{
-		Output:      r.output,
+		Output:      output,
 		Model:       "fake-model",
 		RunID:       "fake-run",
 		SessionID:   "fake-session",

@@ -16,24 +16,29 @@ type ResourceInfo struct {
 	Description string `json:"description"`
 }
 
+type ServerStatus struct {
+	Name      string `json:"name"`
+	Connected bool   `json:"connected"`
+}
+
 type Manager struct {
-	clients              map[string]*Client
-	maxListedResources   int
-	resources            map[string]ResourceInfo
-	tools                []tools.Tool
-	maxResourceBytes     int
-	prompts              map[string]PromptInfo
-	maxPromptArgsBytes   int
+	clients            map[string]*Client
+	maxListedResources int
+	resources          map[string]ResourceInfo
+	tools              []tools.Tool
+	maxResourceBytes   int
+	prompts            map[string]PromptInfo
+	maxPromptArgsBytes int
 }
 
 func NewManager(ctx context.Context, cfg config.MCPConfig) (*Manager, error) {
 	manager := &Manager{
-		clients:              make(map[string]*Client),
-		maxListedResources:   cfg.MaxListedResources,
-		resources:           make(map[string]ResourceInfo),
-		maxResourceBytes:     cfg.MaxResourceBytes,
-		prompts:              make(map[string]PromptInfo),
-		maxPromptArgsBytes:   cfg.MaxPromptArgsBytes,
+		clients:            make(map[string]*Client),
+		maxListedResources: cfg.MaxListedResources,
+		resources:          make(map[string]ResourceInfo),
+		maxResourceBytes:   cfg.MaxResourceBytes,
+		prompts:            make(map[string]PromptInfo),
+		maxPromptArgsBytes: cfg.MaxPromptArgsBytes,
 	}
 
 	for _, server := range cfg.Servers {
@@ -115,7 +120,7 @@ func (m *Manager) loadPrompts(ctx context.Context, client *Client) error {
 				Required:    arg.Required,
 			})
 		}
-		m.prompts[client.name+"__"+prompt.Name] = PromptInfo{
+		m.prompts[CanonicalPromptName(client.name, prompt.Name)] = PromptInfo{
 			ServerName:  client.name,
 			Name:        prompt.Name,
 			Description: prompt.Description,
@@ -188,6 +193,15 @@ func (m *Manager) ListResources() []ResourceInfo {
 	for _, resource := range m.resources {
 		out = append(out, resource)
 	}
+	return out
+}
+
+func (m *Manager) ServerStatuses() []ServerStatus {
+	out := make([]ServerStatus, 0, len(m.clients))
+	for name := range m.clients {
+		out = append(out, ServerStatus{Name: name, Connected: true})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 

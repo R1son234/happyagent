@@ -56,7 +56,7 @@ func (c *Client) toolDangerous(remoteName string) bool {
 		return true
 	}
 	_, safeByRemoteName := c.safeTools[remoteName]
-	_, safeByQualifiedName := c.safeTools[c.name+"__"+remoteName]
+	_, safeByQualifiedName := c.safeTools[CanonicalToolName(c.name, remoteName)]
 	return !safeByRemoteName && !safeByQualifiedName
 }
 
@@ -68,10 +68,9 @@ func safeToolSet(serverName string, values []string) map[string]struct{} {
 			continue
 		}
 		set[value] = struct{}{}
-		if strings.Contains(value, "__") {
-			continue
+		if !strings.Contains(value, "__") {
+			set[CanonicalToolName(serverName, value)] = struct{}{}
 		}
-		set[serverName+"__"+value] = struct{}{}
 	}
 	return set
 }

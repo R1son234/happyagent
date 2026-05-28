@@ -854,10 +854,12 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
 		return GeneratedDocumentResult{}, err
 	}
-	result, err := s.structuredTaskRunner().RunStructuredTask(ctx, StructuredTaskRequest{
+	runner := s.structuredTaskRunner()
+	prompt := buildGeneratedDocumentBundlePrompt(spec.TaskName, spec.Instructions, spec.OutputDir, sources, contents)
+	result, err := runner.RunStructuredTask(ctx, StructuredTaskRequest{
 		TaskName:      spec.TaskName,
 		PromptVersion: spec.PromptVersion,
-		Input:         buildGeneratedDocumentBundlePrompt(spec.TaskName, spec.Instructions, spec.OutputDir, sources, contents),
+		Input:         prompt,
 		SourcePaths:   sourceRefPaths(sources),
 	})
 	if err != nil {
@@ -866,8 +868,24 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 	}
 	parsed, err := parseGeneratedDocumentBundleOutput(result.Output)
 	if err != nil {
-		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error(), RawOutput: result.Output})
-		return GeneratedDocumentResult{}, err
+		if isIncompleteJSONError(err) {
+			repaired, repairErr := runner.RunStructuredTask(ctx, StructuredTaskRequest{
+				TaskName:      spec.TaskName,
+				PromptVersion: spec.PromptVersion,
+				Input:         buildGeneratedDocumentBundleRepairPrompt(prompt, result.Output),
+				SourcePaths:   sourceRefPaths(sources),
+			})
+			if repairErr == nil {
+				result = repaired
+				parsed, err = parseGeneratedDocumentBundleOutput(result.Output)
+			} else {
+				err = fmt.Errorf("%w; repair failed: %v", err, repairErr)
+			}
+		}
+		if err != nil {
+			_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error(), RawOutput: result.Output})
+			return GeneratedDocumentResult{}, err
+		}
 	}
 	var generatedPaths []string
 	var records []GeneratedArtifactRecord

@@ -3,11 +3,11 @@ package llm
 import "happyagent/internal/protocol"
 
 type Message struct {
-	Role             string           `json:"role"`
-	Content          string           `json:"content"`
-	ReasoningContent string           `json:"reasoning_content,omitempty"`
-	ToolCallID       string           `json:"tool_call_id,omitempty"`
-	ToolName         string           `json:"tool_name,omitempty"`
+	Role             string            `json:"role"`
+	Content          string            `json:"content"`
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
+	ToolName         string            `json:"tool_name,omitempty"`
 	Actions          []protocol.Action `json:"actions,omitempty"`
 }
 
@@ -23,9 +23,10 @@ type ChatRequest struct {
 }
 
 type ChatResponse struct {
-	Message Message          `json:"message"`
-	Actions []protocol.Action `json:"actions,omitempty"`
-	Usage   TokenUsage       `json:"usage,omitempty"`
+	Message      Message           `json:"message"`
+	Actions      []protocol.Action `json:"actions,omitempty"`
+	Usage        TokenUsage        `json:"usage,omitempty"`
+	FinishReason string            `json:"finish_reason,omitempty"`
 }
 
 type TokenUsage struct {

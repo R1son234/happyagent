@@ -82,7 +82,7 @@ Expected signals:
 
 - MCP resources appear in `list_capabilities`.
 - `mcp_read_resource` returns bounded resource content.
-- The remote tool is callable as `demo__repeat`.
+- The remote tool is callable as `mcp__demo__repeat`.
 
 ## Career Workspace
 

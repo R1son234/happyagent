@@ -3,7 +3,9 @@ package career
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strings"
 	"time"
@@ -110,7 +112,7 @@ func structuredTaskSystemPrompt(taskName string, promptVersion string) string {
     - Never activate skills.
     - Never inspect or list directories.
     - Never ask for additional files when the input already contains the material.
-    - Return the requested JSON only, with no markdown fences and no extra prose.
+    - Reply with exactly one JSON action object: {"type":"final_answer","content":"<the requested JSON here>"}. No markdown fences, no extra prose.
     - If the input is insufficient, still return the best valid JSON allowed by the output contract and mark uncertainty in the contract fields.
   </rules>
 </structured_task>`, xmlEscape(taskName), xmlEscape(promptVersion))
@@ -347,6 +349,17 @@ func parseGeneratedDocumentBundleOutput(output string) (generatedDocumentBundleO
 	return parsed, nil
 }
 
+func isIncompleteJSONError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unexpected end of json input") || strings.Contains(message, "unexpected eof")
+}
+
 func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, outputDir string, sources []SourceRef, contents map[string]string) string {
 	var b strings.Builder
 	b.WriteString("<career_generation_bundle_task>\n")
@@ -366,5 +379,16 @@ func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, ou
 	b.WriteString("  </sources>\n")
 	b.WriteString(`  <output_contract>{"title":"...","primary_document":"项目专项/example.md","documents":[{"path":"项目专项/example.md","title":"...","markdown":"..."}],"source_refs":[{"path":"...","version":"...","excerpt":"...","evidence_spans":["..."]}],"risk_flags":[],"missing_info":[]}</output_contract>` + "\n")
 	b.WriteString("</career_generation_bundle_task>")
+	return b.String()
+}
+
+func buildGeneratedDocumentBundleRepairPrompt(originalPrompt string, partialOutput string) string {
+	var b strings.Builder
+	b.WriteString("<career_generation_bundle_repair>\n")
+	b.WriteString("  <task>The previous document bundle JSON was truncated or invalid. Return the complete valid JSON object only.</task>\n")
+	b.WriteString("  <rules>Do not return markdown fences, explanations, or a suffix-only continuation. Reconstruct the full JSON document bundle using the original task and the partial output as context.</rules>\n")
+	b.WriteString("  <original_task>\n" + xmlEscape(originalPrompt) + "\n  </original_task>\n")
+	b.WriteString("  <partial_output>\n" + xmlEscape(partialOutput) + "\n  </partial_output>\n")
+	b.WriteString("</career_generation_bundle_repair>")
 	return b.String()
 }

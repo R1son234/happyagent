@@ -11,6 +11,7 @@ type Profile struct {
 	MemoryStrategy json.RawMessage `json:"memory_strategy,omitempty"`
 	OutputSchema   json.RawMessage `json:"output_schema,omitempty"`
 	EvalSuite      json.RawMessage `json:"eval_suite,omitempty"`
+	PolicyRules    json.RawMessage `json:"policy_rules,omitempty"`
 }
 
 type ResolvedProfile struct {

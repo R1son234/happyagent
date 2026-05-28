@@ -35,7 +35,7 @@ func TestManagerRegistersToolsAndReadsResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RegisterTools() error = %v", err)
 	}
-	if len(defs) != 1 || defs[0].Name != "helper__repeat" {
+	if len(defs) != 1 || defs[0].Name != "mcp__helper__repeat" {
 		t.Fatalf("unexpected tool defs: %+v", defs)
 	}
 	if !defs[0].Dangerous {
@@ -43,7 +43,7 @@ func TestManagerRegistersToolsAndReadsResources(t *testing.T) {
 	}
 
 	result, err := registry.Execute(ctx, tools.Call{
-		Name:      "helper__repeat",
+		Name:      "mcp__helper__repeat",
 		Arguments: []byte(`{"text":"hello"}`),
 	})
 	if err != nil {

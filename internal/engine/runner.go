@@ -33,19 +33,30 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 	state := LoopState{}
 	currentInput := input
 	startedAt := time.Now()
+	if _, err := currentInput.Hooks.Emit(ctx, HookContext{Event: HookRunStart, RunInput: &currentInput, State: &state, StartedAt: startedAt}); err != nil {
+		return RunResult{}, err
+	}
+	if _, err := currentInput.Hooks.Emit(ctx, HookContext{Event: HookUserPromptSubmit, RunInput: &currentInput, State: &state, Content: currentInput.Input}); err != nil {
+		return RunResult{}, err
+	}
 
 	for step := 0; step < r.loop.maxSteps; step++ {
-		if currentInput.Hooks.OnStepStart != nil {
-			currentInput.Hooks.OnStepStart(step + 1)
+		if _, err := currentInput.Hooks.Emit(ctx, HookContext{Event: HookBeforeModelCall, RunInput: &currentInput, State: &state, StepIndex: step + 1}); err != nil {
+			return RunResult{}, err
 		}
 		planResult, err := r.loop.planStep(ctx, currentInput, &state)
 		if err != nil {
+			_, _ = currentInput.Hooks.Emit(ctx, HookContext{Event: HookRunError, RunInput: &currentInput, State: &state, StepIndex: step + 1, Err: err})
+			return RunResult{}, err
+		}
+		if _, err := currentInput.Hooks.Emit(ctx, HookContext{Event: HookAfterModelCall, RunInput: &currentInput, State: &state, StepIndex: step + 1}); err != nil {
 			return RunResult{}, err
 		}
 
 		executionStartedAt := time.Now()
 		result, err := r.loop.executeStep(ctx, &state, &currentInput, planResult.Actions, step+1)
 		if err != nil {
+			_, _ = currentInput.Hooks.Emit(ctx, HookContext{Event: HookRunError, RunInput: &currentInput, State: &state, StepIndex: step + 1, Err: err})
 			return RunResult{}, err
 		}
 		executionDuration := time.Since(executionStartedAt)
@@ -62,11 +73,17 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 		runlog.Step(step+1, planResult.Actions, result.Observation)
 
 		if result.Done {
+			if decision, err := currentInput.Hooks.Emit(ctx, HookContext{Event: HookStop, RunInput: &currentInput, State: &state, StepIndex: step + 1, Content: result.Output}); err != nil {
+				return RunResult{}, err
+			} else if decision.Kind == HookDecisionForceContinue {
+				appendSystemReminder(&state, decision.Message)
+				continue
+			}
 			finishedAt := time.Now()
 			return RunResult{
 				Output: result.Output,
 				Steps:  state.Steps,
-				Trace:  buildRunTrace(startedAt, finishedAt, state.Steps, protocol.RunStatusCompleted),
+				Trace:  buildRunTrace(startedAt, finishedAt, state, protocol.RunStatusCompleted),
 			}, nil
 		}
 	}
@@ -74,11 +91,12 @@ func (r *runner) Run(ctx context.Context, input RunInput) (RunResult, error) {
 	finishedAt := time.Now()
 	return RunResult{
 		Steps: state.Steps,
-		Trace: buildRunTrace(startedAt, finishedAt, state.Steps, "max_steps_exceeded"),
+		Trace: buildRunTrace(startedAt, finishedAt, state, "max_steps_exceeded"),
 	}, fmt.Errorf("loop stopped after reaching max steps (%d)", r.loop.maxSteps)
 }
 
-func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord, terminationReason string) RunTrace {
+func buildRunTrace(startedAt time.Time, finishedAt time.Time, state LoopState, terminationReason string) RunTrace {
+	steps := state.Steps
 	trace := RunTrace{
 		StartedAt:                  startedAt,
 		FinishedAt:                 finishedAt,
@@ -90,6 +108,10 @@ func buildRunTrace(startedAt time.Time, finishedAt time.Time, steps []StepRecord
 		SuccessfulToolCallsByName:  map[string]int{},
 		OffloadedToolResultsByName: map[string]int{},
 	}
+	trace.HookDecisions = append([]HookDecisionRecord(nil), state.HookDecisions...)
+	trace.CompactionEvents = append([]CompactionEvent(nil), state.CompactionEvents...)
+	trace.RecoveryAttempts = append([]RecoveryAttempt(nil), state.RecoveryAttempts...)
+	trace.TranscriptPath = state.TranscriptPath
 
 	for _, step := range steps {
 		trace.PromptTokens += step.ModelUsage.PromptTokens

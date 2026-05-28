@@ -5,13 +5,17 @@ import (
 	"fmt"
 	"time"
 
+	"happyagent/internal/agents"
+	"happyagent/internal/background"
 	"happyagent/internal/config"
 	"happyagent/internal/engine"
 	"happyagent/internal/llm"
 	"happyagent/internal/mcp"
 	"happyagent/internal/memory"
 	"happyagent/internal/skills"
+	"happyagent/internal/tasks"
 	"happyagent/internal/tools"
+	"happyagent/internal/worktree"
 )
 
 const defaultProfileDir = "profiles"
@@ -73,6 +77,18 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 	skillLoader := skills.NewLoader(cfg.Skills.Dir)
 
 	memStore := memory.NewLongTermStore(".happyagent/memory")
+	taskStore, err := tasks.NewStore(cfg.Tools.RootDir)
+	if err != nil {
+		return nil, err
+	}
+	agentStore, err := agents.NewStore(cfg.Tools.RootDir)
+	if err != nil {
+		return nil, err
+	}
+	worktreeManager, err := worktree.NewManager(cfg.Tools.RootDir)
+	if err != nil {
+		return nil, err
+	}
 	memSave := tools.NewMemorySaveTool(memStore)
 	registry.MustRegister(memSave)
 	defs = append(defs, memSave.Definition())
@@ -92,10 +108,14 @@ func (b *Builder) Build(cfg config.Config) (*Runtime, error) {
 			Dir:      cfg.Engine.OffloadDir,
 			RootDir:  cfg.Tools.RootDir,
 		},
-		mcpManager:  manager,
-		skillLoader: skillLoader,
-		profileDir:  b.profileDir,
-		memoryStore: memStore,
+		mcpManager:      manager,
+		skillLoader:     skillLoader,
+		profileDir:      b.profileDir,
+		memoryStore:     memStore,
+		taskStore:       taskStore,
+		agentStore:      agentStore,
+		backgroundStore: background.NewStore(cfg.Tools.RootDir),
+		worktreeManager: worktreeManager,
 	}
 	registry.MustRegister(tools.NewActivateSkillTool(func(ctx context.Context) tools.ActivateSkillProvider {
 		return tools.ActivateSkillProviderFromContext(ctx)
@@ -118,6 +138,27 @@ func registerBuiltinTools(registry *tools.Registry, cfg config.ToolsConfig, webC
 	writeTodos := tools.NewWriteTodosTool()
 	registry.MustRegister(writeTodos)
 	registered = append(registered, writeTodos.Definition())
+
+	for _, taskTool := range tools.NewTaskTools(func(ctx context.Context) tools.TaskProvider {
+		return tools.TaskProviderFromContext(ctx)
+	}) {
+		registry.MustRegister(taskTool)
+		registered = append(registered, taskTool.Definition())
+	}
+
+	for _, agentTool := range tools.NewAgentTools(func(ctx context.Context) tools.AgentProvider {
+		return tools.AgentProviderFromContext(ctx)
+	}) {
+		registry.MustRegister(agentTool)
+		registered = append(registered, agentTool.Definition())
+	}
+
+	for _, worktreeTool := range tools.NewWorktreeTools(func(ctx context.Context) tools.WorktreeProvider {
+		return tools.WorktreeProviderFromContext(ctx)
+	}) {
+		registry.MustRegister(worktreeTool)
+		registered = append(registered, worktreeTool.Definition())
+	}
 
 	fileRead, err := tools.NewFileReadTool(cfg.RootDir)
 	if err != nil {

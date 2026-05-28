@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"time"
 
 	"happyagent/internal/llm"
@@ -14,23 +13,13 @@ type RunConfig struct {
 	Offload             OffloadConfig
 }
 
-type RunHooks struct {
-	BeforeToolCall      func(ctx context.Context, action Action, input *RunInput) (string, bool, error)
-	AfterToolCall       func(ctx context.Context, toolName string, callErr error, input *RunInput) error
-	ValidateFinalAnswer func(content string) error
-	OnStepStart         func(stepIndex int)
-	OnToolCallStart     func(toolName string)
-	OnToolCallEnd       func(toolName string, succeeded bool)
-	OnTodosUpdated      func(todos []tools.TodoItem)
-}
-
 type RunInput struct {
 	Input          string
 	SystemPrompt   string
 	RuntimeContext string
 	ToolDefs       []tools.Definition
 	Config         RunConfig
-	Hooks          RunHooks
+	Hooks          HookPipeline
 }
 
 type OffloadConfig struct {
@@ -73,6 +62,10 @@ type LoopState struct {
 	Steps                []StepRecord
 	Todos                []tools.TodoItem
 	DeliveryToolFailures map[string]string
+	HookDecisions        []HookDecisionRecord
+	CompactionEvents     []CompactionEvent
+	RecoveryAttempts     []RecoveryAttempt
+	TranscriptPath       string
 }
 
 type StepResult struct {
@@ -89,30 +82,41 @@ type PlanStepResult struct {
 }
 
 type RunTrace struct {
-	StartedAt                  time.Time      `json:"started_at"`
-	FinishedAt                 time.Time      `json:"finished_at"`
-	DurationMillis             int64          `json:"duration_millis"`
-	TerminationReason          string         `json:"termination_reason,omitempty"`
-	ErrorCategory              string         `json:"error_category,omitempty"`
-	StepCount                  int            `json:"step_count"`
-	ToolCallCount              int            `json:"tool_call_count"`
-	ToolCallsByName            map[string]int `json:"tool_calls_by_name"`
-	ExecutedToolCallCount      int            `json:"executed_tool_call_count"`
-	ExecutedToolCallsByName    map[string]int `json:"executed_tool_calls_by_name"`
-	SuccessfulToolCallCount    int            `json:"successful_tool_call_count"`
-	SuccessfulToolCallsByName  map[string]int `json:"successful_tool_calls_by_name"`
-	FailedToolCallCount        int            `json:"failed_tool_call_count,omitempty"`
-	FailedToolCallsByName      map[string]int `json:"failed_tool_calls_by_name,omitempty"`
-	UnavailableToolCallCount   int            `json:"unavailable_tool_call_count,omitempty"`
-	UnavailableToolCallsByName map[string]int `json:"unavailable_tool_calls_by_name,omitempty"`
-	BlockedToolCallCount       int            `json:"blocked_tool_call_count,omitempty"`
-	BlockedToolCallsByName     map[string]int `json:"blocked_tool_calls_by_name,omitempty"`
-	OffloadedToolResultCount   int            `json:"offloaded_tool_result_count,omitempty"`
-	OffloadedToolResultBytes   int            `json:"offloaded_tool_result_bytes,omitempty"`
-	OffloadedToolResultsByName map[string]int `json:"offloaded_tool_results_by_name,omitempty"`
-	PromptTokens               int            `json:"prompt_tokens"`
-	CompletionTokens           int            `json:"completion_tokens"`
-	TotalTokens                int            `json:"total_tokens"`
+	StartedAt                  time.Time            `json:"started_at"`
+	FinishedAt                 time.Time            `json:"finished_at"`
+	DurationMillis             int64                `json:"duration_millis"`
+	TerminationReason          string               `json:"termination_reason,omitempty"`
+	ErrorCategory              string               `json:"error_category,omitempty"`
+	StepCount                  int                  `json:"step_count"`
+	ToolCallCount              int                  `json:"tool_call_count"`
+	ToolCallsByName            map[string]int       `json:"tool_calls_by_name"`
+	ExecutedToolCallCount      int                  `json:"executed_tool_call_count"`
+	ExecutedToolCallsByName    map[string]int       `json:"executed_tool_calls_by_name"`
+	SuccessfulToolCallCount    int                  `json:"successful_tool_call_count"`
+	SuccessfulToolCallsByName  map[string]int       `json:"successful_tool_calls_by_name"`
+	FailedToolCallCount        int                  `json:"failed_tool_call_count,omitempty"`
+	FailedToolCallsByName      map[string]int       `json:"failed_tool_calls_by_name,omitempty"`
+	UnavailableToolCallCount   int                  `json:"unavailable_tool_call_count,omitempty"`
+	UnavailableToolCallsByName map[string]int       `json:"unavailable_tool_calls_by_name,omitempty"`
+	BlockedToolCallCount       int                  `json:"blocked_tool_call_count,omitempty"`
+	BlockedToolCallsByName     map[string]int       `json:"blocked_tool_calls_by_name,omitempty"`
+	OffloadedToolResultCount   int                  `json:"offloaded_tool_result_count,omitempty"`
+	OffloadedToolResultBytes   int                  `json:"offloaded_tool_result_bytes,omitempty"`
+	OffloadedToolResultsByName map[string]int       `json:"offloaded_tool_results_by_name,omitempty"`
+	HookDecisions              []HookDecisionRecord `json:"hook_decisions,omitempty"`
+	CompactionEvents           []CompactionEvent    `json:"compaction_events,omitempty"`
+	RecoveryAttempts           []RecoveryAttempt    `json:"recovery_attempts,omitempty"`
+	TranscriptPath             string               `json:"transcript_path,omitempty"`
+	PromptTokens               int                  `json:"prompt_tokens"`
+	CompletionTokens           int                  `json:"completion_tokens"`
+	TotalTokens                int                  `json:"total_tokens"`
+}
+
+type HookDecisionRecord struct {
+	Event   string `json:"event"`
+	Handler string `json:"handler"`
+	Kind    string `json:"kind"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type MessageEnvelope struct {

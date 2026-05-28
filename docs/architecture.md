@@ -28,12 +28,11 @@
    - Adapts remote tools into the runtime tool registry.
 7. `internal/runtime`
    - Assembles config, profile, LLM client, tools, MCP manager, skill loader, memory, and engine.
-   - Creates per-run skill and capability sessions.
+   - Creates per-run skill, capability, task, worktree, and agent sessions.
 8. `internal/engine`
    - Runs the model loop.
-   - Requests structured actions.
-   - Executes tool calls.
-   - Produces final answers and trace events.
+   - Runs the structured hook pipeline around prompts, model calls, tools, final answers, stop, and errors.
+   - Applies context compaction, typed model-call recovery, tool execution, final-answer gates, and trace events.
 9. `internal/app`
    - Provides session-oriented application behavior.
    - Persists user turns and run records.
@@ -56,6 +55,9 @@ flowchart TD
   Runtime --> Skills["internal/skills"]
   Runtime --> Memory["internal/memory"]
   Runtime --> Policy["internal/policy"]
+  Runtime --> Tasks["internal/tasks"]
+  Runtime --> Agents["internal/agents"]
+  Runtime --> Worktree["internal/worktree"]
   Runtime --> Engine["internal/engine"]
   Engine --> Protocol["internal/protocol"]
   Engine --> Tools
@@ -74,13 +76,40 @@ The generic runtime path is `config -> runtime -> engine/tools/mcp/skills/profil
 5. Runtime loads the local skill catalog.
 6. The initial prompt stays compact; capability details are available through `list_capabilities`.
 7. The model can call `activate_skill` to load skill instructions as an observation.
-8. The engine enters the loop and asks the model for a structured action.
-9. Tool calls are validated and executed by the runtime.
+8. The engine enters the hook-driven loop. Hook events are `RunStart`, `UserPromptSubmit`, `BeforeModelCall`, `AfterModelCall`, `PreToolUse`, `PostToolUse`, `BeforeFinalAnswer`, `Stop`, and `RunError`.
+9. Before each model call, the engine compacts old large observations, snips older middle messages behind a deterministic summary, and injects finished background or teammate notifications without breaking tool-call pairing.
 10. Large non-final tool results may be offloaded under `.happyagent/offload/<run-id>/`; the model receives a compact `file_read`-compatible reference instead of the full payload.
-11. If a profile exposes `write_todos`, complex tasks can maintain a run-scoped TODO plan inside the same ReAct loop. Every non-final tool result includes a system reminder while TODOs remain unfinished, and `final_answer` is blocked until the plan is completed or updated.
-12. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
-13. The app layer stores session and run records.
-14. Optional trace output writes per-step actions, observations, timing, token usage, tool-call status, and offload counters.
+11. Tool calls pass through the policy hook. The policy combines tool danger, profile rules, approvals, shell argv/path risk, MCP danger, and web/network risk into `allow`, `deny`, `ask`, or `passthrough`.
+12. If a profile exposes `write_todos`, complex tasks can maintain a run-scoped TODO plan inside the same ReAct loop. Every non-final tool result includes a system reminder while TODOs remain unfinished, and `final_answer` is blocked until the plan is completed or updated.
+13. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
+14. Optional trace output writes per-step actions, observations, timing, token usage, hook decisions, compaction events, recovery attempts, transcript paths, tool-call status, and offload counters.
+
+## Multi-Agent And Durable Tasks
+
+Profiles can expose durable task tools and teammate tools:
+
+- `task_create`, `task_list`, `task_get`, `task_claim`, `task_update`, `task_complete`, and `task_release` store DAG-backed tasks under `.happyagent/tasks/`.
+- `agent_task` runs a synchronous child agent with fresh context, no recursive agent tools, a summary-only observation, and a stored child trace.
+- `agent_spawn`, `agent_send_message`, `agent_check_inbox`, and `agent_shutdown` implement asynchronous teammate flow through an append-only mailbox under `.happyagent/agents/`.
+- `agent_task` and `agent_spawn` can receive `worktree_path`; child shell calls default to that isolated worktree cwd.
+- `agent_task` and `agent_spawn` can receive `task_id`; the child claims the durable task before running and completes it on success.
+- If a child hits an `ask` policy decision for a dangerous action, the policy hook appends a `permission_request` message to the Lead inbox with the tool, argument summary, risk reason, and task id.
+- Lead inbox reads are non-destructive until messages are marked consumed, so duplicate handling is explicit.
+- Child agents reuse the same engine harness but get independent run input, tool visibility, policy scope, context, trace, and persisted `AgentRun`.
+
+The task board is the durable coordination layer. Claims happen through explicit task tools or when the Lead passes `task_id` into `agent_task` / `agent_spawn`. Teammates do not autonomously scan the task board while idle, and they do not self-claim new work without an explicit Lead delegation.
+
+## Worktree Isolation
+
+The worktree tools create, resolve, keep, and remove isolated git worktrees under `.happyagent/worktrees/`. Slugs are normalized, cwd overrides stay under the worktree root, and removal refuses dirty worktrees unless `discard_dirty` is explicitly true.
+
+## Background Jobs
+
+`shell` accepts `run_in_background: true` for long allowlisted commands. The tool returns a job id immediately, stores output under `.happyagent/background/<job-id>/output.log`, and completed jobs are injected before later model calls through the background notification hook.
+
+## MCP Naming
+
+MCP tools use one canonical runtime name: `mcp__<server>__<tool>`. Prompt templates use `mcp__<server>__<prompt>`. The old `<server>__<tool>` spelling is not registered. `list_capabilities` also reports MCP server connection status alongside resources and prompts. Runtime MCP connections are assembled from local config; there is no model-facing `mcp_connect` or `mcp_disconnect` tool in the current implementation.
 
 ## Session Memory
 
@@ -118,6 +147,10 @@ The batch `career analyze` command follows the same evidence-first behavior with
 - `happyagent.local.json` stores local model configuration and is ignored by Git.
 - `.happyagent/store/` contains local session and run state.
 - `.happyagent/career/` contains local Career Copilot workspace material.
+- `.happyagent/tasks/` contains durable task graph JSON files.
+- `.happyagent/agents/` contains teammate state, child runs, traces, and mailbox messages.
+- `.happyagent/worktrees/` contains isolated git worktrees.
+- `.happyagent/background/` contains background job output logs.
 - `.happyagent/offload/` contains large tool result snapshots referenced from observations and traces.
 - `logs/` contains eval reports and run traces.
 - File tools stay inside the configured root directory and reject symlink escapes.

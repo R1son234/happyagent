@@ -22,13 +22,13 @@ func NewMCPPromptTool(manager *Manager) *MCPPromptTool {
 func (t *MCPPromptTool) Definition() tools.Definition {
 	return tools.Definition{
 		Name:        "mcp_get_prompt",
-		Description: "Call an MCP server prompt template. Arguments: name (required, the qualified prompt name like server__prompt_name), arguments (optional, a JSON object with prompt parameters).",
+		Description: "Call an MCP server prompt template. Arguments: name (required, the qualified prompt name like mcp__server__prompt_name), arguments (optional, a JSON object with prompt parameters).",
 		InputSchema: `{
 			"type": "object",
 			"properties": {
 				"name": {
 					"type": "string",
-					"description": "The qualified prompt name (format: server__prompt-name)"
+					"description": "The qualified prompt name (format: mcp__server__prompt-name)"
 				},
 				"arguments": {
 					"type": "object",
@@ -87,9 +87,9 @@ func (t *MCPPromptTool) Execute(ctx context.Context, call tools.Call) (tools.Res
 }
 
 func promptNameFromQualified(qualified string) string {
-	parts := strings.SplitN(qualified, "__", 2)
-	if len(parts) >= 2 {
-		return parts[1]
+	parts := strings.SplitN(qualified, "__", 3)
+	if len(parts) == 3 && parts[0] == namePrefix {
+		return parts[2]
 	}
 	return qualified
 }

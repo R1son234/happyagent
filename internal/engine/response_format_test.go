@@ -50,6 +50,52 @@ func TestRunnerRetriesWhenModelReturnsPlainTextInsteadOfActionJSON(t *testing.T)
 	}
 }
 
+func TestRunnerContinuesAfterTruncatedJSONAction(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"half`,
+				},
+				FinishReason: "length",
+			},
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: `{"type":"final_answer","content":"complete"}`,
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	runner := NewRunner(client, tools.NewRegistry(), 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "finish",
+		SystemPrompt: "reply with JSON action",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != "complete" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected continuation to recover within one step, got %d", len(result.Steps))
+	}
+	if len(result.Trace.RecoveryAttempts) == 0 || result.Trace.RecoveryAttempts[0].Action != "continuation_prompt" {
+		t.Fatalf("expected continuation recovery trace, got %+v", result.Trace.RecoveryAttempts)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected original request plus continuation request, got %d", len(client.requests))
+	}
+	lastMessages := client.requests[1].Messages
+	if len(lastMessages) < 2 || !strings.Contains(lastMessages[len(lastMessages)-1].Content, "complete intended action") {
+		t.Fatalf("expected continuation prompt, got %+v", lastMessages)
+	}
+}
+
 func TestRunnerCompletesWhenModelUsesFinalAnswerTool(t *testing.T) {
 	client := &stubClient{
 		responses: []llm.ChatResponse{
@@ -140,14 +186,16 @@ func TestRunnerRetriesFinalAnswerToolAfterValidationFailure(t *testing.T) {
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
-		Hooks: RunHooks{
-			ValidateFinalAnswer: func(content string) error {
-				if content != "valid" {
-					return fmt.Errorf("invalid final answer")
-				}
-				return nil
-			},
-		},
+		Hooks: NewHookPipeline(HookHandlerFunc{HandlerName: "test_validator", Fn: func(ctx context.Context, event HookContext) (HookDecision, error) {
+			if event.Event != HookBeforeFinalAnswer {
+				return HookDecision{Kind: HookDecisionContinue}, nil
+			}
+			content := event.Content
+			if content != "valid" {
+				return HookDecision{Kind: HookDecisionBlockWithObservation, Observation: "invalid final answer"}, nil
+			}
+			return HookDecision{Kind: HookDecisionContinue}, nil
+		}}),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -711,14 +759,15 @@ func TestFinalAnswerValidationFailureDoesNotDoubleAppendMessage(t *testing.T) {
 		ToolDefs: []tools.Definition{
 			tools.NewFinalAnswerTool().Definition(),
 		},
-		Hooks: RunHooks{
-			ValidateFinalAnswer: func(content string) error {
-				if content != "valid" {
-					return fmt.Errorf("validation failed")
-				}
-				return nil
-			},
-		},
+		Hooks: NewHookPipeline(HookHandlerFunc{HandlerName: "test_validator", Fn: func(ctx context.Context, event HookContext) (HookDecision, error) {
+			if event.Event != HookBeforeFinalAnswer {
+				return HookDecision{Kind: HookDecisionContinue}, nil
+			}
+			if event.Content != "valid" {
+				return HookDecision{Kind: HookDecisionBlockWithObservation, Observation: "validation failed"}, nil
+			}
+			return HookDecision{Kind: HookDecisionContinue}, nil
+		}}),
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
@@ -770,7 +819,7 @@ func TestRunnerUnsupportedActionTypeReturnsError(t *testing.T) {
 	}
 }
 
-func TestBeforeToolCallErrorPropagates(t *testing.T) {
+func TestPreToolUseHookErrorPropagates(t *testing.T) {
 	registry := tools.NewRegistry()
 	registry.MustRegister(stubTool{
 		def: tools.Definition{Name: "file_read"},
@@ -805,13 +854,14 @@ func TestBeforeToolCallErrorPropagates(t *testing.T) {
 		Input:        "read file",
 		SystemPrompt: "test",
 		ToolDefs:     []tools.Definition{{Name: "file_read"}},
-		Hooks: RunHooks{
-			BeforeToolCall: func(ctx context.Context, action Action, input *RunInput) (string, bool, error) {
-				return "", false, expectedErr
-			},
-		},
+		Hooks: NewHookPipeline(HookHandlerFunc{HandlerName: "test_pre_tool", Fn: func(ctx context.Context, event HookContext) (HookDecision, error) {
+			if event.Event != HookPreToolUse {
+				return HookDecision{Kind: HookDecisionContinue}, nil
+			}
+			return HookDecision{}, expectedErr
+		}}),
 	})
 	if err == nil {
-		t.Fatal("expected BeforeToolCall error to propagate")
+		t.Fatal("expected PreToolUse hook error to propagate")
 	}
 }

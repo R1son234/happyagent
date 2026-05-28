@@ -38,16 +38,17 @@ func (t *ShellTool) Definition() Definition {
 	return Definition{
 		Name:        "shell",
 		Description: "Run an allowlisted command under the configured root directory. Prefer argv for exact arguments; command remains available for simple whitespace-split commands.",
-		InputSchema: `{"type":"object","properties":{"command":{"type":"string","description":"Legacy shorthand for simple commands split on whitespace."},"argv":{"type":"array","items":{"type":"string"},"description":"Preferred exact argv form. Example: [\"git\",\"status\",\"--short\"]"},"workdir":{"type":"string"}},"additionalProperties":false}`,
+		InputSchema: `{"type":"object","properties":{"command":{"type":"string","description":"Legacy shorthand for simple commands split on whitespace."},"argv":{"type":"array","items":{"type":"string"},"description":"Preferred exact argv form. Example: [\"git\",\"status\",\"--short\"]"},"workdir":{"type":"string"},"run_in_background":{"type":"boolean","description":"When true, start the command as a background job and report completion later."}},"additionalProperties":false}`,
 		Dangerous:   true,
 	}
 }
 
 func (t *ShellTool) Execute(ctx context.Context, call Call) (Result, error) {
 	var input struct {
-		Command string   `json:"command"`
-		Argv    []string `json:"argv"`
-		Workdir string   `json:"workdir"`
+		Command    string   `json:"command"`
+		Argv       []string `json:"argv"`
+		Workdir    string   `json:"workdir"`
+		Background bool     `json:"run_in_background"`
 	}
 	if err := json.Unmarshal(call.Arguments, &input); err != nil {
 		return Result{}, fmt.Errorf("decode shell arguments: %w", err)
@@ -68,8 +69,53 @@ func (t *ShellTool) Execute(ctx context.Context, call Call) (Result, error) {
 			return Result{}, err
 		}
 		workdir = resolved
+	} else if override := ShellWorkdirFromContext(ctx); override != "" {
+		resolved, err := t.resolver.Resolve(override)
+		if err != nil {
+			return Result{}, err
+		}
+		workdir = resolved
+	}
+	if input.Background {
+		store := BackgroundStoreFromContext(ctx)
+		if store == nil {
+			return Result{}, fmt.Errorf("background shell execution is unavailable outside an active runtime session")
+		}
+		job := store.Start("shell")
+		go func() {
+			output, runErr := runShellCommand(context.Background(), parts, workdir)
+			store.Complete(job.ID, output, runErr)
+		}()
+		data, _ := json.MarshalIndent(map[string]string{
+			"job_id":   job.ID,
+			"status":   string(job.Status),
+			"log_path": job.LogPath,
+		}, "", "  ")
+		return Result{Output: string(data)}, nil
 	}
 
+	output, err := runShellCommand(ctx, parts, workdir)
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Output: output}, nil
+}
+
+type shellWorkdirContextKey struct{}
+
+func WithShellWorkdir(ctx context.Context, workdir string) context.Context {
+	return context.WithValue(ctx, shellWorkdirContextKey{}, workdir)
+}
+
+func ShellWorkdirFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	workdir, _ := ctx.Value(shellWorkdirContextKey{}).(string)
+	return workdir
+}
+
+func runShellCommand(ctx context.Context, parts []string, workdir string) (string, error) {
 	cmd := exec.CommandContext(ctx, parts[0], parts[1:]...)
 	cmd.Dir = workdir
 
@@ -79,7 +125,8 @@ func (t *ShellTool) Execute(ctx context.Context, call Call) (Result, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return Result{}, fmt.Errorf("run command %q in %q: %w: %s", strings.Join(parts, " "), workdir, err, truncateToolOutput(stderr.String(), maxShellOutputBytes))
+		output := strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+		return output, fmt.Errorf("run command %q in %q: %w: %s", strings.Join(parts, " "), workdir, err, truncateToolOutput(stderr.String(), maxShellOutputBytes))
 	}
 
 	output := strings.TrimSpace(truncateToolOutput(stdout.String(), maxShellOutputBytes))
@@ -87,7 +134,7 @@ func (t *ShellTool) Execute(ctx context.Context, call Call) (Result, error) {
 		output = "(no output)"
 	}
 
-	return Result{Output: output}, nil
+	return output, nil
 }
 
 func (t *ShellTool) validateCommand(command string) error {

@@ -20,7 +20,7 @@ func main() {
 	var addr string
 	var workspaceRoot string
 	var staticDir string
-	flag.StringVar(&addr, "addr", "127.0.0.1:0", "listen address")
+	flag.StringVar(&addr, "addr", "127.0.0.1:8765", "listen address")
 	flag.StringVar(&workspaceRoot, "workspace", career.DefaultWorkspaceRoot, "workspace root")
 	flag.StringVar(&staticDir, "static", filepath.Join("desktop", "dist"), "static frontend directory")
 	flag.Parse()

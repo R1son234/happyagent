@@ -7,12 +7,14 @@ import (
 	"strings"
 	"testing"
 
+	"happyagent/internal/agents"
 	"happyagent/internal/engine"
 	"happyagent/internal/memory"
 	"happyagent/internal/observe"
 	"happyagent/internal/policy"
 	"happyagent/internal/protocol"
 	"happyagent/internal/skills"
+	"happyagent/internal/tasks"
 	"happyagent/internal/tools"
 )
 
@@ -134,6 +136,48 @@ func TestRunReturnsResolvedProfileMetadata(t *testing.T) {
 	}
 }
 
+func TestRuntimeAgentProviderClaimsAndCompletesTask(t *testing.T) {
+	root := t.TempDir()
+	taskStore, err := tasks.NewStore(root)
+	if err != nil {
+		t.Fatalf("NewStore(tasks) error = %v", err)
+	}
+	task, err := taskStore.Create(tasks.Task{ID: "task-a", Title: "Task A"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	agentStore, err := agents.NewStore(root)
+	if err != nil {
+		t.Fatalf("NewStore(agents) error = %v", err)
+	}
+	rt := &Runtime{
+		runner: &stubRunner{result: engine.RunResult{Output: "child summary"}},
+		tools: []tools.Definition{
+			{Name: tools.FinalAnswerToolName},
+		},
+		skillLoader: skills.NewLoader(filepath.Join(root, "skills")),
+		taskStore:   taskStore,
+		agentStore:  agentStore,
+	}
+	provider := runtimeAgentProvider{runtime: rt, parent: RunRequest{}, prepared: preparedRun{}}
+	_, _, _, err = provider.runChild(context.Background(), agentRunInput{
+		AgentID: "child-a",
+		Name:    "child",
+		Prompt:  "do task",
+		TaskID:  task.ID,
+	}, false)
+	if err != nil {
+		t.Fatalf("runChild() error = %v", err)
+	}
+	completed, err := taskStore.Get(task.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if completed.Status != tasks.StatusCompleted || completed.Owner != "child-a" {
+		t.Fatalf("expected completed child-owned task, got %+v", completed)
+	}
+}
+
 func TestPrepareRunAddsMemoryToRuntimeContext(t *testing.T) {
 	root := t.TempDir()
 	profilesDir := filepath.Join(root, "profiles")
@@ -213,26 +257,73 @@ func TestPreparedRunPolicyRequiresApprovalForDangerousTool(t *testing.T) {
 		policy: policyEngineForTest(),
 	}
 	recorder := observe.NewRecorder()
-	observation, handled, err := prepared.beforeToolCall(recorder)(context.Background(), engine.Action{
-		Type:     protocol.ActionToolCall,
-		ToolName: "shell",
-	}, &engine.RunInput{
-		ToolDefs: []tools.Definition{{Name: "shell", Dangerous: true}},
+	action := engine.Action{
+		Type:      protocol.ActionToolCall,
+		ToolName:  "shell",
+		Arguments: []byte(`{}`),
+	}
+	toolDef := tools.Definition{Name: "shell", Dangerous: true}
+	decision, err := prepared.policyHook(RunRequest{}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookPreToolUse,
+		Action:  &action,
+		ToolDef: &toolDef,
 	})
 	if err != nil {
-		t.Fatalf("beforeToolCall() error = %v", err)
+		t.Fatalf("policyHook() error = %v", err)
 	}
-	if !handled || !strings.Contains(observation, "approval required") {
-		t.Fatalf("unexpected guard result: handled=%v observation=%q", handled, observation)
+	if decision.Kind != engine.HookDecisionBlockWithObservation || !strings.Contains(decision.Observation, "approval required") {
+		t.Fatalf("unexpected guard result: %+v", decision)
+	}
+}
+
+func TestPreparedRunPolicyBubblesChildPermissionRequest(t *testing.T) {
+	store, err := agents.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewStore() error = %v", err)
+	}
+	prepared := preparedRun{
+		policy:     policyEngineForTest(),
+		agentStore: store,
+	}
+	recorder := observe.NewRecorder()
+	action := engine.Action{
+		Type:      protocol.ActionToolCall,
+		ToolName:  "shell",
+		Arguments: []byte(`{"argv":["git","status"]}`),
+	}
+	toolDef := tools.Definition{Name: "shell", Dangerous: true}
+	decision, err := prepared.policyHook(RunRequest{ChildAgentID: "child-a", ChildTaskID: "task-a"}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookPreToolUse,
+		Action:  &action,
+		ToolDef: &toolDef,
+	})
+	if err != nil {
+		t.Fatalf("policyHook() error = %v", err)
+	}
+	if decision.Kind != engine.HookDecisionBlockWithObservation {
+		t.Fatalf("unexpected decision: %+v", decision)
+	}
+	messages, err := store.ListUnconsumed(leadAgentID)
+	if err != nil {
+		t.Fatalf("ListUnconsumed() error = %v", err)
+	}
+	if len(messages) != 1 || messages[0].Kind != "permission_request" || !strings.Contains(messages[0].Content, `"task_id":"task-a"`) {
+		t.Fatalf("unexpected permission request: %+v", messages)
 	}
 }
 
 func TestPreparedRunValidateFinalAnswerRejectsInvalidCareerReport(t *testing.T) {
 	prepared := preparedRun{outputSchema: "career_report"}
 	recorder := observe.NewRecorder()
-	err := prepared.validateFinalAnswer(recorder)(`{"summary":"ok"}`)
-	if err == nil || !strings.Contains(err.Error(), "missing field") {
-		t.Fatalf("unexpected validation error: %v", err)
+	decision, err := prepared.finalAnswerHook(recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookBeforeFinalAnswer,
+		Content: `{"summary":"ok"}`,
+	})
+	if err != nil {
+		t.Fatalf("finalAnswerHook() error = %v", err)
+	}
+	if decision.Kind != engine.HookDecisionBlockWithObservation || !strings.Contains(decision.Observation, "missing field") {
+		t.Fatalf("unexpected validation decision: %+v", decision)
 	}
 }
 

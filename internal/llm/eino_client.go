@@ -78,13 +78,21 @@ func (c *EinoClient) Chat(ctx context.Context, req ChatRequest) (ChatResponse, e
 	}
 
 	response := ChatResponse{
-		Message: message,
-		Actions: actions,
-		Usage:   fromEinoUsage(resp),
+		Message:      message,
+		Actions:      actions,
+		Usage:        fromEinoUsage(resp),
+		FinishReason: fromEinoFinishReason(resp),
 	}
 	logLLMJSON(round, "llm response", response)
 
 	return response, nil
+}
+
+func fromEinoFinishReason(message *schema.Message) string {
+	if message == nil || message.ResponseMeta == nil {
+		return ""
+	}
+	return message.ResponseMeta.FinishReason
 }
 
 func toEinoMessages(messages []Message) []*schema.Message {

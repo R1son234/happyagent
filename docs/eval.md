@@ -19,6 +19,23 @@ Each case can define:
 - required tools
 - maximum step count
 
+Infra regression scenarios should cover:
+
+- hook ordering and hook decisions for block, inject, force-continue, and record-only behavior
+- policy priority, including deny-over-allow and ask/block observations for dangerous tools
+- context compaction and prompt-too-long recovery without invalid tool-call pairing
+- `agent_task` child runs with fresh context, summary-only observation, hidden recursive agent tools, and stored child trace
+- async teammate mailbox append/list/mark-consumed behavior
+- task DAG validation, dependency blocking, release, completion, and concurrent claim
+- background/team completion notifications before model calls, including `shell` jobs started with `run_in_background`
+- worktree slug validation, cwd root safety, `worktree_keep`, child-agent shell cwd override, and dirty-remove refusal
+- MCP canonical naming with `mcp__server__tool`, server status in capabilities, and dangerous-by-default remote tools
+
+Current non-goal coverage:
+
+- Do not add eval expectations for model-facing `mcp_connect` or `mcp_disconnect`; MCP servers are connected from local config during runtime assembly.
+- Do not add eval expectations for teammate idle-loop task-board scanning; task claims are explicit through task tools or Lead-delegated child runs with `task_id`.
+
 ## Run
 
 Build the CLI and eval runner:
@@ -91,6 +108,10 @@ Per-case traces include:
 - token usage
 - attempted, executed, and successful tool-call counts
 - error category
+- hook decisions
+- compaction events
+- recovery attempts
+- transcript path when prompt-too-long recovery writes one
 
 ## Single Run Trace
 

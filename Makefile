@@ -3,7 +3,7 @@ EVAL_BINARY := bin/happyagent-eval
 DESKTOP_BINARY := bin/happyagent-desktop
 GO := GOTOOLCHAIN=go1.25.0 go
 
-.PHONY: build build-desktop build-eval run check test eval-smoke eval-profiles eval-career
+.PHONY: build build-desktop desktop build-eval run check test eval-smoke eval-profiles eval-career
 
 build:
 	mkdir -p bin
@@ -13,6 +13,9 @@ build-desktop:
 	cd desktop && npm run build
 	mkdir -p bin
 	$(GO) build -o $(DESKTOP_BINARY) ./cmd/happyagent-desktop
+
+desktop: build-desktop
+	./$(DESKTOP_BINARY) --addr 127.0.0.1:8765 --workspace career-workspace --static desktop/dist
 
 build-eval:
 	mkdir -p bin
