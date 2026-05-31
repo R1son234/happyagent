@@ -162,6 +162,15 @@ func TestCopilotServiceClassifyInboxAutoConfirmsHighConfidence(t *testing.T) {
 	if len(result.Items) != 1 || result.Items[0].Status != InboxItemStatusConfirmed {
 		t.Fatalf("expected confirmed high confidence item, got %+v", result.Items)
 	}
+	if len(runner.calls) != 1 {
+		t.Fatalf("expected one structured task call, got %d", len(runner.calls))
+	}
+	if !sameStrings(runner.calls[0].SourcePaths, []string{"inbox/jd.md"}) {
+		t.Fatalf("source paths = %v, want workspace-relative inbox path", runner.calls[0].SourcePaths)
+	}
+	if strings.Contains(runner.calls[0].Input, DefaultWorkspaceRoot+"/inbox/jd.md") || !strings.Contains(runner.calls[0].Input, "<read_path>inbox/jd.md</read_path>") {
+		t.Fatalf("classification prompt used wrong read_path:\n%s", runner.calls[0].Input)
+	}
 	if _, err := os.Stat(filepath.Join(root, sourceRel)); !os.IsNotExist(err) {
 		t.Fatalf("expected inbox source removed after confirmed import, err=%v", err)
 	}
@@ -217,6 +226,27 @@ func TestCopilotServiceClassifyInboxKeepsMediumPending(t *testing.T) {
 	}
 	if len(state.Items) != 1 || len(state.Items[0].QuestionsForUser) != 1 {
 		t.Fatalf("expected pending state with question, got %+v", state)
+	}
+}
+
+func TestCopilotServiceClassifyInboxNormalizesDestinationAliases(t *testing.T) {
+	now := time.Date(2026, 5, 24, 13, 0, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	if _, err := OpenWorkspace(root, now); err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	sourceRel := filepath.Join("inbox", "interview.md")
+	if err := os.WriteFile(filepath.Join(root, sourceRel), []byte("# 面经\n候选人分享了面试题。"), 0o644); err != nil {
+		t.Fatalf("write interview experience: %v", err)
+	}
+	runner := &fakeStructuredTaskRunner{output: `{"files":[{"source_path":"inbox/interview.md","source_hash":"sha256:fake","material_type":"public_interview_experience","confidence":"medium","reason":"包含公开面试经验。","source_excerpt":"候选人分享了面试题。","destination":"面经","needs_user_confirmation":true,"questions_for_user":[]}]}`}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
+	result, err := service.ClassifyInbox(context.Background(), ClassifyInboxRequest{})
+	if err != nil {
+		t.Fatalf("ClassifyInbox() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Destination != WorkspaceDirExperiences {
+		t.Fatalf("expected destination alias normalized to %q, got %+v", WorkspaceDirExperiences, result.Items)
 	}
 }
 
@@ -608,7 +638,7 @@ func (c *captureStructuredTaskApp) AppendUserTurn(ctx context.Context, req app.A
 	}, nil
 }
 
-func TestStructuredTaskRunnerUsesLeanPromptAndNoTools(t *testing.T) {
+func TestStructuredTaskRunnerUsesSourceBoundToolPrompt(t *testing.T) {
 	app := &captureStructuredTaskApp{output: `{"files":[{"source_path":"inbox/test.md","source_hash":"sha256:test","material_type":"jd","confidence":"high","reason":"x","source_excerpt":"x","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`}
 	runner := &appStructuredTaskRunner{
 		App:    app,
@@ -619,6 +649,7 @@ func TestStructuredTaskRunnerUsesLeanPromptAndNoTools(t *testing.T) {
 		TaskName:      "classify_inbox",
 		PromptVersion: PromptVersionFileClassification,
 		Input:         `{"files":[]}`,
+		SourcePaths:   []string{"inbox/test.md"},
 	})
 	if err != nil {
 		t.Fatalf("RunStructuredTask() error = %v", err)
@@ -632,7 +663,71 @@ func TestStructuredTaskRunnerUsesLeanPromptAndNoTools(t *testing.T) {
 	if len(app.reqs[0].ApprovedTools) != 0 {
 		t.Fatalf("expected no approved tools, got %v", app.reqs[0].ApprovedTools)
 	}
-	if !strings.Contains(app.reqs[0].SystemPrompt, "Never call tools.") {
-		t.Fatalf("expected lean structured system prompt, got %q", app.reqs[0].SystemPrompt)
+	if !sameStrings(app.reqs[0].ToolScope, []string{"file_read", "final_answer"}) {
+		t.Fatalf("tool scope = %v, want file_read/final_answer", app.reqs[0].ToolScope)
 	}
+	if !sameStrings(app.reqs[0].SourceReadPaths, []string{"inbox/test.md"}) {
+		t.Fatalf("source read paths = %v", app.reqs[0].SourceReadPaths)
+	}
+	if !app.reqs[0].SuppressHistory || !app.reqs[0].SuppressMemory || !app.reqs[0].RequireSourceReads {
+		t.Fatalf("expected source-bound one-shot request, got %+v", app.reqs[0])
+	}
+	if strings.Contains(app.reqs[0].SystemPrompt, "Never call tools.") || !strings.Contains(app.reqs[0].SystemPrompt, "file_read") {
+		t.Fatalf("expected source-bound structured system prompt, got %q", app.reqs[0].SystemPrompt)
+	}
+}
+
+func TestCareerBackgroundPromptsReferenceSourcesWithoutEmbeddingContent(t *testing.T) {
+	secret := "示例资料正文-不应进入prompt"
+	classificationPrompt := buildFileClassificationPrompt([]InboxFileForClassification{{
+		SourcePath: "inbox/source.md",
+		SourceHash: "sha256:test",
+		Content:    secret,
+	}})
+	if strings.Contains(classificationPrompt, secret) || strings.Contains(classificationPrompt, "<content>") {
+		t.Fatalf("classification prompt leaked content:\n%s", classificationPrompt)
+	}
+	if !strings.Contains(classificationPrompt, "inbox/source.md") || !strings.Contains(classificationPrompt, "sha256:test") {
+		t.Fatalf("classification prompt missing source metadata:\n%s", classificationPrompt)
+	}
+
+	source := SourceRef{Path: "我的简历/source.md", Version: "sha256:resume"}
+	bundlePrompt := buildGeneratedDocumentBundlePrompt("generate_project_pack", "生成项目专项", "项目专项", []SourceRef{source}, map[string]string{source.Path: secret})
+	if strings.Contains(bundlePrompt, secret) || strings.Contains(bundlePrompt, "<content>") {
+		t.Fatalf("bundle prompt leaked content:\n%s", bundlePrompt)
+	}
+	if !strings.Contains(bundlePrompt, source.Path) || !strings.Contains(bundlePrompt, source.Version) {
+		t.Fatalf("bundle prompt missing source metadata:\n%s", bundlePrompt)
+	}
+
+	reviewPrompt := BuildReviewQuestionBankPrompt(ReviewQuestionBankRequest{
+		SourceItem: WorkspaceItem{Path: "面经汇总/source.md"},
+		Context: ReviewLibraryContext{
+			ExperienceContent: secret,
+			ResumePath:        "我的简历/source.md",
+			ResumeContent:     secret,
+			JDPath:            "岗位明细/source.md",
+			JDContent:         secret,
+		},
+	})
+	if strings.Contains(reviewPrompt, secret) || strings.Contains(reviewPrompt, "<materials>") {
+		t.Fatalf("review question prompt leaked content:\n%s", reviewPrompt)
+	}
+	for _, want := range []string{"面经汇总/source.md", "我的简历/source.md", "岗位明细/source.md"} {
+		if !strings.Contains(reviewPrompt, want) {
+			t.Fatalf("review question prompt missing %q:\n%s", want, reviewPrompt)
+		}
+	}
+}
+
+func sameStrings(got []string, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

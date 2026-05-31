@@ -218,6 +218,51 @@ func TestPrepareRunAddsMemoryToRuntimeContext(t *testing.T) {
 	}
 }
 
+func TestPrepareRunAppliesToolScopeAndSuppressesMemoryWhenHistoryEmpty(t *testing.T) {
+	root := t.TempDir()
+	profilesDir := filepath.Join(root, "profiles")
+	writeTestProfile(t, profilesDir, "career-copilot", `{
+  "name": "career-copilot",
+  "system_prompt": "career prompt",
+  "enabled_tools": ["final_answer", "file_read", "file_write"],
+  "enabled_skills": [],
+  "memory_strategy": {
+    "enabled": true,
+    "max_turns": 2,
+    "max_chars": 200
+  }
+}`)
+
+	rt := &Runtime{
+		tools: []tools.Definition{
+			{Name: tools.FinalAnswerToolName},
+			{Name: tools.FileReadToolName},
+			{Name: "file_write"},
+		},
+		skillLoader: skills.NewLoader(filepath.Join(root, "skills")),
+		profileDir:  profilesDir,
+	}
+
+	prepared, err := rt.prepareRun(RunRequest{
+		Input:       "structured",
+		ProfileName: "career-copilot",
+		ToolScope:   []string{tools.FileReadToolName, tools.FinalAnswerToolName},
+	})
+	if err != nil {
+		t.Fatalf("prepareRun() error = %v", err)
+	}
+	var names []string
+	for _, def := range prepared.toolDefs {
+		names = append(names, def.Name)
+	}
+	if strings.Join(names, ",") != "final_answer,file_read" {
+		t.Fatalf("tool defs = %v, want final_answer,file_read", names)
+	}
+	if strings.Contains(prepared.runtimeContext, "Recent session turns") {
+		t.Fatalf("expected no runtime history context, got %q", prepared.runtimeContext)
+	}
+}
+
 func TestPrepareRunDoesNotInjectRAGIntoPrompt(t *testing.T) {
 	root := t.TempDir()
 	profilesDir := filepath.Join(root, "profiles")
@@ -276,6 +321,108 @@ func TestPreparedRunPolicyRequiresApprovalForDangerousTool(t *testing.T) {
 	}
 }
 
+func TestPreparedRunSourceBoundFileReadPolicy(t *testing.T) {
+	prepared := preparedRun{
+		policy: policyEngineForTest(),
+	}
+	recorder := observe.NewRecorder()
+	toolDef := tools.Definition{Name: tools.FileReadToolName}
+
+	allowed, err := prepared.policyHook(RunRequest{SourceReadPaths: []string{"inbox/source.md"}}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookPreToolUse,
+		Action:  &engine.Action{Type: protocol.ActionToolCall, ToolName: tools.FileReadToolName, Arguments: []byte(`{"path":"inbox/source.md"}`)},
+		ToolDef: &toolDef,
+	})
+	if err != nil {
+		t.Fatalf("policyHook() allow error = %v", err)
+	}
+	if allowed.Kind != engine.HookDecisionContinue {
+		t.Fatalf("expected declared path to continue, got %+v", allowed)
+	}
+
+	blocked, err := prepared.policyHook(RunRequest{SourceReadPaths: []string{"inbox/source.md"}}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookPreToolUse,
+		Action:  &engine.Action{Type: protocol.ActionToolCall, ToolName: tools.FileReadToolName, Arguments: []byte(`{"path":"inbox/other.md"}`)},
+		ToolDef: &toolDef,
+	})
+	if err != nil {
+		t.Fatalf("policyHook() block error = %v", err)
+	}
+	if blocked.Kind != engine.HookDecisionBlockWithObservation || !strings.Contains(blocked.Observation, "not a declared source path") {
+		t.Fatalf("expected undeclared path block, got %+v", blocked)
+	}
+}
+
+func TestPreparedRunFinalAnswerRequiresDeclaredSourceReads(t *testing.T) {
+	prepared := preparedRun{}
+	recorder := observe.NewRecorder()
+	state := &engine.LoopState{Messages: []engine.MessageEnvelope{
+		{
+			Actions: []engine.Action{{
+				Type:       protocol.ActionToolCall,
+				ToolName:   tools.FileReadToolName,
+				ToolCallID: "call_source",
+				Arguments:  []byte(`{"path":"inbox/source.md"}`),
+			}},
+		},
+		{
+			Role:       protocol.RoleTool,
+			ToolName:   tools.FileReadToolName,
+			ToolCallID: "call_source",
+			Content:    "# source",
+		},
+	}}
+	decision, err := prepared.finalAnswerHook(RunRequest{
+		RequireSourceReads: true,
+		SourceReadPaths:    []string{"inbox/source.md", "inbox/other.md"},
+	}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookBeforeFinalAnswer,
+		State:   state,
+		Content: "{}",
+	})
+	if err != nil {
+		t.Fatalf("finalAnswerHook() error = %v", err)
+	}
+	if decision.Kind != engine.HookDecisionBlockWithObservation || !strings.Contains(decision.Observation, "inbox/other.md") {
+		t.Fatalf("expected missing source read block, got %+v", decision)
+	}
+}
+
+func TestPreparedRunFinalAnswerDoesNotCountFailedSourceRead(t *testing.T) {
+	prepared := preparedRun{}
+	recorder := observe.NewRecorder()
+	state := &engine.LoopState{Messages: []engine.MessageEnvelope{
+		{
+			Actions: []engine.Action{{
+				Type:       protocol.ActionToolCall,
+				ToolName:   tools.FileReadToolName,
+				ToolCallID: "call_source",
+				Arguments:  []byte(`{"path":"inbox/source.md"}`),
+			}},
+		},
+		{
+			Role:       protocol.RoleTool,
+			ToolName:   tools.FileReadToolName,
+			ToolCallID: "call_source",
+			Content:    `tool error: read file "career-workspace/career-workspace/inbox/source.md": no such file or directory`,
+		},
+	}}
+	decision, err := prepared.finalAnswerHook(RunRequest{
+		RequireSourceReads: true,
+		SourceReadPaths:    []string{"inbox/source.md"},
+	}, recorder)(context.Background(), engine.HookContext{
+		Event:   engine.HookBeforeFinalAnswer,
+		State:   state,
+		Content: "{}",
+	})
+	if err != nil {
+		t.Fatalf("finalAnswerHook() error = %v", err)
+	}
+	if decision.Kind != engine.HookDecisionBlockWithObservation || !strings.Contains(decision.Observation, "inbox/source.md") {
+		t.Fatalf("expected failed source read to be missing, got %+v", decision)
+	}
+}
+
 func TestPreparedRunPolicyBubblesChildPermissionRequest(t *testing.T) {
 	store, err := agents.NewStore(t.TempDir())
 	if err != nil {
@@ -315,7 +462,7 @@ func TestPreparedRunPolicyBubblesChildPermissionRequest(t *testing.T) {
 func TestPreparedRunValidateFinalAnswerRejectsInvalidCareerReport(t *testing.T) {
 	prepared := preparedRun{outputSchema: "career_report"}
 	recorder := observe.NewRecorder()
-	decision, err := prepared.finalAnswerHook(recorder)(context.Background(), engine.HookContext{
+	decision, err := prepared.finalAnswerHook(RunRequest{}, recorder)(context.Background(), engine.HookContext{
 		Event:   engine.HookBeforeFinalAnswer,
 		Content: `{"summary":"ok"}`,
 	})

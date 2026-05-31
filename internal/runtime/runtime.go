@@ -3,7 +3,10 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
+	"path/filepath"
+	"sort"
 	"strings"
 
 	"happyagent/internal/agents"
@@ -14,6 +17,7 @@ import (
 	"happyagent/internal/observe"
 	"happyagent/internal/policy"
 	"happyagent/internal/profile"
+	"happyagent/internal/protocol"
 	"happyagent/internal/skills"
 	"happyagent/internal/tasks"
 	"happyagent/internal/tools"
@@ -22,20 +26,23 @@ import (
 )
 
 type RunRequest struct {
-	Input           string
-	SystemPrompt    string
-	ProfileName     string
-	SessionID       string
-	RunID           string
-	ApprovedTools   []string
-	History         []memory.Turn
-	MemorySnapshot  string
-	OnStepStart     func(stepIndex int)
-	OnToolCallStart func(toolName string)
-	OnToolCallEnd   func(toolName string, succeeded bool)
-	OnTodosUpdated  func(todos []tools.TodoItem)
-	ChildAgentID    string
-	ChildTaskID     string
+	Input              string
+	SystemPrompt       string
+	ProfileName        string
+	SessionID          string
+	RunID              string
+	ApprovedTools      []string
+	ToolScope          []string
+	SourceReadPaths    []string
+	RequireSourceReads bool
+	History            []memory.Turn
+	MemorySnapshot     string
+	OnStepStart        func(stepIndex int)
+	OnToolCallStart    func(toolName string)
+	OnToolCallEnd      func(toolName string, succeeded bool)
+	OnTodosUpdated     func(todos []tools.TodoItem)
+	ChildAgentID       string
+	ChildTaskID        string
 }
 
 type RunResult struct {
@@ -181,6 +188,9 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 	}
 	prepared.offload.RunID = req.RunID
 	if req.ProfileName == "" {
+		if len(req.ToolScope) > 0 {
+			prepared.toolDefs = filterToolDefinitions(prepared.toolDefs, toNameSet(req.ToolScope))
+		}
 		prepared.runtimeContext = assembleRuntimeContext(memory.Build(req.History, memory.Strategy{}), req.MemorySnapshot)
 		return prepared, nil
 	}
@@ -207,6 +217,9 @@ func (r *Runtime) prepareRun(req RunRequest) (preparedRun, error) {
 		}
 	}
 	prepared.policy = policy.New(req.ApprovedTools, nil, prepared.policyRules...)
+	if len(req.ToolScope) > 0 {
+		prepared.toolDefs = filterToolDefinitions(prepared.toolDefs, toNameSet(req.ToolScope))
+	}
 	memoryResult := memory.Build(req.History, parseMemoryStrategy(resolved.MemoryStrategy))
 	prepared.runtimeContext = assembleRuntimeContext(memoryResult, req.MemorySnapshot)
 	return prepared, nil
@@ -222,12 +235,24 @@ func filterToolDefinitions(defs []tools.Definition, allowed map[string]struct{})
 	return filtered
 }
 
+func toNameSet(names []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		set[name] = struct{}{}
+	}
+	return set
+}
+
 func (p preparedRun) hookPipeline(req RunRequest, recorder *observe.Recorder) engine.HookPipeline {
 	return engine.NewHookPipeline(
 		engine.HookHandlerFunc{HandlerName: "runtime_callbacks", Fn: runtimeCallbackHook(req)},
 		engine.HookHandlerFunc{HandlerName: "background_notifications", Fn: p.backgroundNotificationHook()},
 		engine.HookHandlerFunc{HandlerName: "policy", Fn: p.policyHook(req, recorder)},
-		engine.HookHandlerFunc{HandlerName: "output_validator", Fn: p.finalAnswerHook(recorder)},
+		engine.HookHandlerFunc{HandlerName: "output_validator", Fn: p.finalAnswerHook(req, recorder)},
 	)
 }
 
@@ -284,6 +309,19 @@ func (p preparedRun) policyHook(req RunRequest, recorder *observe.Recorder) func
 		if event.Event != engine.HookPreToolUse || event.ToolDef == nil || event.Action == nil {
 			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
 		}
+		if event.ToolDef.Name == tools.FileReadToolName && len(req.SourceReadPaths) > 0 {
+			if ok, reason := sourceReadAllowed(event.Action.Arguments, req.SourceReadPaths); !ok {
+				recorder.Add("tool_denied", reason, map[string]string{
+					"tool":     event.ToolDef.Name,
+					"decision": string(policy.DecisionDeny),
+				})
+				return engine.HookDecision{
+					Kind:        engine.HookDecisionBlockWithObservation,
+					Observation: "tool error: " + reason,
+					Reason:      reason,
+				}, nil
+			}
+		}
 		decision, reason := p.policy.DecideRequest(policy.Request{
 			Tool:    *event.ToolDef,
 			Args:    event.Action.Arguments,
@@ -313,11 +351,22 @@ func (p preparedRun) policyHook(req RunRequest, recorder *observe.Recorder) func
 	}
 }
 
-func (p preparedRun) finalAnswerHook(recorder *observe.Recorder) func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
+func (p preparedRun) finalAnswerHook(req RunRequest, recorder *observe.Recorder) func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
 	return func(ctx context.Context, event engine.HookContext) (engine.HookDecision, error) {
 		_ = ctx
 		if event.Event != engine.HookBeforeFinalAnswer {
 			return engine.HookDecision{Kind: engine.HookDecisionContinue}, nil
+		}
+		if event.State != nil && req.RequireSourceReads {
+			if missing := missingRequiredSourceReads(event.State, req.SourceReadPaths); len(missing) > 0 {
+				reason := "required source files were not read: " + strings.Join(missing, ", ")
+				recorder.Add("final_answer_blocked", reason, map[string]string{"reason": "missing_source_reads"})
+				return engine.HookDecision{
+					Kind:        engine.HookDecisionBlockWithObservation,
+					Observation: "tool error: " + reason,
+					Reason:      reason,
+				}, nil
+			}
 		}
 		if err := validator.ValidateOutput(p.outputSchema, event.Content); err != nil {
 			recorder.Add("output_validation_failed", err.Error(), map[string]string{"schema": p.outputSchema})
@@ -348,6 +397,103 @@ func permissionRequestContent(toolName string, args json.RawMessage, reason stri
 		return reason
 	}
 	return string(data)
+}
+
+func sourceReadAllowed(args json.RawMessage, allowedPaths []string) (bool, string) {
+	path, ok := fileReadPathArg(args)
+	if !ok {
+		return false, "policy denial: file_read path is required"
+	}
+	normalized, ok := normalizeSourcePath(path)
+	if !ok {
+		return false, fmt.Sprintf("policy denial: file_read path %q is not a declared source path", path)
+	}
+	allowed := normalizedSourcePathSet(allowedPaths)
+	if _, ok := allowed[normalized]; !ok {
+		return false, fmt.Sprintf("policy denial: file_read path %q is not a declared source path", path)
+	}
+	return true, ""
+}
+
+func missingRequiredSourceReads(state *engine.LoopState, requiredPaths []string) []string {
+	required := normalizedSourcePathSet(requiredPaths)
+	if len(required) == 0 {
+		return nil
+	}
+	callPaths := map[string]string{}
+	read := map[string]struct{}{}
+	for _, message := range state.Messages {
+		for _, action := range message.Actions {
+			if action.Type != "tool_call" || action.ToolName != tools.FileReadToolName {
+				continue
+			}
+			path, ok := fileReadPathArg(action.Arguments)
+			if !ok {
+				continue
+			}
+			normalized, ok := normalizeSourcePath(path)
+			if !ok {
+				continue
+			}
+			if strings.TrimSpace(action.ToolCallID) == "" {
+				continue
+			}
+			callPaths[action.ToolCallID] = normalized
+		}
+		if message.Role != protocol.RoleTool || message.ToolName != tools.FileReadToolName {
+			continue
+		}
+		path, ok := callPaths[message.ToolCallID]
+		if !ok || toolObservationIsError(message.Content) {
+			continue
+		}
+		read[path] = struct{}{}
+	}
+	var missing []string
+	for path := range required {
+		if _, ok := read[path]; !ok {
+			missing = append(missing, path)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+func toolObservationIsError(content string) bool {
+	return strings.HasPrefix(strings.TrimSpace(content), "tool error:")
+}
+
+func fileReadPathArg(args json.RawMessage) (string, bool) {
+	var input struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(args, &input); err != nil {
+		return "", false
+	}
+	path := strings.TrimSpace(input.Path)
+	return path, path != ""
+}
+
+func normalizedSourcePathSet(paths []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(paths))
+	for _, path := range paths {
+		if normalized, ok := normalizeSourcePath(path); ok {
+			set[normalized] = struct{}{}
+		}
+	}
+	return set
+}
+
+func normalizeSourcePath(path string) (string, bool) {
+	path = strings.TrimSpace(path)
+	if path == "" || filepath.IsAbs(path) {
+		return "", false
+	}
+	clean := filepath.ToSlash(filepath.Clean(path))
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") {
+		return "", false
+	}
+	return clean, true
 }
 
 func truncateString(value string, max int) string {

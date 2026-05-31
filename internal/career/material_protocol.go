@@ -26,6 +26,7 @@ type LLMTraceMeta struct {
 
 type SourceRef struct {
 	Path          string   `json:"path"`
+	ReadPath      string   `json:"read_path,omitempty"`
 	Version       string   `json:"version"`
 	Excerpt       string   `json:"excerpt"`
 	EvidenceSpans []string `json:"evidence_spans,omitempty"`

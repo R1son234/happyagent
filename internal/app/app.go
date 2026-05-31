@@ -41,16 +41,21 @@ func New(runner Runner, store *store.Store, metrics *observe.Metrics) (*Applicat
 }
 
 type AppendTurnRequest struct {
-	SessionID       string
-	ProfileName     string
-	Input           string
-	SystemPrompt    string
-	ApprovedTools   []string
-	Events          []observe.Event
-	OnStepStart     func(stepIndex int)
-	OnToolCallStart func(toolName string)
-	OnToolCallEnd   func(toolName string, succeeded bool)
-	OnTodosUpdated  func(todos []tools.TodoItem)
+	SessionID          string
+	ProfileName        string
+	Input              string
+	SystemPrompt       string
+	ApprovedTools      []string
+	ToolScope          []string
+	SourceReadPaths    []string
+	RequireSourceReads bool
+	SuppressHistory    bool
+	SuppressMemory     bool
+	Events             []observe.Event
+	OnStepStart        func(stepIndex int)
+	OnToolCallStart    func(toolName string)
+	OnToolCallEnd      func(toolName string, succeeded bool)
+	OnTodosUpdated     func(todos []tools.TodoItem)
 }
 
 func (a *Application) CreateSession(profileName string) (store.SessionRecord, error) {
@@ -79,29 +84,36 @@ func (a *Application) AppendUserTurn(ctx context.Context, req AppendTurnRequest)
 
 	memStore := a.runner.MemoryStore()
 	var memSnapshot string
-	if memStore != nil {
+	if memStore != nil && !req.SuppressMemory {
 		if a.activeSnapID != req.SessionID {
 			memStore.LoadSnapshot()
 			a.activeSnapID = req.SessionID
 		}
 		memSnapshot = memStore.SnapshotText()
 	}
+	history := buildHistory(historyRuns)
+	if req.SuppressHistory {
+		history = nil
+	}
 
 	runID := newID("run")
 	startedAt := time.Now()
 	result, runErr := a.runner.Run(ctx, runtime.RunRequest{
-		Input:           req.Input,
-		SystemPrompt:    req.SystemPrompt,
-		ProfileName:     req.ProfileName,
-		SessionID:       req.SessionID,
-		RunID:           runID,
-		ApprovedTools:   req.ApprovedTools,
-		History:         buildHistory(historyRuns),
-		MemorySnapshot:  memSnapshot,
-		OnStepStart:     req.OnStepStart,
-		OnToolCallStart: req.OnToolCallStart,
-		OnToolCallEnd:   req.OnToolCallEnd,
-		OnTodosUpdated:  req.OnTodosUpdated,
+		Input:              req.Input,
+		SystemPrompt:       req.SystemPrompt,
+		ProfileName:        req.ProfileName,
+		SessionID:          req.SessionID,
+		RunID:              runID,
+		ApprovedTools:      req.ApprovedTools,
+		ToolScope:          append([]string(nil), req.ToolScope...),
+		SourceReadPaths:    append([]string(nil), req.SourceReadPaths...),
+		RequireSourceReads: req.RequireSourceReads,
+		History:            history,
+		MemorySnapshot:     memSnapshot,
+		OnStepStart:        req.OnStepStart,
+		OnToolCallStart:    req.OnToolCallStart,
+		OnToolCallEnd:      req.OnToolCallEnd,
+		OnTodosUpdated:     req.OnTodosUpdated,
 	})
 
 	record := store.RunRecord{

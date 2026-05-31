@@ -198,6 +198,9 @@ func (s *CopilotService) ClassifyInbox(ctx context.Context, req ClassifyInboxReq
 	if err != nil {
 		return ClassifyInboxResult{}, err
 	}
+	for i := range targets {
+		targets[i].ReadPath = workspaceReadPath(ws, targets[i].SourcePath)
+	}
 	if len(targets) == 0 {
 		return ClassifyInboxResult{Warnings: warnings}, nil
 	}
@@ -206,7 +209,7 @@ func (s *CopilotService) ClassifyInbox(ctx context.Context, req ClassifyInboxReq
 		TaskName:      "classify_inbox",
 		PromptVersion: PromptVersionFileClassification,
 		Input:         buildFileClassificationPrompt(targets),
-		SourcePaths:   inboxClassificationSourcePaths(targets),
+		SourcePaths:   inboxClassificationReadPaths(targets),
 	})
 	if err != nil {
 		return ClassifyInboxResult{}, err
@@ -236,7 +239,7 @@ func (s *CopilotService) ClassifyInbox(ctx context.Context, req ClassifyInboxReq
 			SourceHash:            source.SourceHash,
 			OriginalName:          filepath.Base(sourcePath),
 			MaterialType:          strings.TrimSpace(classified.MaterialType),
-			Destination:           strings.TrimSpace(classified.Destination),
+			Destination:           canonicalDestinationForMaterialType(classified.MaterialType, classified.Destination),
 			Confidence:            classified.Confidence,
 			Reason:                strings.TrimSpace(classified.Reason),
 			SourceExcerpt:         strings.TrimSpace(classified.SourceExcerpt),
@@ -354,8 +357,8 @@ func (s *CopilotService) SplitJobDescriptions(ctx context.Context, req SplitJDRe
 	result, err := s.structuredTaskRunner().RunStructuredTask(ctx, StructuredTaskRequest{
 		TaskName:      "split_jd",
 		PromptVersion: PromptVersionJDSplit,
-		Input:         buildJDSplitPrompt(sourcePath, content),
-		SourcePaths:   []string{sourcePath},
+		Input:         buildJDSplitPrompt(sourcePath, workspaceReadPath(ws, sourcePath), content),
+		SourcePaths:   []string{workspaceReadPath(ws, sourcePath)},
 	})
 	if err != nil {
 		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: "split_jd", PromptVersion: PromptVersionJDSplit, SourcePaths: []string{sourcePath}, Error: err.Error()})
@@ -697,6 +700,34 @@ func workspaceTypeForMaterialType(materialType string) (string, bool) {
 	}
 }
 
+func canonicalDestinationForMaterialType(materialType string, destination string) string {
+	destination = strings.TrimSpace(destination)
+	switch destination {
+	case WorkspaceDirResume, WorkspaceDirJD, WorkspaceDirExperiences, WorkspaceDirPrepare, WorkspaceDirProjectPack, WorkspaceDirMyInterviews, WorkspaceDirArchive, "待确认":
+		return destination
+	case "简历":
+		return WorkspaceDirResume
+	case "JD", "岗位JD", "岗位":
+		return WorkspaceDirJD
+	case "面经", "公开面经":
+		return WorkspaceDirExperiences
+	case "项目":
+		return WorkspaceDirProjectPack
+	case "面试", "真实面试":
+		return WorkspaceDirMyInterviews
+	case "复习", "复习笔记":
+		return WorkspaceDirPrepare
+	}
+	itemType, ok := workspaceTypeForMaterialType(materialType)
+	if !ok || destination != "" {
+		return destination
+	}
+	if expected := workspaceTypeDir(itemType); expected != "" {
+		return expected
+	}
+	return destination
+}
+
 func upsertInboxStateItem(state InboxState, item PendingInboxItem) InboxState {
 	for i, existing := range state.Items {
 		if existing.ID == item.ID {
@@ -772,7 +803,7 @@ func (s *CopilotService) generateMarkdownDocument(ctx context.Context, spec gene
 		TaskName:      spec.TaskName,
 		PromptVersion: spec.PromptVersion,
 		Input:         buildGeneratedMarkdownPrompt(spec.TaskName, spec.Instructions, sources, contents),
-		SourcePaths:   sourceRefPaths(sources),
+		SourcePaths:   sourceRefReadPaths(sources),
 	})
 	if err != nil {
 		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
@@ -860,7 +891,7 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 		TaskName:      spec.TaskName,
 		PromptVersion: spec.PromptVersion,
 		Input:         prompt,
-		SourcePaths:   sourceRefPaths(sources),
+		SourcePaths:   sourceRefReadPaths(sources),
 	})
 	if err != nil {
 		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
@@ -872,8 +903,7 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 			repaired, repairErr := runner.RunStructuredTask(ctx, StructuredTaskRequest{
 				TaskName:      spec.TaskName,
 				PromptVersion: spec.PromptVersion,
-				Input:         buildGeneratedDocumentBundleRepairPrompt(prompt, result.Output),
-				SourcePaths:   sourceRefPaths(sources),
+				Input:         buildGeneratedDocumentBundleRepairPrompt(spec.TaskName, result.Output),
 			})
 			if repairErr == nil {
 				result = repaired
@@ -986,7 +1016,7 @@ func collectGenerationSources(ws *Workspace, explicit []string, defaultTypes []s
 			return err
 		}
 		contents[rel] = content
-		refs = append(refs, SourceRef{Path: rel, Version: "sha256:" + ContentFingerprint(content)})
+		refs = append(refs, SourceRef{Path: rel, ReadPath: workspaceReadPath(ws, rel), Version: "sha256:" + ContentFingerprint(content)})
 		return nil
 	}
 	for _, path := range explicit {
@@ -1050,6 +1080,27 @@ func sourceRefPaths(refs []SourceRef) []string {
 		paths = append(paths, ref.Path)
 	}
 	return paths
+}
+
+func sourceRefReadPaths(refs []SourceRef) []string {
+	paths := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		paths = append(paths, firstNonEmpty(ref.ReadPath, ref.Path))
+	}
+	return paths
+}
+
+func inboxClassificationReadPaths(files []InboxFileForClassification) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, firstNonEmpty(file.ReadPath, file.SourcePath))
+	}
+	return paths
+}
+
+func workspaceReadPath(ws *Workspace, rel string) string {
+	rel = filepath.ToSlash(strings.TrimSpace(rel))
+	return rel
 }
 
 func readWorkspaceText(ws *Workspace, rel string) (string, error) {

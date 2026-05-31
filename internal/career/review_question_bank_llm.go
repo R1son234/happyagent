@@ -3,6 +3,7 @@ package career
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -31,11 +32,15 @@ func (g *LLMReviewQuestionBankGenerator) GenerateQuestionBank(ctx context.Contex
 		g.SessionID = sessionID
 	}
 	record, err := g.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     sessionID,
-		ProfileName:   ProfileName,
-		Input:         BuildReviewQuestionBankPrompt(req),
-		SystemPrompt:  g.Config.Engine.SystemPrompt,
-		ApprovedTools: g.Config.Tools.ApprovedTools,
+		SessionID:          sessionID,
+		ProfileName:        ProfileName,
+		Input:              BuildReviewQuestionBankPrompt(req),
+		SystemPrompt:       g.Config.Engine.SystemPrompt,
+		ToolScope:          []string{"file_read", "final_answer"},
+		SourceReadPaths:    reviewQuestionBankSourcePaths(req),
+		RequireSourceReads: true,
+		SuppressHistory:    true,
+		SuppressMemory:     true,
 	})
 	if err != nil {
 		return ReviewQuestionBank{}, fmt.Errorf("run LLM question bank generation: %w", err)
@@ -53,11 +58,13 @@ func (g *LLMReviewQuestionBankGenerator) GenerateQuestionBank(ctx context.Contex
 
 func (g *LLMReviewQuestionBankGenerator) repairQuestionBank(ctx context.Context, sessionID string, record store.RunRecord, parseErr error) (ReviewQuestionBank, error) {
 	repairedRecord, err := g.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     sessionID,
-		ProfileName:   ProfileName,
-		Input:         BuildReviewQuestionBankRepairPrompt(record.Output, parseErr),
-		SystemPrompt:  g.Config.Engine.SystemPrompt,
-		ApprovedTools: g.Config.Tools.ApprovedTools,
+		SessionID:       sessionID,
+		ProfileName:     ProfileName,
+		Input:           BuildReviewQuestionBankRepairPrompt(record.Output, parseErr),
+		SystemPrompt:    g.Config.Engine.SystemPrompt,
+		ToolScope:       []string{"final_answer"},
+		SuppressHistory: true,
+		SuppressMemory:  true,
 	})
 	if err != nil {
 		return ReviewQuestionBank{}, err
@@ -71,7 +78,7 @@ func BuildReviewQuestionBankPrompt(req ReviewQuestionBankRequest) string {
   <task>Generate an accurate, evidence-grounded interview review question bank for one knowledge topic.</task>
   <product_requirement>
     HappyAgent must provide accurate, clear, traceable analysis. Do not fabricate answers.
-    Use the supplied materials only. If evidence is missing, say what is missing in risk_or_missing_evidence.
+    Use the declared source files only. Read them with file_read before final_answer. If evidence is missing, say what is missing in risk_or_missing_evidence.
   </product_requirement>
   <topic>
     <name>%s</name>
@@ -79,20 +86,12 @@ func BuildReviewQuestionBankPrompt(req ReviewQuestionBankRequest) string {
   </topic>
   <source_paths>
     <experience>%s</experience>
+    <experience_read_path>%s</experience_read_path>
     <resume>%s</resume>
+    <resume_read_path>%s</resume_read_path>
     <jd>%s</jd>
+    <jd_read_path>%s</jd_read_path>
   </source_paths>
-  <materials>
-    <public_interview_experience>
-%s
-    </public_interview_experience>
-    <resume>
-%s
-    </resume>
-    <jd>
-%s
-    </jd>
-  </materials>
   <output_contract>
 Return final_answer with valid JSON only, no Markdown fences, with this exact shape:
 {
@@ -122,11 +121,11 @@ Return final_answer with valid JSON only, no Markdown fences, with this exact sh
 		xmlEscape(firstNonEmpty(req.Topic.Name, req.Domain.Name, "通用高频问题")),
 		xmlEscape(req.Domain.Name),
 		xmlEscape(req.SourceItem.Path),
+		xmlEscape(workspaceRootReadPath(req.WorkspaceRoot, req.SourceItem.Path)),
 		xmlEscape(emptyIfBlank(ctx.ResumePath)),
+		xmlEscape(emptyIfBlank(workspaceRootReadPath(req.WorkspaceRoot, ctx.ResumePath))),
 		xmlEscape(emptyIfBlank(ctx.JDPath)),
-		xmlEscape(limitPromptContent(ctx.ExperienceContent)),
-		xmlEscape(limitPromptContent(ctx.ResumeContent)),
-		xmlEscape(limitPromptContent(ctx.JDContent)),
+		xmlEscape(emptyIfBlank(workspaceRootReadPath(req.WorkspaceRoot, ctx.JDPath))),
 	)
 }
 
@@ -144,6 +143,34 @@ func BuildReviewQuestionBankRepairPrompt(output string, parseErr error) string {
 %s
   </invalid_previous_content>
 </review_question_bank_repair>`, parseErr, output)
+}
+
+func reviewQuestionBankSourcePaths(req ReviewQuestionBankRequest) []string {
+	ctx := req.Context
+	paths := []string{
+		workspaceRootReadPath(req.WorkspaceRoot, req.SourceItem.Path),
+		workspaceRootReadPath(req.WorkspaceRoot, ctx.ResumePath),
+		workspaceRootReadPath(req.WorkspaceRoot, ctx.JDPath),
+	}
+	var result []string
+	seen := map[string]bool{}
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		key := filepath.ToSlash(path)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		result = append(result, key)
+	}
+	return result
+}
+
+func workspaceRootReadPath(root string, rel string) string {
+	return filepath.ToSlash(strings.TrimSpace(rel))
 }
 
 func limitPromptContent(content string) string {

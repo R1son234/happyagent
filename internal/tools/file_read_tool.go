@@ -13,6 +13,7 @@ import (
 )
 
 const (
+	FileReadToolName        = "file_read"
 	defaultFileReadMaxBytes = 16 * 1024
 	minFileReadMaxBytes     = 256
 )
@@ -31,7 +32,7 @@ func NewFileReadTool(root string) (*FileReadTool, error) {
 
 func (t *FileReadTool) Definition() Definition {
 	return Definition{
-		Name:        "file_read",
+		Name:        FileReadToolName,
 		Description: "Read a text file under the configured root directory. Supports optional line ranges; large files are truncated automatically and binary files return a summary instead of raw bytes.",
 		InputSchema: `{"type":"object","properties":{"path":{"type":"string"},"max_bytes":{"type":"integer","minimum":256,"description":"Optional maximum number of bytes to return. Defaults to 16384."},"start_line":{"type":"integer","minimum":1,"description":"Optional inclusive start line for partial reads."},"end_line":{"type":"integer","minimum":1,"description":"Optional inclusive end line for partial reads."}},"required":["path"]}`,
 	}

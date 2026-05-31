@@ -80,9 +80,10 @@ The generic runtime path is `config -> runtime -> engine/tools/mcp/skills/profil
 9. Before each model call, the engine compacts old large observations, snips older middle messages behind a deterministic summary, and injects finished background or teammate notifications without breaking tool-call pairing.
 10. Large non-final tool results may be offloaded under `.happyagent/offload/<run-id>/`; the model receives a compact `file_read`-compatible reference instead of the full payload.
 11. Tool calls pass through the policy hook. The policy combines tool danger, profile rules, approvals, shell argv/path risk, MCP danger, and web/network risk into `allow`, `deny`, `ask`, or `passthrough`.
-12. If a profile exposes `write_todos`, complex tasks can maintain a run-scoped TODO plan inside the same ReAct loop. Every non-final tool result includes a system reminder while TODOs remain unfinished, and `final_answer` is blocked until the plan is completed or updated.
-13. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
-14. Optional trace output writes per-step actions, observations, timing, token usage, hook decisions, compaction events, recovery attempts, transcript paths, tool-call status, and offload counters.
+12. Some application-layer background runs can scope the visible tools to a smaller set and bind `file_read` to declared source paths. When required source reads are configured, `final_answer` is blocked until every declared source has been read.
+13. If a profile exposes `write_todos`, complex tasks can maintain a run-scoped TODO plan inside the same ReAct loop. Every non-final tool result includes a system reminder while TODOs remain unfinished, and `final_answer` is blocked until the plan is completed or updated.
+14. Observations are returned to the model until it emits `final_answer` or reaches the step limit.
+15. Optional trace output writes per-step actions, observations, timing, token usage, hook decisions, compaction events, recovery attempts, transcript paths, tool-call status, and offload counters.
 
 ## Multi-Agent And Durable Tasks
 
@@ -139,6 +140,8 @@ The `career` command adds an application layer on top of the runtime:
 6. Build a prompt that includes workspace status and saved material paths.
 7. Run the `career-copilot` profile through the shared app/runtime stack.
 8. Persist generated artifacts under `record/generated/` or the relevant business directory.
+
+Career Copilot's background material tasks use a stricter path than ordinary interactive turns. Inbox classification, JD splitting, generated document bundles, and review question-bank generation pass only source metadata in the user prompt. The model must read the declared workspace files with `file_read`; runtime policy rejects undeclared file paths, and final answers are blocked until required source reads have happened. These runs also suppress session history and memory snapshots, so JSON repair turns do not inherit a previous prompt containing source material.
 
 The batch `career analyze` command follows the same evidence-first behavior with explicit input files and produces Markdown, JSON, and trace outputs.
 

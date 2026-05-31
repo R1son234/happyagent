@@ -28,13 +28,14 @@ type StructuredTaskRunner interface {
 }
 
 type StructuredTaskRequest struct {
-	TaskName      string   `json:"task_name"`
-	PromptVersion string   `json:"prompt_version"`
-	Input         string   `json:"input"`
-	SourcePaths   []string `json:"source_paths"`
-	SystemPrompt  string   `json:"system_prompt,omitempty"`  // Optional lean system prompt for bounded structured tasks.
-	ApprovedTools []string `json:"approved_tools,omitempty"` // Optional approved tools override; empty means no tools should be used.
-	ProfileName   string   `json:"profile_name,omitempty"`   // Optional profile override; blank keeps the task out of the general chat profile.
+	TaskName           string   `json:"task_name"`
+	PromptVersion      string   `json:"prompt_version"`
+	Input              string   `json:"input"`
+	SourcePaths        []string `json:"source_paths"`
+	SystemPrompt       string   `json:"system_prompt,omitempty"`  // Optional lean system prompt for bounded structured tasks.
+	ApprovedTools      []string `json:"approved_tools,omitempty"` // Optional dangerous-tool approvals; tool visibility is source-bound by the runner.
+	ProfileName        string   `json:"profile_name,omitempty"`   // Optional profile override; blank keeps the task out of the general chat profile.
+	RequireSourceReads bool     `json:"require_source_reads,omitempty"`
 }
 
 type StructuredTaskResult struct {
@@ -71,11 +72,16 @@ func (r *appStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 	}
 	profileName := strings.TrimSpace(req.ProfileName)
 	record, err := r.App.AppendUserTurn(ctx, app.AppendTurnRequest{
-		SessionID:     sessionID,
-		ProfileName:   profileName,
-		Input:         req.Input,
-		SystemPrompt:  systemPrompt,
-		ApprovedTools: append([]string(nil), req.ApprovedTools...),
+		SessionID:          sessionID,
+		ProfileName:        profileName,
+		Input:              req.Input,
+		SystemPrompt:       systemPrompt,
+		ApprovedTools:      append([]string(nil), req.ApprovedTools...),
+		ToolScope:          []string{"file_read", "final_answer"},
+		SourceReadPaths:    append([]string(nil), req.SourcePaths...),
+		RequireSourceReads: req.RequireSourceReads || len(req.SourcePaths) > 0,
+		SuppressHistory:    true,
+		SuppressMemory:     true,
 	})
 	if err != nil {
 		return StructuredTaskResult{}, err
@@ -107,13 +113,13 @@ func structuredTaskSystemPrompt(taskName string, promptVersion string) string {
   <prompt_version>%s</prompt_version>
   <role>You are running a bounded structured task for Career Copilot.</role>
   <rules>
-    - Use only the user input provided in this run.
-    - Never call tools.
+    - Use only the user request and content read through file_read from declared source paths.
+    - Before final_answer, read every declared source path listed in the user request.
     - Never activate skills.
-    - Never inspect or list directories.
-    - Never ask for additional files when the input already contains the material.
+    - Never inspect, list, or search directories.
+    - Never use undeclared paths.
     - Reply with exactly one JSON action object: {"type":"final_answer","content":"<the requested JSON here>"}. No markdown fences, no extra prose.
-    - If the input is insufficient, still return the best valid JSON allowed by the output contract and mark uncertainty in the contract fields.
+    - If a declared source cannot be read or is insufficient, still return the best valid JSON allowed by the output contract and mark uncertainty in the contract fields.
   </rules>
 </structured_task>`, xmlEscape(taskName), xmlEscape(promptVersion))
 }
@@ -172,8 +178,10 @@ func buildFileClassificationPrompt(files []InboxFileForClassification) string {
 	for _, file := range files {
 		b.WriteString("    <file>\n")
 		b.WriteString("      <source_path>" + xmlEscape(file.SourcePath) + "</source_path>\n")
+		b.WriteString("      <read_path>" + xmlEscape(firstNonEmpty(file.ReadPath, file.SourcePath)) + "</read_path>\n")
 		b.WriteString("      <source_hash>" + xmlEscape(file.SourceHash) + "</source_hash>\n")
-		b.WriteString("      <content>\n" + xmlEscape(limitFileClassificationContent(file.Content)) + "\n      </content>\n")
+		b.WriteString("      <file_name>" + xmlEscape(filepath.Base(file.SourcePath)) + "</file_name>\n")
+		b.WriteString("      <required>true</required>\n")
 		b.WriteString("    </file>\n")
 	}
 	b.WriteString("  </files>\n")
@@ -194,6 +202,7 @@ func limitFileClassificationContent(content string) string {
 
 type InboxFileForClassification struct {
 	SourcePath string
+	ReadPath   string
 	SourceHash string
 	Content    string
 }
@@ -238,13 +247,14 @@ func parseJDSplitOutput(output string) (jdSplitOutput, error) {
 	return parsed, nil
 }
 
-func buildJDSplitPrompt(sourcePath string, content string) string {
+func buildJDSplitPrompt(sourcePath string, readPath string, _ string) string {
 	var b strings.Builder
 	b.WriteString("<career_jd_split>\n")
 	b.WriteString("  <task>Split one source that may contain multiple job descriptions. Return JSON only.</task>\n")
 	b.WriteString("  <rules>Use only the provided source. Do not fabricate company, team, requirements, or responsibilities. If missing, use empty strings or empty arrays.</rules>\n")
 	b.WriteString("  <source_path>" + xmlEscape(sourcePath) + "</source_path>\n")
-	b.WriteString("  <content>\n" + xmlEscape(limitPromptContent(content)) + "\n  </content>\n")
+	b.WriteString("  <read_path>" + xmlEscape(firstNonEmpty(readPath, sourcePath)) + "</read_path>\n")
+	b.WriteString("  <source_hint>Read read_path with file_read before final_answer. Return source excerpts using source_path.</source_hint>\n")
 	b.WriteString(`  <output_contract>{"job_descriptions":[{"title":"...","company":"...","team":"...","role":"...","responsibilities":["..."],"requirements":["..."],"keywords":["..."],"source_excerpt":"...","confidence":"high"}]}</output_contract>` + "\n")
 	b.WriteString("</career_jd_split>")
 	return b.String()
@@ -292,7 +302,7 @@ func parseGeneratedMarkdownOutput(output string) (generatedMarkdownOutput, error
 	return parsed, nil
 }
 
-func buildGeneratedMarkdownPrompt(taskName string, instructions string, sources []SourceRef, contents map[string]string) string {
+func buildGeneratedMarkdownPrompt(taskName string, instructions string, sources []SourceRef, _ map[string]string) string {
 	var b strings.Builder
 	b.WriteString("<career_generation_task>\n")
 	b.WriteString("  <task_name>" + xmlEscape(taskName) + "</task_name>\n")
@@ -300,11 +310,11 @@ func buildGeneratedMarkdownPrompt(taskName string, instructions string, sources 
 	b.WriteString("  <rules>Use only the provided sources. Do not invent facts, metrics, dates, companies, projects, or user experience. Mark missing evidence as 待补证据.</rules>\n")
 	b.WriteString("  <sources>\n")
 	for _, ref := range sources {
-		content := contents[filepath.ToSlash(ref.Path)]
 		b.WriteString("    <source>\n")
 		b.WriteString("      <path>" + xmlEscape(ref.Path) + "</path>\n")
+		b.WriteString("      <read_path>" + xmlEscape(firstNonEmpty(ref.ReadPath, ref.Path)) + "</read_path>\n")
 		b.WriteString("      <version>" + xmlEscape(ref.Version) + "</version>\n")
-		b.WriteString("      <content>\n" + xmlEscape(limitPromptContent(content)) + "\n      </content>\n")
+		b.WriteString("      <required>true</required>\n")
 		b.WriteString("    </source>\n")
 	}
 	b.WriteString("  </sources>\n")
@@ -360,7 +370,7 @@ func isIncompleteJSONError(err error) bool {
 	return strings.Contains(message, "unexpected end of json input") || strings.Contains(message, "unexpected eof")
 }
 
-func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, outputDir string, sources []SourceRef, contents map[string]string) string {
+func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, outputDir string, sources []SourceRef, _ map[string]string) string {
 	var b strings.Builder
 	b.WriteString("<career_generation_bundle_task>\n")
 	b.WriteString("  <task_name>" + xmlEscape(taskName) + "</task_name>\n")
@@ -369,11 +379,11 @@ func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, ou
 	b.WriteString("  <rules>Use only the provided sources. Do not invent facts, metrics, dates, companies, projects, or user experience. Return JSON only. Each documents[].path must be relative to the provided output_dir or its subdirectories.</rules>\n")
 	b.WriteString("  <sources>\n")
 	for _, ref := range sources {
-		content := contents[filepath.ToSlash(ref.Path)]
 		b.WriteString("    <source>\n")
 		b.WriteString("      <path>" + xmlEscape(ref.Path) + "</path>\n")
+		b.WriteString("      <read_path>" + xmlEscape(firstNonEmpty(ref.ReadPath, ref.Path)) + "</read_path>\n")
 		b.WriteString("      <version>" + xmlEscape(ref.Version) + "</version>\n")
-		b.WriteString("      <content>\n" + xmlEscape(limitPromptContent(content)) + "\n      </content>\n")
+		b.WriteString("      <required>true</required>\n")
 		b.WriteString("    </source>\n")
 	}
 	b.WriteString("  </sources>\n")
@@ -382,12 +392,12 @@ func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, ou
 	return b.String()
 }
 
-func buildGeneratedDocumentBundleRepairPrompt(originalPrompt string, partialOutput string) string {
+func buildGeneratedDocumentBundleRepairPrompt(taskName string, partialOutput string) string {
 	var b strings.Builder
 	b.WriteString("<career_generation_bundle_repair>\n")
+	b.WriteString("  <task_name>" + xmlEscape(taskName) + "</task_name>\n")
 	b.WriteString("  <task>The previous document bundle JSON was truncated or invalid. Return the complete valid JSON object only.</task>\n")
-	b.WriteString("  <rules>Do not return markdown fences, explanations, or a suffix-only continuation. Reconstruct the full JSON document bundle using the original task and the partial output as context.</rules>\n")
-	b.WriteString("  <original_task>\n" + xmlEscape(originalPrompt) + "\n  </original_task>\n")
+	b.WriteString("  <rules>Do not return markdown fences, explanations, or a suffix-only continuation. Repair the partial output into one complete JSON document bundle without adding new evidence.</rules>\n")
 	b.WriteString("  <partial_output>\n" + xmlEscape(partialOutput) + "\n  </partial_output>\n")
 	b.WriteString("</career_generation_bundle_repair>")
 	return b.String()

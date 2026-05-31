@@ -393,6 +393,9 @@ h1 {
 
 .inspector {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
   border-left: 1px solid var(--line);
   background: #f8f4ec;
 }
@@ -491,6 +494,7 @@ h1 {
 }
 
 .inbox-item {
+  min-width: 0;
   border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
   border-radius: 8px;
@@ -535,6 +539,7 @@ h1 {
 }
 
 .inbox-controls label {
+  min-width: 0;
   display: grid;
   gap: 4px;
   font-size: 11px;
@@ -544,11 +549,14 @@ h1 {
 .inbox-controls select,
 .target-select {
   width: 100%;
+  min-width: 0;
   height: 30px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fffdf8;
   color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .inbox-excerpt {
@@ -707,9 +715,9 @@ h1 {
   max-height: 96px;
   overflow-y: auto;
   overflow-x: hidden;
-  border: 1px solid #243045;
+  border: 1px solid var(--line);
   border-radius: 8px;
-  background: #121927;
+  background: var(--paper);
   padding: 8px 10px;
   font-family: var(--font-mono);
 }
@@ -724,23 +732,23 @@ h1 {
   line-height: 1.5;
   border: 0;
   background: transparent;
-  color: #dbe6f7;
+  color: var(--ink-soft);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
 .bubble.assistant {
   background: transparent;
-  color: #b8d7ff;
+  color: var(--ink);
 }
 
 .bubble.system {
   background: transparent;
-  color: #ffb5a9;
+  color: var(--red);
 }
 
 .prompt {
-  color: #78c18a;
+  color: var(--green);
   font-weight: 800;
 }
 

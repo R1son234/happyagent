@@ -467,6 +467,7 @@ function App() {
   const inboxCounts = inbox?.counts || {};
   const inboxFileCount = inbox?.files?.length || 0;
   const pendingInboxCount = inboxCounts.pending || 0;
+  const visibleInboxItems = (inbox?.pending_items || []).filter((item) => item.status === "pending" || item.status === "failed");
   const jdOptions = (status?.index.items || []).filter((item) => item.type === "jd");
 
   return (
@@ -536,7 +537,7 @@ function App() {
               {organizingInbox ? "整理中" : "开始整理"}
             </button>
             <div className="inbox-list">
-              {(inbox?.pending_items || []).map((item) => {
+              {visibleInboxItems.map((item) => {
                 const editable = editingInboxItems[item.id] || item;
                 return (
                 <div className={`inbox-item ${item.status}`} key={item.id}>
@@ -591,7 +592,7 @@ function App() {
                   )}
                 </div>
               )})}
-              {(!inbox?.pending_items || inbox.pending_items.length === 0) && (
+              {visibleInboxItems.length === 0 && (
                 <div className="muted">暂无待确认分类。</div>
               )}
             </div>
