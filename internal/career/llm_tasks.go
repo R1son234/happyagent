@@ -354,7 +354,12 @@ func parseGeneratedDocumentBundleOutput(output string) (generatedDocumentBundleO
 		}
 	}
 	if strings.TrimSpace(parsed.PrimaryDocument) != "" && !seen[filepath.ToSlash(strings.TrimSpace(parsed.PrimaryDocument))] {
-		return generatedDocumentBundleOutput{}, fmt.Errorf("primary_document %q must match one of documents[].path", parsed.PrimaryDocument)
+		// If primary_document doesn't match any document, use the first document instead
+		if len(parsed.Documents) > 0 {
+			parsed.PrimaryDocument = parsed.Documents[0].Path
+		} else {
+			parsed.PrimaryDocument = ""
+		}
 	}
 	return parsed, nil
 }

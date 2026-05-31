@@ -103,6 +103,18 @@ func validateFileReadRange(startLine int, endLine int) error {
 }
 
 func readFilePreview(path string, maxBytes int, startLine int, endLine int) (string, error) {
+	// Handle docx files directly via XML extraction
+	if strings.HasSuffix(strings.ToLower(path), ".docx") {
+		text, err := ExtractDOCXText(path)
+		if err != nil {
+			return "", fmt.Errorf("extract DOCX text: %w", err)
+		}
+		if maxBytes > 0 && len(text) > maxBytes {
+			text = text[:maxBytes]
+		}
+		return text, nil
+	}
+
 	file, err := os.Open(path)
 	if err != nil {
 		return "", err

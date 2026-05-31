@@ -19,6 +19,12 @@ type ReviewQuestionBankGenerator interface {
 	GenerateQuestionBank(ctx context.Context, req ReviewQuestionBankRequest) (ReviewQuestionBank, error)
 }
 
+// ReviewQuestionBankSetGenerator generates a complete review library set
+// with domain name, multiple topics, and project extractions in one LLM call.
+type ReviewQuestionBankSetGenerator interface {
+	GenerateQuestionBankSet(ctx context.Context, req ReviewQuestionBankSetRequest) (ReviewQuestionBankSet, error)
+}
+
 type ReviewQuestionBankRequest struct {
 	WorkspaceRoot string
 	Domain        ReviewDomain
@@ -32,6 +38,44 @@ type ReviewQuestionBank struct {
 	Questions []ReviewQuestion `json:"questions"`
 }
 
+// ReviewQuestionBankSet is the LLM-driven output containing domain name,
+// multiple topic-based question banks, and extracted projects.
+type ReviewQuestionBankSet struct {
+	DomainName string               `json:"domain_name"`
+	Topics     []ReviewQuestionBank `json:"topics"`
+	Projects   []ReviewProjectInput `json:"projects"`
+}
+
+// ReviewProjectInput is a project extracted by the LLM from the resume.
+type ReviewProjectInput struct {
+	ProjectName   string   `json:"project_name"`
+	EvidenceLines []string `json:"evidence_lines"`
+	StarHint      string   `json:"star_hint"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for ReviewProjectInput
+// to handle LLM returning string instead of []string for certain fields.
+func (p *ReviewProjectInput) UnmarshalJSON(data []byte) error {
+	type rawProject struct {
+		ProjectName   string          `json:"project_name"`
+		EvidenceLines json.RawMessage `json:"evidence_lines"`
+		StarHint      string          `json:"star_hint"`
+	}
+	var raw rawProject
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	p.ProjectName = raw.ProjectName
+	p.StarHint = raw.StarHint
+
+	var err error
+	p.EvidenceLines, err = unmarshalStringOrArray(raw.EvidenceLines)
+	if err != nil {
+		return fmt.Errorf("evidence_lines: %w", err)
+	}
+	return nil
+}
+
 type ReviewQuestion struct {
 	Question              string   `json:"question"`
 	ExamPoints            []string `json:"exam_points"`
@@ -40,6 +84,67 @@ type ReviewQuestion struct {
 	Followups             []string `json:"followups"`
 	RiskOrMissingEvidence []string `json:"risk_or_missing_evidence"`
 	SourcePaths           []string `json:"source_paths"`
+}
+
+// UnmarshalJSON implements custom JSON unmarshaling for ReviewQuestion
+// to handle LLM returning string instead of []string for certain fields.
+func (q *ReviewQuestion) UnmarshalJSON(data []byte) error {
+	type rawQuestion struct {
+		Question              string            `json:"question"`
+		ExamPoints            json.RawMessage   `json:"exam_points"`
+		Answer                string            `json:"answer"`
+		ResumeBasedAnswer     string            `json:"resume_based_answer"`
+		Followups             json.RawMessage   `json:"followups"`
+		RiskOrMissingEvidence json.RawMessage   `json:"risk_or_missing_evidence"`
+		SourcePaths           json.RawMessage   `json:"source_paths"`
+	}
+	var raw rawQuestion
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	q.Question = raw.Question
+	q.Answer = raw.Answer
+	q.ResumeBasedAnswer = raw.ResumeBasedAnswer
+
+	var err error
+	q.ExamPoints, err = unmarshalStringOrArray(raw.ExamPoints)
+	if err != nil {
+		return fmt.Errorf("exam_points: %w", err)
+	}
+	q.Followups, err = unmarshalStringOrArray(raw.Followups)
+	if err != nil {
+		return fmt.Errorf("followups: %w", err)
+	}
+	q.RiskOrMissingEvidence, err = unmarshalStringOrArray(raw.RiskOrMissingEvidence)
+	if err != nil {
+		return fmt.Errorf("risk_or_missing_evidence: %w", err)
+	}
+	q.SourcePaths, err = unmarshalStringOrArray(raw.SourcePaths)
+	if err != nil {
+		return fmt.Errorf("source_paths: %w", err)
+	}
+	return nil
+}
+
+// unmarshalStringOrArray handles JSON values that can be either a string or an array of strings.
+func unmarshalStringOrArray(data json.RawMessage) ([]string, error) {
+	if len(data) == 0 || string(data) == "null" {
+		return nil, nil
+	}
+	// Try array first
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		return arr, nil
+	}
+	// Try single string
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		if strings.TrimSpace(s) == "" {
+			return nil, nil
+		}
+		return []string{s}, nil
+	}
+	return nil, fmt.Errorf("cannot unmarshal %s into string or []string", string(data))
 }
 
 type ReviewDomain struct {
@@ -127,6 +232,9 @@ func (w *Workspace) buildReviewLibraryContext(experienceItem WorkspaceItem, inde
 	jd := latestItemOfType(index, WorkspaceTypeJD)
 	resumeContent := readExcerpt(w, resume.Path, 0)
 	jdContent := readExcerpt(w, jd.Path, 0)
+	// Domain and topics are still inferred for backward compatibility with old flow.
+	// The new LLM-driven flow (GenerateReviewLibraryWithSetGenerator) ignores these
+	// and lets the LLM decide domain_name and topic classification.
 	combined := strings.Join([]string{experienceItem.Title, jd.Title, jdContent, expContent, resumeContent}, "\n")
 	domain := inferReviewDomain(combined, experienceItem.Title)
 	roleName := inferRoleName(jdContent, expContent, experienceItem.Title, domain)
@@ -145,6 +253,105 @@ func (w *Workspace) buildReviewLibraryContext(experienceItem WorkspaceItem, inde
 		Domain:            domain,
 		Topics:            topics,
 	}
+}
+
+func (w *Workspace) GenerateReviewLibraryWithSetGenerator(ctx context.Context, now time.Time, generator ReviewQuestionBankSetGenerator) (ReviewLibraryResult, error) {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if err := w.EnsureReviewLibrarySkeleton(now); err != nil {
+		return ReviewLibraryResult{}, err
+	}
+	_, index, err := w.Status()
+	if err != nil {
+		return ReviewLibraryResult{}, err
+	}
+	var generated []string
+	for _, item := range index.Items {
+		if item.Type != WorkspaceTypeExperiences {
+			continue
+		}
+		reviewCtx := w.buildReviewLibraryContext(item, index)
+		if strings.TrimSpace(reviewCtx.ExperienceContent) == "" {
+			continue
+		}
+		if generator == nil {
+			return ReviewLibraryResult{}, fmt.Errorf("review library question bank generation requires LLM generator")
+		}
+		paths, err := w.writeExperienceReviewLibraryFromSet(ctx, reviewCtx, item, now, generator)
+		if err != nil {
+			return ReviewLibraryResult{}, err
+		}
+		generated = append(generated, paths...)
+	}
+	sort.Strings(generated)
+	return ReviewLibraryResult{Paths: uniqueStrings(generated)}, nil
+}
+
+func (w *Workspace) writeExperienceReviewLibraryFromSet(runCtx context.Context, ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time, generator ReviewQuestionBankSetGenerator) ([]string, error) {
+	if generator == nil {
+		return nil, fmt.Errorf("review question bank generation requires LLM generator")
+	}
+
+	set, err := generator.GenerateQuestionBankSet(runCtx, ReviewQuestionBankSetRequest{
+		WorkspaceRoot: w.Root,
+		SourceItem:    sourceItem,
+		Context:       ctx,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("generate question bank set with LLM: %w", err)
+	}
+
+	domainSlug := safeFileName(set.DomainName)
+	var paths []string
+
+	// Write source material
+	sourcePaths, err := w.writeExperienceSourceOnly(ctx, sourceItem, now)
+	if err != nil {
+		return nil, err
+	}
+	paths = append(paths, sourcePaths...)
+
+	// Write topic-based question banks
+	for _, bank := range set.Topics {
+		topicName := safeFileName(bank.TopicName)
+		questionBankRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s题库.md", topicName))
+		if err := w.writeWorkspaceText(questionBankRel, renderLLMQuestionBankFromSet(bank, ctx, sourceItem)); err != nil {
+			return nil, err
+		}
+		paths = append(paths, filepath.ToSlash(questionBankRel))
+	}
+
+	// Write project QA documents
+	for _, project := range set.Projects {
+		if strings.TrimSpace(project.ProjectName) == "" {
+			continue
+		}
+		projectRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s-interview-qa.md", slugForPath(project.ProjectName)))
+		if err := w.writeWorkspaceText(projectRel, renderProjectQAFromInput(project, ctx, sourceItem, now)); err != nil {
+			return nil, err
+		}
+		paths = append(paths, filepath.ToSlash(projectRel))
+	}
+
+	// Refresh indexes
+	domain := ReviewDomain{Slug: domainSlug, Name: set.DomainName, Confidence: "high"}
+	var topics []ReviewTopic
+	for _, bank := range set.Topics {
+		topics = append(topics, ReviewTopic{Name: bank.TopicName, Slug: slugForPath(bank.TopicName)})
+	}
+	if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
+		return nil, err
+	}
+	if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
+		return nil, err
+	}
+	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
+	if err := w.refreshJDIndex(ctx, now); err != nil {
+		return nil, err
+	}
+	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
+	return paths, nil
 }
 
 func (w *Workspace) writeExperienceReviewLibrary(runCtx context.Context, ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time, generator ReviewQuestionBankGenerator) ([]string, error) {
@@ -299,7 +506,6 @@ func renderLLMQuestionBank(bank ReviewQuestionBank, ctx ReviewLibraryContext, to
 	topicName := firstNonEmpty(bank.TopicName, topic.Name)
 	var b strings.Builder
 	b.WriteString("# " + topicName + "题库\n\n")
-	b.WriteString(fmt.Sprintf("> 来源：`%s`。公开面经资料，不是用户真实面试记录。正文由 LLM 基于当前资料生成。\n\n", sourceItem.Path))
 	for i, item := range bank.Questions {
 		question := strings.TrimSpace(item.Question)
 		if question == "" {
@@ -324,6 +530,63 @@ func renderLLMQuestionBank(bank ReviewQuestionBank, ctx ReviewLibraryContext, to
 		writeBullets(&b, sourcePaths, []string{sourceItem.Path})
 		b.WriteString("\n")
 	}
+	return b.String()
+}
+
+func renderLLMQuestionBankFromSet(bank ReviewQuestionBank, ctx ReviewLibraryContext, sourceItem WorkspaceItem) string {
+	topicName := strings.TrimSpace(bank.TopicName)
+	if topicName == "" {
+		topicName = "通用高频问题"
+	}
+	var b strings.Builder
+	b.WriteString("# " + topicName + "题库\n\n")
+	for i, item := range bank.Questions {
+		question := strings.TrimSpace(item.Question)
+		if question == "" {
+			question = fmt.Sprintf("%s相关问题", topicName)
+		}
+		b.WriteString(fmt.Sprintf("## Q%d：%s\n\n", i+1, question))
+		b.WriteString("### 考点\n\n")
+		writeBullets(&b, item.ExamPoints, []string{"待补充：LLM 输出缺少考点。"})
+		b.WriteString("\n### 标准答案\n\n")
+		b.WriteString(strings.TrimSpace(item.Answer))
+		b.WriteString("\n\n### 结合我的简历怎么答\n\n")
+		b.WriteString(strings.TrimSpace(item.ResumeBasedAnswer))
+		b.WriteString("\n\n### 可追问\n\n")
+		writeBullets(&b, item.Followups, []string{"待补充：LLM 输出缺少追问。"})
+		b.WriteString("\n### 风险 / 待补证据\n\n")
+		writeBullets(&b, item.RiskOrMissingEvidence, []string{"待补证据：需要补充可验证项目材料、截图、指标来源或复盘原文。"})
+		b.WriteString("\n### 关联资料\n\n")
+		sourcePaths := item.SourcePaths
+		if len(sourcePaths) == 0 {
+			sourcePaths = []string{sourceItem.Path, emptyIfBlank(ctx.ResumePath), emptyIfBlank(ctx.JDPath)}
+		}
+		writeBullets(&b, sourcePaths, []string{sourceItem.Path})
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func renderProjectQAFromInput(project ReviewProjectInput, ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time) string {
+	var b strings.Builder
+	b.WriteString("# " + project.ProjectName + " 面试 QA\n\n")
+	if project.StarHint != "" {
+		b.WriteString("## STAR 回答提示\n\n")
+		b.WriteString(project.StarHint + "\n\n")
+	}
+	b.WriteString("## 简历证据\n\n")
+	for _, line := range project.EvidenceLines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			b.WriteString("- " + line + "\n")
+		}
+	}
+	if len(project.EvidenceLines) == 0 {
+		b.WriteString("- 待补充：需要从简历中提取相关项目证据。\n")
+	}
+	b.WriteString("\n## 风险点\n\n")
+	b.WriteString("- 不要把「参与/协助」讲成完全 owner，除非简历或材料明确支持。\n")
+	b.WriteString("- 没有截图或后台数据前，不扩展新的量化指标。\n")
 	return b.String()
 }
 
@@ -360,7 +623,8 @@ func ParseReviewQuestionBankJSON(data []byte) (ReviewQuestionBank, error) {
 }
 
 func ParseReviewQuestionBankString(output string) (ReviewQuestionBank, error) {
-	return ParseReviewQuestionBankJSON([]byte(strings.TrimSpace(output)))
+	cleaned := cleanLLMJSON(output)
+	return ParseReviewQuestionBankJSON([]byte(cleaned))
 }
 
 func ValidateReviewQuestionBank(bank ReviewQuestionBank) error {
@@ -386,9 +650,7 @@ func ValidateReviewQuestionBank(bank ReviewQuestionBank) error {
 		if len(nonEmptyStrings(question.Followups)) == 0 {
 			return fmt.Errorf("review question bank questions[%d].followups must not be empty", i)
 		}
-		if len(nonEmptyStrings(question.RiskOrMissingEvidence)) == 0 {
-			return fmt.Errorf("review question bank questions[%d].risk_or_missing_evidence must not be empty", i)
-		}
+		// risk_or_missing_evidence is optional - some questions may have no risks
 		if len(nonEmptyStrings(question.SourcePaths)) == 0 {
 			return fmt.Errorf("review question bank questions[%d].source_paths must not be empty", i)
 		}
@@ -404,6 +666,109 @@ func nonEmptyStrings(values []string) []string {
 		}
 	}
 	return out
+}
+
+func ParseReviewQuestionBankSetJSON(data []byte) (ReviewQuestionBankSet, error) {
+	var set ReviewQuestionBankSet
+	if err := json.Unmarshal(data, &set); err != nil {
+		return ReviewQuestionBankSet{}, fmt.Errorf("parse review question bank set json: %w", err)
+	}
+	if err := ValidateReviewQuestionBankSet(set); err != nil {
+		return ReviewQuestionBankSet{}, err
+	}
+	return set, nil
+}
+
+func ParseReviewQuestionBankSetString(output string) (ReviewQuestionBankSet, error) {
+	cleaned := cleanLLMJSON(output)
+	return ParseReviewQuestionBankSetJSON([]byte(cleaned))
+}
+
+// cleanLLMJSON attempts to fix common JSON formatting issues from LLM output.
+func cleanLLMJSON(input string) string {
+	s := strings.TrimSpace(input)
+
+	// Remove markdown code fences if present
+	s = strings.TrimPrefix(s, "```json")
+	s = strings.TrimPrefix(s, "```")
+	s = strings.TrimSuffix(s, "```")
+	s = strings.TrimSpace(s)
+
+	// Try parsing as-is first
+	if json.Valid([]byte(s)) {
+		return s
+	}
+
+	// Fix trailing commas before } or ]
+	// This is a common LLM mistake
+	result := make([]byte, 0, len(s))
+	inString := false
+	escaped := false
+	for i := 0; i < len(s); i++ {
+		ch := s[i]
+
+		if escaped {
+			result = append(result, ch)
+			escaped = false
+			continue
+		}
+
+		if ch == '\\' && inString {
+			result = append(result, ch)
+			escaped = true
+			continue
+		}
+
+		if ch == '"' {
+			inString = !inString
+			result = append(result, ch)
+			continue
+		}
+
+		if inString {
+			result = append(result, ch)
+			continue
+		}
+
+		// Outside string: skip trailing commas
+		if ch == ',' {
+			// Look ahead to see if next non-whitespace is } or ]
+			j := i + 1
+			for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+				j++
+			}
+			if j < len(s) && (s[j] == '}' || s[j] == ']') {
+				continue // skip the comma
+			}
+		}
+
+		result = append(result, ch)
+	}
+
+	s = string(result)
+
+	// Try parsing again
+	if json.Valid([]byte(s)) {
+		return s
+	}
+
+	// If still invalid, return original (let the parser give a more specific error)
+	return strings.TrimSpace(input)
+}
+
+func ValidateReviewQuestionBankSet(set ReviewQuestionBankSet) error {
+	if strings.TrimSpace(set.DomainName) == "" {
+		return fmt.Errorf("review question bank set missing domain_name")
+	}
+	if len(set.Topics) == 0 {
+		return fmt.Errorf("review question bank set missing topics")
+	}
+	for i, topic := range set.Topics {
+		if err := ValidateReviewQuestionBank(topic); err != nil {
+			return fmt.Errorf("topics[%d]: %w", i, err)
+		}
+	}
+	return nil
 }
 
 func renderSourceMaterial(sourceItem WorkspaceItem, content string, now time.Time) string {
@@ -685,6 +1050,10 @@ func cleanRoleName(value string) string {
 
 func safeFileName(value string) string {
 	value = cleanRoleName(value)
+	// Strip common meaningless prefixes
+	for _, prefix := range []string{"面经_", "面经-", "JD_", "岗位JD_", "复习资料_", "题库_"} {
+		value = strings.TrimPrefix(value, prefix)
+	}
 	replacer := strings.NewReplacer("/", "", "\\", "", ":", "", "*", "", "?", "", "\"", "", "<", "", ">", "", "|", "")
 	value = strings.TrimSpace(replacer.Replace(value))
 	if value == "" {
@@ -735,11 +1104,27 @@ func domainSlug(label string) string {
 	if s != "job-description" {
 		return s
 	}
+
+	// 如果label包含中文字符，使用safeFileName处理，保留可读性
+	if containsChinese(label) {
+		return safeFileName(label)
+	}
+
+	// 否则使用hash作为fallback
 	fp := ContentFingerprint(label)
 	if len(fp) > 8 {
 		fp = fp[:8]
 	}
 	return "domain-" + fp
+}
+
+func containsChinese(s string) bool {
+	for _, r := range s {
+		if r >= 0x4E00 && r <= 0x9FFF {
+			return true
+		}
+	}
+	return false
 }
 
 func inferQuestionsForTopic(topic string, content string) []string {
@@ -905,20 +1290,45 @@ func firstN(values []string, limit int) []string {
 }
 
 func inferReviewTopics(content string) []ReviewTopic {
+	questions := inferQuestionsForTopic("", content)
+
+	// 按主题分组
+	topicGroups := groupQuestionsByTopic(questions)
+
 	var topics []ReviewTopic
-	for _, question := range inferQuestionsForTopic("", content) {
-		name := inferTopicNameFromQuestion(question)
-		if name == "" {
+	for topicName, groupQuestions := range topicGroups {
+		// 跳过太小的分组（只有1个问题），避免分类太细
+		if len(groupQuestions) < 2 {
 			continue
 		}
-		topics = append(topics, ReviewTopic{Name: name, Slug: slugForPath(name)})
+		topics = append(topics, ReviewTopic{
+			Name: topicName,
+			Slug: slugForPath(topicName),
+		})
 	}
+
+	// 如果没有有效的topic，使用默认
 	if len(topics) == 0 {
 		if label := firstMeaningfulLabel(content); label != "" {
 			topics = append(topics, ReviewTopic{Name: label, Slug: slugForPath(label)})
 		}
 	}
+
 	return uniqueTopics(topics)
+}
+
+func groupQuestionsByTopic(questions []string) map[string][]string {
+	groups := make(map[string][]string)
+
+	for _, question := range questions {
+		topicName := inferTopicNameFromQuestion(question)
+		if topicName == "" {
+			continue
+		}
+		groups[topicName] = append(groups[topicName], question)
+	}
+
+	return groups
 }
 
 func inferQuestionForTopic(topic string, content string) string {
@@ -1075,19 +1485,40 @@ func isStopTerm(term string) bool {
 
 func inferTopicNameFromQuestion(question string) string {
 	question = strings.TrimSpace(question)
-	question = strings.TrimPrefix(question, "Q：")
-	question = strings.TrimPrefix(question, "Q:")
+
+	// 去掉Q前缀（支持Q、Q1、Q2等形式）
+	if idx := strings.Index(question, "："); idx > 0 {
+		prefix := question[:idx]
+		if strings.HasPrefix(prefix, "Q") || strings.HasPrefix(prefix, "q") {
+			question = strings.TrimSpace(question[idx+len("："):])
+		}
+	} else if idx := strings.Index(question, ":"); idx > 0 {
+		prefix := question[:idx]
+		if strings.HasPrefix(prefix, "Q") || strings.HasPrefix(prefix, "q") {
+			question = strings.TrimSpace(question[idx+len(":"):])
+		}
+	}
+
 	question = strings.Trim(question, "？?。；; ")
 	if question == "" {
 		return ""
 	}
+
+	// 过滤掉方法论问题，这些问题太泛，不适合单独分类
+	if isMethodologyQuestion(question) {
+		return ""
+	}
+
+	// 提取主题名：在问句词处截断
 	separators := []string{"怎么", "如何", "为什么", "是否", "能否", "？", "?"}
 	best := question
 	for _, sep := range separators {
 		if idx := strings.Index(best, sep); idx > 0 {
 			best = strings.TrimSpace(best[:idx])
+			break // 只取第一个匹配，避免多次截断
 		}
 	}
+
 	if len([]rune(best)) < 2 {
 		best = question
 	}
@@ -1095,6 +1526,20 @@ func inferTopicNameFromQuestion(question string) string {
 		best = string([]rune(best)[:16])
 	}
 	return strings.TrimSpace(best)
+}
+
+func isMethodologyQuestion(question string) bool {
+	methodologyKeywords := []string{
+		"不只说", "要说清", "为什么这么做", "怎么做成",
+		"如何展示", "如何讲解", "如何体现", "如何说明",
+		"能否展示", "能否讲解", "能否说明",
+	}
+	for _, keyword := range methodologyKeywords {
+		if strings.Contains(question, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func uniqueTopics(topics []ReviewTopic) []ReviewTopic {

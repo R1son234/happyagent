@@ -427,7 +427,7 @@ func (s *CopilotService) GenerateReviewLibrary(ctx context.Context, req Generate
 	if err != nil {
 		return GeneratedDocumentResult{}, err
 	}
-	result, err := ws.GenerateReviewLibraryWithGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{
+	result, err := ws.GenerateReviewLibraryWithSetGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{
 		App:       s.App,
 		Config:    s.Config,
 		SessionID: "",
@@ -1289,7 +1289,7 @@ func (s *CopilotService) RebuildGeneratedArtifacts(ctx context.Context) (Rebuild
 	}
 	var generatedPaths []string
 	var warnings []string
-	if result, err := ws.GenerateReviewLibraryWithGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{App: s.App, Config: s.Config}); err == nil {
+	if result, err := ws.GenerateReviewLibraryWithSetGenerator(ctx, s.now(), &LLMReviewQuestionBankGenerator{App: s.App, Config: s.Config}); err == nil {
 		generatedPaths = append(generatedPaths, result.Paths...)
 	} else {
 		warnings = append(warnings, "复习资料库未重建："+err.Error())

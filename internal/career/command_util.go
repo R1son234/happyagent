@@ -104,7 +104,7 @@ func generateReviewLibraryWithLLM(deps Dependencies, workspace *Workspace, sessi
 		Config:    deps.Config,
 		SessionID: sessionID,
 	}
-	return workspace.GenerateReviewLibraryWithGenerator(ctx, now, generator)
+	return workspace.GenerateReviewLibraryWithSetGenerator(ctx, now, generator)
 }
 
 func saveMaterial(workspace *Workspace, itemType string, content string) (WorkspaceItem, error) {
