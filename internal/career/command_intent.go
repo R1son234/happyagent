@@ -18,18 +18,18 @@ type NaturalLanguageResult struct {
 }
 
 func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) error {
-	_, err := executeNaturalLanguageInput(deps, workspace, sessionID, input)
+	_, err := executeNaturalLanguageInput(context.Background(), deps, workspace, sessionID, input)
 	return err
 }
 
-func executeNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessionID string, input string) (NaturalLanguageResult, error) {
+func executeNaturalLanguageInput(ctx context.Context, deps Dependencies, workspace *Workspace, sessionID string, input string) (NaturalLanguageResult, error) {
 	intent := ClassifyIntent(input)
 
 	// Memory intent: skip inbox scan and archive, route directly to model with memory-focused prompt.
 	if isMemoryIntent(intent) {
 		classification := ClassifyInputWithGuide(input, WorkspaceGuide{})
 		classification.Type = string(CareerIntentMemory)
-		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, nil, nil)
+		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, nil, nil)
 	}
 
 	guide, err := workspace.LoadGuide()
@@ -37,7 +37,7 @@ func executeNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessio
 		return NaturalLanguageResult{}, err
 	}
 	classification := ClassifyInputWithGuide(input, guide)
-	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(context.Background(), deps.Stdout, workspace, input)
+	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(ctx, deps.Stdout, workspace, input)
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
@@ -70,13 +70,13 @@ func executeNaturalLanguageInput(deps Dependencies, workspace *Workspace, sessio
 	case CareerIntentIngest:
 		return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
 	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
-		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
+		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
 	default:
-		return handleIntentWithModelTurn(deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
+		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
 	}
 }
 
-func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) (NaturalLanguageResult, error) {
+func handleIntentWithModelTurn(ctx context.Context, deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) (NaturalLanguageResult, error) {
 	meta, err := workspace.ReadMetadata()
 	if err != nil {
 		return NaturalLanguageResult{}, err
@@ -89,7 +89,7 @@ func handleIntentWithModelTurn(deps Dependencies, workspace *Workspace, sessionI
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
-	record, err := runCareerTurn(deps, sessionID, BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root, guide), classification)
+	record, err := runCareerTurn(ctx, deps, sessionID, BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root, guide), classification)
 	if err != nil {
 		if record.ID != "" {
 			fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)

@@ -542,6 +542,44 @@ func TestCopilotServiceGenerateBattlePackRequiresResumeAndJD(t *testing.T) {
 	}
 }
 
+func TestCopilotServiceGenerateBattlePackEnablesAgentTaskToolScope(t *testing.T) {
+	now := time.Date(2026, 5, 25, 11, 30, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	resume, err := ws.AddMaterial(WorkspaceTypeResume, "# 简历\n\n项目经历。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial() error = %v", err)
+	}
+	jd, err := ws.AddMaterial(WorkspaceTypeJD, "# JD\n\n岗位要求。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial() error = %v", err)
+	}
+	runner := &fakeStructuredTaskRunner{output: `{"title":"示例作战包","primary_document":"我的面试/示例岗位/作战页.md","documents":[{"path":"我的面试/示例岗位/作战页.md","title":"示例作战包","markdown":"# 示例作战包"}],"source_refs":[{"path":"` + resume.Path + `","version":"sha256:resume","excerpt":"项目经历","evidence_spans":["项目经历"]},{"path":"` + jd.Path + `","version":"sha256:jd","excerpt":"岗位要求","evidence_spans":["岗位要求"]}],"risk_flags":[],"missing_info":[]}`}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
+	if _, err := service.GenerateBattlePack(context.Background(), GenerateBattlePackRequest{
+		JDPath:      jd.Path,
+		SourcePaths: []string{resume.Path},
+	}); err != nil {
+		t.Fatalf("GenerateBattlePack() error = %v", err)
+	}
+	if len(runner.calls) == 0 {
+		t.Fatalf("expected structured task request")
+	}
+	first := runner.calls[0]
+	if first.ProfileName != ProfileName {
+		t.Fatalf("profile name = %q, want %q", first.ProfileName, ProfileName)
+	}
+	if !sameStrings(first.ToolScope, []string{"agent_task", "file_read", "final_answer"}) {
+		t.Fatalf("tool scope = %v", first.ToolScope)
+	}
+	if !strings.Contains(first.Input, "MUST call agent_task three times") {
+		t.Fatalf("expected battle pack prompt to require subagents, got %q", first.Input)
+	}
+}
+
 func TestCopilotServiceConfirmNewResumeMarksBattlePackStale(t *testing.T) {
 	oldTime := time.Date(2026, 5, 24, 9, 0, 0, 0, time.UTC)
 	newTime := time.Date(2026, 5, 25, 9, 0, 0, 0, time.UTC)

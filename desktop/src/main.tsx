@@ -71,6 +71,24 @@ type ReportView = {
   createdAt: string;
 };
 
+type PostProcessTaskView = {
+  task_name: string;
+  status: string;
+  message?: string;
+  generated_paths?: string[];
+};
+
+type RunEvent = {
+  type: string;
+  message?: string;
+  task_name?: string;
+  tool_name?: string;
+  subtask?: string;
+  status?: string;
+  step_index?: number;
+  created_at?: string;
+};
+
 type SettingsPayload = {
   path: string;
   content: string;
@@ -147,6 +165,7 @@ function App() {
   ]);
   const [running, setRunning] = useState(false);
   const [runSteps, setRunSteps] = useState<string[]>([]);
+  const [runStatusText, setRunStatusText] = useState("等待用户输入");
   const [error, setError] = useState("");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsPath, setSettingsPath] = useState("");
@@ -205,7 +224,7 @@ function App() {
     setInput("");
     setRunning(true);
     setError("");
-    setRunSteps(["已接收请求", "正在读取资料库"]);
+    const tracker = openRunStream("开始处理请求");
     setMessages((items) => [...items, { role: "user", content: text }]);
     try {
       const res = await fetch("/api/chat/runs", {
@@ -214,7 +233,8 @@ function App() {
         body: JSON.stringify({
           session_id: sessionId,
           profile: "career-copilot",
-          input: text
+          input: text,
+          stream_id: tracker.streamId
         })
       });
       const data = await res.json();
@@ -222,7 +242,6 @@ function App() {
       if (!res.ok) {
         throw new Error(data.error || "Agent 运行失败。");
       }
-      setRunSteps((items) => [...items, "已生成回答", "已保存运行记录"]);
       const output = data.record?.output || "已完成。";
       setMessages((items) => [
         ...items,
@@ -246,6 +265,7 @@ function App() {
       setError(message);
       setMessages((items) => [...items, { role: "system", content: message }]);
     } finally {
+      tracker.closeLater();
       setRunning(false);
     }
   }
@@ -256,6 +276,7 @@ function App() {
     Array.from(files).forEach((file) => form.append("files", file));
     setRunning(true);
     setError("");
+    setRunStatusText("正在上传文件");
     setRunSteps(["正在上传文件", "正在放入 inbox"]);
     try {
       const res = await fetch("/api/files/upload", {
@@ -271,6 +292,7 @@ function App() {
         { role: "assistant", content: `已放入 inbox ${saved} 个文件${warningText}。需要整理时再告诉我。` }
       ]);
       setRunSteps(["文件已保存到 inbox", "等待整理指令"]);
+      setRunStatusText("文件已保存到 inbox");
       await loadWorkspace();
     } catch (err) {
       const message = err instanceof Error ? err.message : "文件上传失败。";
@@ -300,12 +322,12 @@ function App() {
     setOrganizingInbox(true);
     setRunning(true);
     setError("");
-    setRunSteps(["正在读取 inbox", "正在调用 LLM 分类"]);
+    const tracker = openRunStream("开始整理 inbox");
     try {
       const res = await fetch("/api/inbox/classify", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({})
+        body: JSON.stringify({ stream_id: tracker.streamId })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "整理 inbox 失败。");
@@ -316,12 +338,12 @@ function App() {
         ...items,
         { role: "assistant", content: `inbox 整理完成：已归档 ${confirmed} 项，待确认 ${pending} 项${warningText}。` }
       ]);
-      setRunSteps(["LLM 分类完成", "资料库状态已刷新"]);
       const primaryPath = data.primary_path || data.generated_paths?.[0] || "";
+      const taskSummary = summarizePostProcessTasks(data.postprocess_tasks || []);
       if (primaryPath) {
         await openFile(primaryPath);
         setLastReport({
-          content: `整理完成。新增结果：${(data.generated_paths || []).join("、") || primaryPath}`,
+          content: `整理完成。\n\n${taskSummary}`,
           logPath: data.log_path,
           generatedPaths: data.generated_paths || [],
           createdAt: new Date().toLocaleString()
@@ -333,6 +355,7 @@ function App() {
       setError(message);
       setMessages((items) => [...items, { role: "system", content: message }]);
     } finally {
+      tracker.closeLater();
       setOrganizingInbox(false);
       setRunning(false);
     }
@@ -343,6 +366,7 @@ function App() {
     setRunning(true);
     setError("");
     setRunSteps(["正在确认分类", "正在写入资料库"]);
+    setRunStatusText("正在确认分类");
     try {
       const res = await fetch("/api/inbox/confirm", {
         method: "POST",
@@ -360,6 +384,7 @@ function App() {
         { role: "assistant", content: `已确认并归档：${data.item?.title || item.original_name || item.source_path}` }
       ]);
       setRunSteps(["分类已确认", "资料库状态已刷新"]);
+      setRunStatusText("分类已确认");
       await loadWorkspace();
     } catch (err) {
       const message = err instanceof Error ? err.message : "确认分类失败。";
@@ -394,12 +419,12 @@ function App() {
     if (running) return;
     setRunning(true);
     setError("");
-    setRunSteps([`正在${label}`, "正在调用 LLM"]);
+    const tracker = openRunStream(`正在${label}`);
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        body: JSON.stringify({ ...payload, stream_id: tracker.streamId })
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `${label}失败。`);
@@ -408,7 +433,6 @@ function App() {
         ...items,
         { role: "assistant", content: `${label}完成${path ? `：${path}` : "。"}` }
       ]);
-      setRunSteps([`${label}完成`, "资料库状态已刷新"]);
       if (path) {
         await openFile(path);
         setLastReport({
@@ -424,8 +448,34 @@ function App() {
       setError(message);
       setMessages((items) => [...items, { role: "system", content: message }]);
     } finally {
+      tracker.closeLater();
       setRunning(false);
     }
+  }
+
+  function openRunStream(initialMessage: string) {
+    const streamId = createStreamId();
+    setRunStatusText(initialMessage);
+    setRunSteps([initialMessage]);
+    const source = new EventSource(`/api/runs/events?stream_id=${encodeURIComponent(streamId)}`);
+    source.onmessage = (event) => {
+      const payload = JSON.parse(event.data) as RunEvent;
+      const message = describeRunEvent(payload);
+      if (!message) return;
+      setRunStatusText(message);
+      setRunSteps((items) => (items[items.length - 1] === message ? items : [...items, message]));
+    };
+    source.onerror = () => {
+      source.close();
+    };
+    return {
+      streamId,
+      closeLater: () => window.setTimeout(() => source.close(), 1200)
+    };
+  }
+
+  function isFileDrop(event: React.DragEvent) {
+    return Array.from(event.dataTransfer?.types || []).includes("Files");
   }
 
   async function saveSettings() {
@@ -471,7 +521,18 @@ function App() {
   const jdOptions = (status?.index.items || []).filter((item) => item.type === "jd");
 
   return (
-    <main className="desktop-frame">
+    <main
+      className="desktop-frame"
+      onDragOver={(event) => {
+        if (!isFileDrop(event)) return;
+        event.preventDefault();
+      }}
+      onDrop={(event) => {
+        if (!isFileDrop(event)) return;
+        event.preventDefault();
+        void importDroppedFiles(event.dataTransfer.files);
+      }}
+    >
       <header className="topbar">
         <div className="traffic">
           <i className="dot red" />
@@ -669,14 +730,7 @@ function App() {
           </section>
         </aside>
 
-        <footer
-          className="assistant-bar"
-          onDragOver={(event) => event.preventDefault()}
-          onDrop={(event) => {
-            event.preventDefault();
-            void importDroppedFiles(event.dataTransfer.files);
-          }}
-        >
+        <footer className="assistant-bar">
           <section className="chat">
             <div className="messages">
               {messages.map((message, index) => (
@@ -710,6 +764,7 @@ function App() {
           </section>
           <section className="run">
             <h2>运行状态</h2>
+            <div className="notice compact">{runStatusText}</div>
             {(runSteps.length ? runSteps : ["等待用户输入", "资料库已就绪"]).map((step, index) => (
               <div className={`step ${running && index === runSteps.length - 1 ? "active" : ""}`} key={step}>
                 <span className="mark" />
@@ -747,6 +802,38 @@ function App() {
       )}
     </main>
   );
+}
+
+function createStreamId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function describeRunEvent(event: RunEvent) {
+  if (event.message) return event.message;
+  switch (event.type) {
+    case "step_started":
+      return `模型第 ${event.step_index || 0} 轮处理中`;
+    case "subtask_started":
+      return `${event.subtask || event.task_name || "子任务"}开始执行`;
+    case "subtask_finished":
+      return `${event.subtask || event.task_name || "子任务"} ${event.status === "completed" ? "已完成" : event.status === "skipped" ? "已跳过" : "失败"}`;
+    case "run_completed":
+      return "运行完成";
+    case "run_failed":
+      return "运行失败";
+    default:
+      return "";
+  }
+}
+
+function summarizePostProcessTasks(tasks: PostProcessTaskView[]) {
+  if (!tasks.length) return "未返回后处理任务摘要。";
+  return tasks
+    .map((task) => `- ${task.task_name}：${task.status}${task.message ? `，${task.message}` : ""}`)
+    .join("\n");
 }
 
 function TreeNode({

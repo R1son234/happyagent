@@ -259,6 +259,28 @@ func TestHandleInboxClassifyUsesCopilotService(t *testing.T) {
 	}
 }
 
+func TestRunEventBrokerReplaysHistoryAndStreamsLiveEvents(t *testing.T) {
+	broker := newRunEventBroker()
+	broker.Publish("stream-1", RunEvent{Type: "status_text", Message: "started"})
+
+	backlog, ch, unsubscribe := broker.Subscribe("stream-1")
+	defer unsubscribe()
+
+	if len(backlog) != 1 || backlog[0].Message != "started" {
+		t.Fatalf("unexpected backlog: %+v", backlog)
+	}
+
+	broker.Publish("stream-1", RunEvent{Type: "status_text", Message: "running"})
+	select {
+	case event := <-ch:
+		if event.Message != "running" {
+			t.Fatalf("unexpected live event: %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for live event")
+	}
+}
+
 func TestHandleInboxConfirmUsesCopilotService(t *testing.T) {
 	now := time.Date(2026, 5, 24, 15, 0, 0, 0, time.UTC)
 	root := t.TempDir()

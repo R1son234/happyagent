@@ -38,8 +38,8 @@ type RunRequest struct {
 	History            []memory.Turn
 	MemorySnapshot     string
 	OnStepStart        func(stepIndex int)
-	OnToolCallStart    func(toolName string)
-	OnToolCallEnd      func(toolName string, succeeded bool)
+	OnToolCallStart    func(toolName string, arguments []byte)
+	OnToolCallEnd      func(toolName string, arguments []byte, succeeded bool)
 	OnTodosUpdated     func(todos []tools.TodoItem)
 	ChildAgentID       string
 	ChildTaskID        string
@@ -289,11 +289,11 @@ func runtimeCallbackHook(req RunRequest) func(ctx context.Context, event engine.
 			}
 		case engine.HookPreToolUse:
 			if req.OnToolCallStart != nil {
-				req.OnToolCallStart(event.ToolName)
+				req.OnToolCallStart(event.ToolName, event.ActionArguments())
 			}
 		case engine.HookPostToolUse:
 			if req.OnToolCallEnd != nil {
-				req.OnToolCallEnd(event.ToolName, event.Err == nil)
+				req.OnToolCallEnd(event.ToolName, event.ActionArguments(), event.Err == nil)
 			}
 			if event.ToolName == tools.WriteTodosToolName && req.OnTodosUpdated != nil && event.State != nil {
 				req.OnTodosUpdated(event.State.Todos)

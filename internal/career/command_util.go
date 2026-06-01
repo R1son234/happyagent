@@ -19,7 +19,7 @@ import (
 	"happyagent/internal/tools"
 )
 
-func runCareerTurn(deps Dependencies, sessionID string, prompt string, classification InputClassification) (store.RunRecord, error) {
+func runCareerTurn(ctx context.Context, deps Dependencies, sessionID string, prompt string, classification InputClassification) (store.RunRecord, error) {
 	timeout := time.Duration(deps.Config.Engine.RunTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -30,7 +30,7 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 	runlog.Linef("Profile: `%s`", ProfileName)
 	runlog.Linef("Session: `%s`", sessionID)
 	runlog.Linef("")
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	spinner := terminal.NewSpinner(deps.Stderr)
@@ -47,10 +47,10 @@ func runCareerTurn(deps Dependencies, sessionID string, prompt string, classific
 		OnStepStart: func(stepIndex int) {
 			spinner.UpdateThinkingMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
 		},
-		OnToolCallStart: func(toolName string) {
+		OnToolCallStart: func(toolName string, _ []byte) {
 			spinner.UpdateMessage(fmt.Sprintf("Executing %s...", toolName))
 		},
-		OnToolCallEnd: func(toolName string, succeeded bool) {
+		OnToolCallEnd: func(toolName string, _ []byte, succeeded bool) {
 			if !succeeded {
 				spinner.UpdateMessage(fmt.Sprintf("Tool %s failed, thinking...", toolName))
 			}

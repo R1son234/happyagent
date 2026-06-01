@@ -34,6 +34,7 @@ type Server struct {
 	workspaceRoot string
 	staticDir     string
 	mux           *http.ServeMux
+	eventBroker   *runEventBroker
 
 	mu       sync.Mutex
 	sessions map[string]string
@@ -67,6 +68,7 @@ func NewServer(opts Options) (*Server, error) {
 		workspaceRoot: workspaceRoot,
 		staticDir:     opts.StaticDir,
 		mux:           http.NewServeMux(),
+		eventBroker:   newRunEventBroker(),
 		sessions:      map[string]string{},
 	}
 	s.routes()
@@ -110,6 +112,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/inbox", s.handleInbox)
 	s.mux.HandleFunc("POST /api/inbox/classify", s.handleInboxClassify)
 	s.mux.HandleFunc("POST /api/inbox/confirm", s.handleInboxConfirm)
+	s.mux.HandleFunc("GET /api/runs/events", s.handleRunEvents)
 	s.mux.HandleFunc("POST /api/workspace/target-jd", s.handleSelectTargetJD)
 	s.mux.HandleFunc("POST /api/jd/split", s.handleJDSplit)
 	s.mux.HandleFunc("POST /api/review-library/generate", s.handleReviewLibraryGenerate)
@@ -143,6 +146,111 @@ func requestLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		next.ServeHTTP(w, r)
 	})
+}
+
+type streamProgressReporter struct {
+	streamID string
+	broker   *runEventBroker
+	taskName string
+}
+
+func (r streamProgressReporter) publish(event RunEvent) {
+	if r.broker == nil || strings.TrimSpace(r.streamID) == "" {
+		return
+	}
+	if strings.TrimSpace(event.TaskName) == "" {
+		event.TaskName = r.taskName
+	}
+	r.broker.Publish(r.streamID, event)
+}
+
+func (r streamProgressReporter) Status(message string) {
+	if strings.TrimSpace(message) == "" {
+		return
+	}
+	r.publish(RunEvent{Type: "status_text", Message: message})
+}
+
+func (r streamProgressReporter) StepStart(stepIndex int) {
+	r.publish(RunEvent{
+		Type:      "step_started",
+		StepIndex: stepIndex,
+		Message:   fmt.Sprintf("模型第 %d 轮处理中", stepIndex),
+	})
+}
+
+func (r streamProgressReporter) ToolStart(toolName string, arguments []byte) {
+	r.publish(RunEvent{
+		Type:     "tool_started",
+		ToolName: toolName,
+		Message:  humanToolMessage(toolName, arguments, true),
+	})
+}
+
+func (r streamProgressReporter) ToolEnd(toolName string, arguments []byte, succeeded bool) {
+	status := "completed"
+	message := ""
+	if !succeeded {
+		status = "failed"
+		message = humanToolMessage(toolName, arguments, false)
+	}
+	r.publish(RunEvent{
+		Type:     "tool_finished",
+		ToolName: toolName,
+		Status:   status,
+		Message:  message,
+	})
+}
+
+func humanToolMessage(toolName string, arguments []byte, starting bool) string {
+	switch toolName {
+	case "file_read":
+		var input struct {
+			Path string `json:"path"`
+		}
+		_ = json.Unmarshal(arguments, &input)
+		path := strings.TrimSpace(input.Path)
+		if path == "" {
+			if starting {
+				return "正在读取资料"
+			}
+			return "读取资料失败"
+		}
+		if starting {
+			return "正在读取资料：" + path
+		}
+		return "读取资料失败：" + path
+	case "agent_task":
+		var input struct {
+			Name string `json:"name"`
+			Role string `json:"role"`
+		}
+		_ = json.Unmarshal(arguments, &input)
+		label := firstNonEmpty(strings.TrimSpace(input.Role), strings.TrimSpace(input.Name), "子分析任务")
+		if starting {
+			return "正在委派子分析任务：" + label
+		}
+		return "子分析任务失败：" + label
+	default:
+		if starting {
+			return "正在执行：" + toolName
+		}
+		return toolName + " 执行失败"
+	}
+}
+
+func (s *Server) publishRunEvent(streamID string, event RunEvent) {
+	if s.eventBroker == nil || strings.TrimSpace(streamID) == "" {
+		return
+	}
+	s.eventBroker.Publish(streamID, event)
+}
+
+func (s *Server) finalizeRunStream(streamID string) {
+	if s.eventBroker == nil || strings.TrimSpace(streamID) == "" {
+		return
+	}
+	s.eventBroker.Finalize(streamID)
 }
 
 func (s *Server) copilotService() *career.CopilotService {
@@ -547,8 +655,14 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	cfg := s.cfg
 	s.mu.Unlock()
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "organize_inbox"}
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "organize_inbox", Message: "开始整理 inbox"})
+	}
 	logSession, logPath := initDesktopRunLog(cfg, "organize_inbox", "inbox", "开始整理 inbox")
-	result, err := s.copilotService().ClassifyInbox(r.Context(), req)
+	ctx := career.WithProgressReporter(r.Context(), reporter)
+	reporter.Status("正在扫描和抽取 inbox 资料")
+	result, err := s.copilotService().ClassifyInbox(ctx, req)
 	if err != nil {
 		runlog.Section("Error", err.Error())
 		if logSession != nil {
@@ -556,6 +670,10 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 			_ = logSession.Close()
 		}
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "organize_inbox", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	if logSession != nil {
@@ -565,9 +683,14 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 	ws, err := career.OpenWorkspace(s.workspaceRoot, time.Now())
 	if err != nil {
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "organize_inbox", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
-	generatedPaths, warnings := s.postProcessInboxClassification(r.Context(), ws, result.Items, cfg)
+	reporter.Status("分类完成，正在并发生成后续资料")
+	generatedPaths, postProcessTasks, warnings := s.postProcessInboxClassification(ctx, ws, result.Items, strings.TrimSpace(req.StreamID))
 	status := career.RunSummaryStatusSuccess
 	if len(warnings) > 0 {
 		status = career.RunSummaryStatusPartialSuccess
@@ -585,13 +708,18 @@ func (s *Server) handleInboxClassify(w http.ResponseWriter, r *http.Request) {
 	})
 	generatedPaths = uniquePaths(append(generatedPaths, runSummaryPath))
 	writeJSON(w, http.StatusOK, map[string]any{
-		"items":            result.Items,
-		"warnings":         append(result.Warnings, warnings...),
-		"generated_paths":  generatedPaths,
-		"primary_path":     firstNonEmpty(runSummaryPath, firstPath(generatedPaths)),
-		"log_path":         logPath,
-		"run_summary_path": runSummaryPath,
+		"items":             result.Items,
+		"warnings":          append(result.Warnings, warnings...),
+		"generated_paths":   generatedPaths,
+		"postprocess_tasks": postProcessTasks,
+		"primary_path":      firstNonEmpty(runSummaryPath, firstPath(generatedPaths)),
+		"log_path":          logPath,
+		"run_summary_path":  runSummaryPath,
 	})
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "organize_inbox", Message: "整理与后续生成已完成", Status: string(status)})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func (s *Server) handleInboxConfirm(w http.ResponseWriter, r *http.Request) {
@@ -606,6 +734,44 @@ func (s *Server) handleInboxConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request) {
+	streamID := strings.TrimSpace(r.URL.Query().Get("stream_id"))
+	if streamID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "stream_id is required"})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming is unavailable"})
+		return
+	}
+	backlog, ch, unsubscribe := s.eventBroker.Subscribe(streamID)
+	defer unsubscribe()
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	for _, event := range backlog {
+		if err := writeSSEEvent(w, event); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			if err := writeSSEEvent(w, event); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) handleSelectTargetJD(w http.ResponseWriter, r *http.Request) {
@@ -648,12 +814,25 @@ func (s *Server) handleReviewLibraryGenerate(w http.ResponseWriter, r *http.Requ
 		writeError(w, err)
 		return
 	}
-	result, err := s.copilotService().GenerateReviewLibrary(r.Context(), req)
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "generate_review_library"}
+	ctx := career.WithProgressReporter(r.Context(), reporter)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "generate_review_library", Message: "开始生成复习资料库"})
+	}
+	result, err := s.copilotService().GenerateReviewLibrary(ctx, req)
 	if err != nil {
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "generate_review_library", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "generate_review_library", Message: "复习资料库生成完成", Status: "success"})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func (s *Server) handleProjectPackGenerate(w http.ResponseWriter, r *http.Request) {
@@ -662,12 +841,25 @@ func (s *Server) handleProjectPackGenerate(w http.ResponseWriter, r *http.Reques
 		writeError(w, err)
 		return
 	}
-	result, err := s.copilotService().GenerateProjectPack(r.Context(), req)
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "generate_project_pack"}
+	ctx := career.WithProgressReporter(r.Context(), reporter)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "generate_project_pack", Message: "开始生成项目专项"})
+	}
+	result, err := s.copilotService().GenerateProjectPack(ctx, req)
 	if err != nil {
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "generate_project_pack", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "generate_project_pack", Message: "项目专项生成完成", Status: "success"})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func (s *Server) handleBattlePackGenerate(w http.ResponseWriter, r *http.Request) {
@@ -676,12 +868,25 @@ func (s *Server) handleBattlePackGenerate(w http.ResponseWriter, r *http.Request
 		writeError(w, err)
 		return
 	}
-	result, err := s.copilotService().GenerateBattlePack(r.Context(), req)
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "generate_battle_pack"}
+	ctx := career.WithProgressReporter(r.Context(), reporter)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "generate_battle_pack", Message: "开始生成面试作战包"})
+	}
+	result, err := s.copilotService().GenerateBattlePack(ctx, req)
 	if err != nil {
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "generate_battle_pack", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "generate_battle_pack", Message: "面试作战包生成完成", Status: "success"})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func (s *Server) handleInterviewReviewExtract(w http.ResponseWriter, r *http.Request) {
@@ -690,12 +895,25 @@ func (s *Server) handleInterviewReviewExtract(w http.ResponseWriter, r *http.Req
 		writeError(w, err)
 		return
 	}
-	result, err := s.copilotService().ExtractInterviewReview(r.Context(), req)
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "extract_interview_review"}
+	ctx := career.WithProgressReporter(r.Context(), reporter)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "extract_interview_review", Message: "开始抽取真实面试复盘"})
+	}
+	result, err := s.copilotService().ExtractInterviewReview(ctx, req)
 	if err != nil {
 		writeError(w, err)
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "extract_interview_review", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "extract_interview_review", Message: "真实面试复盘抽取完成", Status: "success"})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func (s *Server) handleCleanupGeneratedArtifacts(w http.ResponseWriter, r *http.Request) {
@@ -725,34 +943,11 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-func (s *Server) refreshReviewLibraryAfterIngest(ctx context.Context, ws *career.Workspace, hasExperience bool, cfg config.Config) ([]string, []string) {
-	if !hasExperience {
-		return nil, nil
-	}
-	session, err := s.app.CreateSession(defaultProfile)
-	if err != nil {
-		return nil, []string{"复习资料库未刷新：创建 LLM 会话失败：" + err.Error()}
-	}
-	timeout := time.Duration(cfg.Engine.RunTimeoutSeconds) * time.Second
-	if timeout <= 0 {
-		timeout = 180 * time.Second
-	}
-	subLog, _ := initDesktopRunLog(cfg, "generate_review_library", "post_process", "生成复习资料库题库")
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	result, err := ws.GenerateReviewLibraryWithGenerator(runCtx, time.Now(), &career.LLMReviewQuestionBankGenerator{
-		App:       s.app,
-		Config:    cfg,
-		SessionID: session.ID,
-	})
-	cancel()
-	if subLog != nil {
-		runlog.Disable()
-		_ = subLog.Close()
-	}
-	if err != nil {
-		return nil, []string{"复习资料库未刷新：" + err.Error()}
-	}
-	return result.Paths, nil
+type postProcessTaskResult struct {
+	TaskName       string   `json:"task_name"`
+	Status         string   `json:"status"`
+	Message        string   `json:"message,omitempty"`
+	GeneratedPaths []string `json:"generated_paths,omitempty"`
 }
 
 func safeUploadName(name string) string {
@@ -845,6 +1040,7 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 		SessionID string `json:"session_id"`
 		Profile   string `json:"profile"`
 		Input     string `json:"input"`
+		StreamID  string `json:"stream_id"`
 	}
 	if err := readJSON(r.Body, &req); err != nil {
 		writeError(w, err)
@@ -868,6 +1064,11 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(cfg.Engine.RunTimeoutSeconds)*time.Second)
 	defer cancel()
+	reporter := streamProgressReporter{streamID: strings.TrimSpace(req.StreamID), broker: s.eventBroker, taskName: "chat_generate"}
+	ctx = career.WithProgressReporter(ctx, reporter)
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_started", TaskName: "chat_generate", Message: "开始处理请求"})
+	}
 	logSession, logPath := initDesktopRunLog(cfg, profile, sessionID, req.Input)
 	if logSession != nil {
 		defer func() {
@@ -886,6 +1087,10 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 			"session_id": sessionID,
 			"log_path":   logPath,
 		})
+		if req.StreamID != "" {
+			s.publishRunEvent(req.StreamID, RunEvent{Type: "run_failed", TaskName: "chat_generate", Message: err.Error(), Status: "failed"})
+			s.finalizeRunStream(req.StreamID)
+		}
 		return
 	}
 	runlog.Section("Final Output", chat.Output)
@@ -911,6 +1116,10 @@ func (s *Server) handleChatRun(w http.ResponseWriter, r *http.Request) {
 		"log_path":         logPath,
 		"run_summary_path": runSummaryPath,
 	})
+	if req.StreamID != "" {
+		s.publishRunEvent(req.StreamID, RunEvent{Type: "run_completed", TaskName: "chat_generate", Message: "处理完成", Status: "success"})
+		s.finalizeRunStream(req.StreamID)
+	}
 }
 
 func initDesktopRunLog(cfg config.Config, profile string, sessionID string, input string) (*runlog.Session, string) {
@@ -932,7 +1141,7 @@ func initDesktopRunLog(cfg config.Config, profile string, sessionID string, inpu
 	return session, session.Path()
 }
 
-func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.Workspace, items []career.PendingInboxItem, cfg config.Config) ([]string, []string) {
+func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.Workspace, items []career.PendingInboxItem, streamID string) ([]string, []postProcessTaskResult, []string) {
 	hasJD := false
 	hasResume := false
 	hasExperience := false
@@ -949,43 +1158,156 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 			hasExperience = true
 		}
 	}
-	var generatedPaths []string
-	var warnings []string
-	if hasExperience {
-		paths, generatedWarnings := s.refreshReviewLibraryAfterIngest(ctx, ws, hasExperience, cfg)
-		generatedPaths = append(generatedPaths, paths...)
-		warnings = append(warnings, generatedWarnings...)
-	}
 	meta, err := ws.ReadMetadata()
-	if err == nil && meta.CurrentResume != "" && meta.ActiveJD != "" && (hasResume || hasJD || hasExperience) {
+	if err != nil {
+		meta = career.WorkspaceMetadata{}
+	}
+
+	var (
+		mu             sync.Mutex
+		wg             sync.WaitGroup
+		generatedPaths []string
+		taskResults    []postProcessTaskResult
+		warnings       []string
+	)
+	recordTask := func(result postProcessTaskResult) {
+		mu.Lock()
+		defer mu.Unlock()
+		taskResults = append(taskResults, result)
+		generatedPaths = append(generatedPaths, result.GeneratedPaths...)
+		if result.Status == "failed" || result.Status == "skipped" {
+			warnings = append(warnings, result.Message)
+		}
+	}
+	runTask := func(taskName string, startMessage string, fn func(context.Context) (postProcessTaskResult, error)) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if streamID != "" {
+				s.publishRunEvent(streamID, RunEvent{
+					Type:     "subtask_started",
+					TaskName: "organize_inbox",
+					Subtask:  taskName,
+					Status:   "running",
+					Message:  startMessage,
+				})
+			}
+			taskCtx := career.WithProgressReporter(ctx, streamProgressReporter{
+				streamID: streamID,
+				broker:   s.eventBroker,
+				taskName: taskName,
+			})
+			result, taskErr := fn(taskCtx)
+			if taskErr != nil {
+				result = postProcessTaskResult{
+					TaskName: taskName,
+					Status:   "failed",
+					Message:  startMessage + "失败：" + taskErr.Error(),
+				}
+			}
+			recordTask(result)
+			if streamID != "" {
+				s.publishRunEvent(streamID, RunEvent{
+					Type:     "subtask_finished",
+					TaskName: "organize_inbox",
+					Subtask:  taskName,
+					Status:   result.Status,
+					Message:  result.Message,
+				})
+			}
+		}()
+	}
+
+	if hasExperience {
+		runTask("generate_review_library", "正在生成复习资料库", func(taskCtx context.Context) (postProcessTaskResult, error) {
+			result, err := s.copilotService().GenerateReviewLibrary(taskCtx, career.GenerateReviewLibraryRequest{})
+			if err != nil {
+				return postProcessTaskResult{}, err
+			}
+			return postProcessTaskResult{
+				TaskName:       "generate_review_library",
+				Status:         "completed",
+				Message:        "复习资料库生成完成",
+				GeneratedPaths: result.GeneratedPaths,
+			}, nil
+		})
+	} else {
+		skipped := postProcessTaskResult{
+			TaskName: "generate_review_library",
+			Status:   "skipped",
+			Message:  "复习资料库已跳过：未发现新归档的公开面经资料",
+		}
+		recordTask(skipped)
+		if streamID != "" {
+			s.publishRunEvent(streamID, RunEvent{Type: "subtask_finished", TaskName: "organize_inbox", Subtask: skipped.TaskName, Status: skipped.Status, Message: skipped.Message})
+		}
+	}
+
+	if meta.CurrentResume != "" && (hasResume || hasJD || hasExperience) {
 		projectName := "项目专项"
 		if strings.TrimSpace(meta.ActiveProject) != "" {
 			projectName = strings.TrimSuffix(filepath.Base(meta.ActiveProject), filepath.Ext(meta.ActiveProject))
 		}
-		subLog, _ := initDesktopRunLog(cfg, "generate_project_pack", "post_process", "生成项目专项")
-		projectPack, projectErr := s.copilotService().GenerateProjectPack(ctx, career.GenerateProjectPackRequest{ProjectName: projectName})
-		if subLog != nil {
-			runlog.Disable()
-			_ = subLog.Close()
+		runTask("generate_project_pack", "正在生成项目专项", func(taskCtx context.Context) (postProcessTaskResult, error) {
+			result, err := s.copilotService().GenerateProjectPack(taskCtx, career.GenerateProjectPackRequest{
+				ProjectName: projectName,
+			})
+			if err != nil {
+				return postProcessTaskResult{}, err
+			}
+			return postProcessTaskResult{
+				TaskName:       "generate_project_pack",
+				Status:         "completed",
+				Message:        "项目专项生成完成",
+				GeneratedPaths: result.GeneratedPaths,
+			}, nil
+		})
+	} else {
+		skipped := postProcessTaskResult{
+			TaskName: "generate_project_pack",
+			Status:   "skipped",
+			Message:  "项目专项已跳过：当前简历不可用",
 		}
-		if projectErr != nil {
-			warnings = append(warnings, "项目专项未生成："+projectErr.Error())
-		} else if projectPack.Path != "" {
-			generatedPaths = append(generatedPaths, projectPack.Path)
-		}
-		subLog2, _ := initDesktopRunLog(cfg, "generate_battle_pack", "post_process", "生成面试作战包")
-		battlePack, battleErr := s.copilotService().GenerateBattlePack(ctx, career.GenerateBattlePackRequest{JDPath: meta.ActiveJD, SourcePaths: []string{meta.CurrentResume}})
-		if subLog2 != nil {
-			runlog.Disable()
-			_ = subLog2.Close()
-		}
-		if battleErr != nil {
-			warnings = append(warnings, "面试作战包未生成："+battleErr.Error())
-		} else if battlePack.Path != "" {
-			generatedPaths = append(generatedPaths, battlePack.Path)
+		recordTask(skipped)
+		if streamID != "" {
+			s.publishRunEvent(streamID, RunEvent{Type: "subtask_finished", TaskName: "organize_inbox", Subtask: skipped.TaskName, Status: skipped.Status, Message: skipped.Message})
 		}
 	}
-	return uniquePaths(generatedPaths), warnings
+
+	if meta.CurrentResume != "" && meta.ActiveJD != "" && (hasResume || hasJD || hasExperience) {
+		runTask("generate_battle_pack", "正在生成面试作战包", func(taskCtx context.Context) (postProcessTaskResult, error) {
+			result, err := s.copilotService().GenerateBattlePack(taskCtx, career.GenerateBattlePackRequest{
+				JDPath:      meta.ActiveJD,
+				SourcePaths: []string{meta.CurrentResume},
+			})
+			if err != nil {
+				return postProcessTaskResult{}, err
+			}
+			return postProcessTaskResult{
+				TaskName:       "generate_battle_pack",
+				Status:         "completed",
+				Message:        "面试作战包生成完成",
+				GeneratedPaths: result.GeneratedPaths,
+			}, nil
+		})
+	} else {
+		message := "面试作战包已跳过：缺少当前简历或目标 JD"
+		if meta.ActiveJD == "" {
+			message = "面试作战包已跳过：尚未设置目标 JD"
+		}
+		skipped := postProcessTaskResult{
+			TaskName: "generate_battle_pack",
+			Status:   "skipped",
+			Message:  message,
+		}
+		recordTask(skipped)
+		if streamID != "" {
+			s.publishRunEvent(streamID, RunEvent{Type: "subtask_finished", TaskName: "organize_inbox", Subtask: skipped.TaskName, Status: skipped.Status, Message: skipped.Message})
+		}
+	}
+
+	wg.Wait()
+	return uniquePaths(generatedPaths), taskResults, uniquePaths(warnings)
 }
 
 func resolveCurrentTargetJD(meta career.WorkspaceMetadata, index career.WorkspaceIndex) map[string]any {
@@ -1072,6 +1394,15 @@ func firstPath(paths []string) string {
 		}
 	}
 	return ""
+}
+
+func writeSSEEvent(w http.ResponseWriter, event RunEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "data: %s\n\n", data)
+	return err
 }
 
 func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {

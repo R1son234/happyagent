@@ -47,6 +47,13 @@ type HookContext struct {
 	StartedAt   time.Time
 }
 
+func (h HookContext) ActionArguments() []byte {
+	if h.Action == nil {
+		return nil
+	}
+	return h.Action.Arguments
+}
+
 type HookDecision struct {
 	Kind        HookDecisionKind
 	Observation string

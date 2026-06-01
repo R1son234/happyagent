@@ -90,13 +90,13 @@ type ReviewQuestion struct {
 // to handle LLM returning string instead of []string for certain fields.
 func (q *ReviewQuestion) UnmarshalJSON(data []byte) error {
 	type rawQuestion struct {
-		Question              string            `json:"question"`
-		ExamPoints            json.RawMessage   `json:"exam_points"`
-		Answer                string            `json:"answer"`
-		ResumeBasedAnswer     string            `json:"resume_based_answer"`
-		Followups             json.RawMessage   `json:"followups"`
-		RiskOrMissingEvidence json.RawMessage   `json:"risk_or_missing_evidence"`
-		SourcePaths           json.RawMessage   `json:"source_paths"`
+		Question              string          `json:"question"`
+		ExamPoints            json.RawMessage `json:"exam_points"`
+		Answer                string          `json:"answer"`
+		ResumeBasedAnswer     string          `json:"resume_based_answer"`
+		Followups             json.RawMessage `json:"followups"`
+		RiskOrMissingEvidence json.RawMessage `json:"risk_or_missing_evidence"`
+		SourcePaths           json.RawMessage `json:"source_paths"`
 	}
 	var raw rawQuestion
 	if err := json.Unmarshal(data, &raw); err != nil {
@@ -303,55 +303,53 @@ func (w *Workspace) writeExperienceReviewLibraryFromSet(runCtx context.Context, 
 	}
 
 	domainSlug := safeFileName(set.DomainName)
-	var paths []string
+	return withWorkspaceMutationLock(func() ([]string, error) {
+		var paths []string
 
-	// Write source material
-	sourcePaths, err := w.writeExperienceSourceOnly(ctx, sourceItem, now)
-	if err != nil {
-		return nil, err
-	}
-	paths = append(paths, sourcePaths...)
-
-	// Write topic-based question banks
-	for _, bank := range set.Topics {
-		topicName := safeFileName(bank.TopicName)
-		questionBankRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s题库.md", topicName))
-		if err := w.writeWorkspaceText(questionBankRel, renderLLMQuestionBankFromSet(bank, ctx, sourceItem)); err != nil {
+		sourcePaths, err := w.writeExperienceSourceOnly(ctx, sourceItem, now)
+		if err != nil {
 			return nil, err
 		}
-		paths = append(paths, filepath.ToSlash(questionBankRel))
-	}
+		paths = append(paths, sourcePaths...)
 
-	// Write project QA documents
-	for _, project := range set.Projects {
-		if strings.TrimSpace(project.ProjectName) == "" {
-			continue
+		for _, bank := range set.Topics {
+			topicName := safeFileName(bank.TopicName)
+			questionBankRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s题库.md", topicName))
+			if err := w.writeWorkspaceText(questionBankRel, renderLLMQuestionBankFromSet(bank, ctx, sourceItem)); err != nil {
+				return nil, err
+			}
+			paths = append(paths, filepath.ToSlash(questionBankRel))
 		}
-		projectRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s-interview-qa.md", slugForPath(project.ProjectName)))
-		if err := w.writeWorkspaceText(projectRel, renderProjectQAFromInput(project, ctx, sourceItem, now)); err != nil {
+
+		for _, project := range set.Projects {
+			if strings.TrimSpace(project.ProjectName) == "" {
+				continue
+			}
+			projectRel := filepath.Join(WorkspaceDirPrepare, domainSlug, fmt.Sprintf("%s-interview-qa.md", slugForPath(project.ProjectName)))
+			if err := w.writeWorkspaceText(projectRel, renderProjectQAFromInput(project, ctx, sourceItem, now)); err != nil {
+				return nil, err
+			}
+			paths = append(paths, filepath.ToSlash(projectRel))
+		}
+
+		domain := ReviewDomain{Slug: domainSlug, Name: set.DomainName, Confidence: "high"}
+		var topics []ReviewTopic
+		for _, bank := range set.Topics {
+			topics = append(topics, ReviewTopic{Name: bank.TopicName, Slug: slugForPath(bank.TopicName)})
+		}
+		if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
 			return nil, err
 		}
-		paths = append(paths, filepath.ToSlash(projectRel))
-	}
-
-	// Refresh indexes
-	domain := ReviewDomain{Slug: domainSlug, Name: set.DomainName, Confidence: "high"}
-	var topics []ReviewTopic
-	for _, bank := range set.Topics {
-		topics = append(topics, ReviewTopic{Name: bank.TopicName, Slug: slugForPath(bank.TopicName)})
-	}
-	if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
-		return nil, err
-	}
-	if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
-		return nil, err
-	}
-	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
-	if err := w.refreshJDIndex(ctx, now); err != nil {
-		return nil, err
-	}
-	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
-	return paths, nil
+		if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
+			return nil, err
+		}
+		paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
+		if err := w.refreshJDIndex(ctx, now); err != nil {
+			return nil, err
+		}
+		paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
+		return paths, nil
+	})
 }
 
 func (w *Workspace) writeExperienceReviewLibrary(runCtx context.Context, ctx ReviewLibraryContext, sourceItem WorkspaceItem, now time.Time, generator ReviewQuestionBankGenerator) ([]string, error) {

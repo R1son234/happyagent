@@ -36,7 +36,8 @@ type InboxFileView struct {
 }
 
 type ClassifyInboxRequest struct {
-	Paths []string `json:"paths"`
+	Paths    []string `json:"paths"`
+	StreamID string   `json:"stream_id,omitempty"`
 }
 
 type ClassifyInboxResult struct {
@@ -68,21 +69,25 @@ type SplitJDResult struct {
 
 type GenerateReviewLibraryRequest struct {
 	SourcePaths []string `json:"source_paths"`
+	StreamID    string   `json:"stream_id,omitempty"`
 }
 
 type GenerateProjectPackRequest struct {
 	ProjectName string   `json:"project_name"`
 	SourcePaths []string `json:"source_paths"`
+	StreamID    string   `json:"stream_id,omitempty"`
 }
 
 type GenerateBattlePackRequest struct {
 	JDPath      string   `json:"jd_path"`
 	SourcePaths []string `json:"source_paths"`
+	StreamID    string   `json:"stream_id,omitempty"`
 }
 
 type ExtractInterviewReviewRequest struct {
 	Target      string   `json:"target"`
 	SourcePaths []string `json:"source_paths"`
+	StreamID    string   `json:"stream_id,omitempty"`
 }
 
 type GeneratedDocumentResult struct {
@@ -563,7 +568,7 @@ func (s *CopilotService) RunChatTurn(ctx context.Context, req ChatTurnRequest) (
 		Stderr:        io.Discard,
 		WorkspaceRoot: ws.Root,
 	}
-	result, err := executeNaturalLanguageInput(deps, ws, sessionID, req.Input)
+	result, err := executeNaturalLanguageInput(ctx, deps, ws, sessionID, req.Input)
 	if err != nil {
 		return ChatTurnResult{}, err
 	}
@@ -586,6 +591,7 @@ func (s *CopilotService) prepareInboxClassificationFiles(ctx context.Context, ws
 	if err != nil {
 		return nil, nil, err
 	}
+	reportProgressStatus(ctx, fmt.Sprintf("已扫描 inbox，共发现 %d 个文件", len(discovered)))
 	allowed := map[string]bool{}
 	if len(paths) > 0 {
 		for _, path := range paths {
@@ -610,6 +616,7 @@ func (s *CopilotService) prepareInboxClassificationFiles(ctx context.Context, ws
 		if len(allowed) > 0 && !allowed[rel] {
 			continue
 		}
+		reportProgressStatus(ctx, "正在抽取资料："+filepath.Base(rel))
 		extracted, err := extractDocument(ctx, absPath)
 		if err != nil {
 			warnings = append(warnings, fmt.Sprintf("%s: %v", rel, err))
@@ -823,47 +830,49 @@ func (s *CopilotService) generateMarkdownDocument(ctx context.Context, spec gene
 	}
 	outputName := firstNonEmpty(parsed.Title, spec.FallbackName, spec.Kind)
 	rel := filepath.ToSlash(uniqueRelPath(ws.Root, filepath.Join(spec.OutputDir, safeFileNameWithExt(outputName, ".md"))))
-	if err := ws.writeWorkspaceText(rel, parsed.Markdown); err != nil {
-		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error(), RawOutput: result.Output})
-		return GeneratedDocumentResult{}, err
-	}
-	record := GeneratedArtifactRecord{
-		Path:       rel,
-		Kind:       spec.Kind,
-		SourceRefs: parsed.SourceRefs,
-		Meta:       LLMTraceMeta{GeneratedAt: result.GeneratedAt, Model: result.Model, PromptVersion: spec.PromptVersion},
-	}
-	if len(record.SourceRefs) == 0 {
-		record.SourceRefs = sources
-	}
-	state, err := ws.ReadGeneratedState()
-	if err != nil {
-		return GeneratedDocumentResult{}, err
-	}
-	state = upsertGeneratedRecord(state, record)
-	if err := ws.WriteGeneratedState(state); err != nil {
-		return GeneratedDocumentResult{}, err
-	}
-	runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
-		TaskName:    spec.TaskName,
-		Status:      RunSummaryStatusSuccess,
-		CreatedAt:   s.now(),
-		InputPaths:  sourceRefPaths(sources),
-		Generated:   []string{rel},
-		PrimaryPath: rel,
-		Warnings:    parsed.RiskFlags,
-		NextActions: nextActionsForKind(spec.Kind),
+	return withWorkspaceMutationLock(func() (GeneratedDocumentResult, error) {
+		if err := ws.writeWorkspaceText(rel, parsed.Markdown); err != nil {
+			_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error(), RawOutput: result.Output})
+			return GeneratedDocumentResult{}, err
+		}
+		record := GeneratedArtifactRecord{
+			Path:       rel,
+			Kind:       spec.Kind,
+			SourceRefs: parsed.SourceRefs,
+			Meta:       LLMTraceMeta{GeneratedAt: result.GeneratedAt, Model: result.Model, PromptVersion: spec.PromptVersion},
+		}
+		if len(record.SourceRefs) == 0 {
+			record.SourceRefs = sources
+		}
+		state, err := ws.ReadGeneratedState()
+		if err != nil {
+			return GeneratedDocumentResult{}, err
+		}
+		state = upsertGeneratedRecord(state, record)
+		if err := ws.WriteGeneratedState(state); err != nil {
+			return GeneratedDocumentResult{}, err
+		}
+		runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
+			TaskName:    spec.TaskName,
+			Status:      RunSummaryStatusSuccess,
+			CreatedAt:   s.now(),
+			InputPaths:  sourceRefPaths(sources),
+			Generated:   []string{rel},
+			PrimaryPath: rel,
+			Warnings:    parsed.RiskFlags,
+			NextActions: nextActionsForKind(spec.Kind),
+		})
+		paths := uniqueStrings(append([]string{rel}, runSummaryPath))
+		return GeneratedDocumentResult{
+			Path:           rel,
+			PrimaryPath:    firstNonEmpty(runSummaryPath, rel),
+			GeneratedPaths: paths,
+			Record:         record,
+			Records:        []GeneratedArtifactRecord{record},
+			RunSummaryPath: runSummaryPath,
+			Warnings:       parsed.RiskFlags,
+		}, nil
 	})
-	paths := uniqueStrings(append([]string{rel}, runSummaryPath))
-	return GeneratedDocumentResult{
-		Path:           rel,
-		PrimaryPath:    firstNonEmpty(runSummaryPath, rel),
-		GeneratedPaths: paths,
-		Record:         record,
-		Records:        []GeneratedArtifactRecord{record},
-		RunSummaryPath: runSummaryPath,
-		Warnings:       parsed.RiskFlags,
-	}, nil
 }
 
 func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec generateBundleSpec) (GeneratedDocumentResult, error) {
@@ -887,12 +896,17 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 	}
 	runner := s.structuredTaskRunner()
 	prompt := buildGeneratedDocumentBundlePrompt(spec.TaskName, spec.Instructions, spec.OutputDir, sources, contents)
-	result, err := runner.RunStructuredTask(ctx, StructuredTaskRequest{
+	taskReq := StructuredTaskRequest{
 		TaskName:      spec.TaskName,
 		PromptVersion: spec.PromptVersion,
 		Input:         prompt,
 		SourcePaths:   sourceRefReadPaths(sources),
-	})
+	}
+	if spec.TaskName == "generate_battle_pack" {
+		taskReq.ProfileName = ProfileName
+		taskReq.ToolScope = []string{"agent_task", "file_read", "final_answer"}
+	}
+	result, err := runner.RunStructuredTask(ctx, taskReq)
 	if err != nil {
 		_ = s.writeDiagnostic(ws, DiagnosticRecord{TaskName: spec.TaskName, PromptVersion: spec.PromptVersion, SourcePaths: sourceRefPaths(sources), Error: err.Error()})
 		return GeneratedDocumentResult{}, err
@@ -917,65 +931,67 @@ func (s *CopilotService) generateDocumentBundle(ctx context.Context, spec genera
 			return GeneratedDocumentResult{}, err
 		}
 	}
-	var generatedPaths []string
-	var records []GeneratedArtifactRecord
-	for _, doc := range parsed.Documents {
-		docPath := filepath.ToSlash(strings.TrimSpace(doc.Path))
-		if !strings.HasPrefix(docPath, filepath.ToSlash(spec.OutputDir)+"/") && docPath != filepath.ToSlash(spec.OutputDir) {
-			return GeneratedDocumentResult{}, fmt.Errorf("%s document %q must stay inside %s", spec.TaskName, docPath, spec.OutputDir)
+	return withWorkspaceMutationLock(func() (GeneratedDocumentResult, error) {
+		var generatedPaths []string
+		var records []GeneratedArtifactRecord
+		for _, doc := range parsed.Documents {
+			docPath := filepath.ToSlash(strings.TrimSpace(doc.Path))
+			if !strings.HasPrefix(docPath, filepath.ToSlash(spec.OutputDir)+"/") && docPath != filepath.ToSlash(spec.OutputDir) {
+				return GeneratedDocumentResult{}, fmt.Errorf("%s document %q must stay inside %s", spec.TaskName, docPath, spec.OutputDir)
+			}
+			if err := ws.writeWorkspaceText(docPath, doc.Markdown); err != nil {
+				return GeneratedDocumentResult{}, err
+			}
+			record := GeneratedArtifactRecord{
+				Path:       docPath,
+				Kind:       spec.Kind,
+				SourceRefs: parsed.SourceRefs,
+				Meta:       LLMTraceMeta{GeneratedAt: result.GeneratedAt, Model: result.Model, PromptVersion: spec.PromptVersion},
+			}
+			if len(record.SourceRefs) == 0 {
+				record.SourceRefs = sources
+			}
+			records = append(records, record)
+			generatedPaths = append(generatedPaths, docPath)
 		}
-		if err := ws.writeWorkspaceText(docPath, doc.Markdown); err != nil {
+		if len(records) == 0 {
+			return GeneratedDocumentResult{}, fmt.Errorf("%s returned no documents", spec.TaskName)
+		}
+		state, err := ws.ReadGeneratedState()
+		if err != nil {
 			return GeneratedDocumentResult{}, err
 		}
-		record := GeneratedArtifactRecord{
-			Path:       docPath,
-			Kind:       spec.Kind,
-			SourceRefs: parsed.SourceRefs,
-			Meta:       LLMTraceMeta{GeneratedAt: result.GeneratedAt, Model: result.Model, PromptVersion: spec.PromptVersion},
+		for _, record := range records {
+			state = upsertGeneratedRecord(state, record)
 		}
-		if len(record.SourceRefs) == 0 {
-			record.SourceRefs = sources
+		if err := ws.WriteGeneratedState(state); err != nil {
+			return GeneratedDocumentResult{}, err
 		}
-		records = append(records, record)
-		generatedPaths = append(generatedPaths, docPath)
-	}
-	if len(records) == 0 {
-		return GeneratedDocumentResult{}, fmt.Errorf("%s returned no documents", spec.TaskName)
-	}
-	state, err := ws.ReadGeneratedState()
-	if err != nil {
-		return GeneratedDocumentResult{}, err
-	}
-	for _, record := range records {
-		state = upsertGeneratedRecord(state, record)
-	}
-	if err := ws.WriteGeneratedState(state); err != nil {
-		return GeneratedDocumentResult{}, err
-	}
-	primaryPath := filepath.ToSlash(strings.TrimSpace(parsed.PrimaryDocument))
-	if primaryPath == "" {
-		primaryPath = generatedPaths[0]
-	}
-	runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
-		TaskName:    spec.TaskName,
-		Status:      RunSummaryStatusSuccess,
-		CreatedAt:   s.now(),
-		InputPaths:  sourceRefPaths(sources),
-		Generated:   generatedPaths,
-		PrimaryPath: primaryPath,
-		Warnings:    parsed.RiskFlags,
-		NextActions: nextActionsForKind(spec.Kind),
+		primaryPath := filepath.ToSlash(strings.TrimSpace(parsed.PrimaryDocument))
+		if primaryPath == "" {
+			primaryPath = generatedPaths[0]
+		}
+		runSummaryPath, _ := s.writeRunSummary(ws, RunSummaryRecord{
+			TaskName:    spec.TaskName,
+			Status:      RunSummaryStatusSuccess,
+			CreatedAt:   s.now(),
+			InputPaths:  sourceRefPaths(sources),
+			Generated:   generatedPaths,
+			PrimaryPath: primaryPath,
+			Warnings:    parsed.RiskFlags,
+			NextActions: nextActionsForKind(spec.Kind),
+		})
+		generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
+		return GeneratedDocumentResult{
+			Path:           primaryPath,
+			PrimaryPath:    firstNonEmpty(runSummaryPath, primaryPath),
+			GeneratedPaths: generatedPaths,
+			Record:         records[0],
+			Records:        records,
+			RunSummaryPath: runSummaryPath,
+			Warnings:       parsed.RiskFlags,
+		}, nil
 	})
-	generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
-	return GeneratedDocumentResult{
-		Path:           primaryPath,
-		PrimaryPath:    firstNonEmpty(runSummaryPath, primaryPath),
-		GeneratedPaths: generatedPaths,
-		Record:         records[0],
-		Records:        records,
-		RunSummaryPath: runSummaryPath,
-		Warnings:       parsed.RiskFlags,
-	}, nil
 }
 
 func (s *CopilotService) writeRunSummary(ws *Workspace, record RunSummaryRecord) (string, error) {

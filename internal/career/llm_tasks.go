@@ -35,6 +35,7 @@ type StructuredTaskRequest struct {
 	SystemPrompt       string   `json:"system_prompt,omitempty"`  // Optional lean system prompt for bounded structured tasks.
 	ApprovedTools      []string `json:"approved_tools,omitempty"` // Optional dangerous-tool approvals; tool visibility is source-bound by the runner.
 	ProfileName        string   `json:"profile_name,omitempty"`   // Optional profile override; blank keeps the task out of the general chat profile.
+	ToolScope          []string `json:"tool_scope,omitempty"`     // Optional tool scope override; blank defaults to file_read + final_answer.
 	RequireSourceReads bool     `json:"require_source_reads,omitempty"`
 }
 
@@ -77,11 +78,26 @@ func (r *appStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 		Input:              req.Input,
 		SystemPrompt:       systemPrompt,
 		ApprovedTools:      append([]string(nil), req.ApprovedTools...),
-		ToolScope:          []string{"file_read", "final_answer"},
+		ToolScope:          firstNonEmptyToolScope(req.ToolScope, []string{"file_read", "final_answer"}),
 		SourceReadPaths:    append([]string(nil), req.SourcePaths...),
 		RequireSourceReads: req.RequireSourceReads || len(req.SourcePaths) > 0,
 		SuppressHistory:    true,
 		SuppressMemory:     true,
+		OnStepStart: func(stepIndex int) {
+			if reporter := ProgressReporterFromContext(ctx); reporter != nil {
+				reporter.StepStart(stepIndex)
+			}
+		},
+		OnToolCallStart: func(toolName string, arguments []byte) {
+			if reporter := ProgressReporterFromContext(ctx); reporter != nil {
+				reporter.ToolStart(toolName, arguments)
+			}
+		},
+		OnToolCallEnd: func(toolName string, arguments []byte, succeeded bool) {
+			if reporter := ProgressReporterFromContext(ctx); reporter != nil {
+				reporter.ToolEnd(toolName, arguments, succeeded)
+			}
+		},
 	})
 	if err != nil {
 		return StructuredTaskResult{}, err
@@ -97,6 +113,13 @@ func (r *appStructuredTaskRunner) RunStructuredTask(ctx context.Context, req Str
 		SessionID:   record.SessionID,
 		GeneratedAt: now,
 	}, nil
+}
+
+func firstNonEmptyToolScope(scope []string, fallback []string) []string {
+	if len(scope) > 0 {
+		return append([]string(nil), scope...)
+	}
+	return append([]string(nil), fallback...)
 }
 
 func structuredTaskSystemPrompt(taskName string, promptVersion string) string {
@@ -392,6 +415,15 @@ func buildGeneratedDocumentBundlePrompt(taskName string, instructions string, ou
 		b.WriteString("    </source>\n")
 	}
 	b.WriteString("  </sources>\n")
+	if strings.TrimSpace(taskName) == "generate_battle_pack" {
+		b.WriteString("  <execution_plan>\n")
+		b.WriteString("    Before final_answer, you MUST call agent_task three times to produce bounded evidence summaries:\n")
+		b.WriteString("    1. jd-analyst: summarize role requirements, priorities, and risks from the JD-related sources only.\n")
+		b.WriteString("    2. resume-evidence-miner: summarize candidate evidence, project stories, and unsupported claims from resume-related sources only.\n")
+		b.WriteString("    3. experience-miner: summarize public interview experience themes, likely questions, and evidence boundaries from experience-related sources only.\n")
+		b.WriteString("    Use the returned child summaries as inputs to your final bundle synthesis.\n")
+		b.WriteString("  </execution_plan>\n")
+	}
 	b.WriteString(`  <output_contract>{"title":"...","primary_document":"项目专项/example.md","documents":[{"path":"项目专项/example.md","title":"...","markdown":"..."}],"source_refs":[{"path":"...","version":"...","excerpt":"...","evidence_spans":["..."]}],"risk_flags":[],"missing_info":[]}</output_contract>` + "\n")
 	b.WriteString("</career_generation_bundle_task>")
 	return b.String()

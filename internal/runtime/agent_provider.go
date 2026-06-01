@@ -227,13 +227,16 @@ func (p runtimeAgentProvider) runChild(ctx context.Context, input agentRunInput,
 		runID = fmt.Sprintf("%s-%d", agent.ID, time.Now().UnixNano())
 	}
 	childReq := RunRequest{
-		Input:         childPrompt(agent, input.Prompt),
-		ProfileName:   input.ProfileName,
-		SessionID:     p.parent.SessionID,
-		RunID:         runID,
-		ApprovedTools: p.parent.ApprovedTools,
-		ChildAgentID:  agent.ID,
-		ChildTaskID:   input.TaskID,
+		Input:              childPrompt(agent, input.Prompt),
+		ProfileName:        input.ProfileName,
+		SessionID:          p.parent.SessionID,
+		RunID:              runID,
+		ApprovedTools:      p.parent.ApprovedTools,
+		ToolScope:          []string{"file_read", "final_answer"},
+		SourceReadPaths:    append([]string(nil), p.parent.SourceReadPaths...),
+		RequireSourceReads: p.parent.RequireSourceReads,
+		ChildAgentID:       agent.ID,
+		ChildTaskID:        input.TaskID,
 	}
 	if childReq.ProfileName == "" {
 		childReq.ProfileName = p.prepared.profileName

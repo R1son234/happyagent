@@ -53,8 +53,8 @@ type AppendTurnRequest struct {
 	SuppressMemory     bool
 	Events             []observe.Event
 	OnStepStart        func(stepIndex int)
-	OnToolCallStart    func(toolName string)
-	OnToolCallEnd      func(toolName string, succeeded bool)
+	OnToolCallStart    func(toolName string, arguments []byte)
+	OnToolCallEnd      func(toolName string, arguments []byte, succeeded bool)
 	OnTodosUpdated     func(todos []tools.TodoItem)
 }
 
