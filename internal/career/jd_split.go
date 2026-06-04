@@ -1,168 +1,57 @@
 package career
 
 import (
+	"context"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 )
 
-type JDSplitSection struct {
-	Title   string
-	Content string
-}
-
-var jdSectionPrefixPattern = regexp.MustCompile(`^\s*[0-9]+[.、)]`)
-
-func (w *Workspace) EnsureSplitJDMaterials(now time.Time) ([]WorkspaceItem, error) {
-	_, index, err := w.Status()
-	if err != nil {
-		return nil, err
+// splitJDIfNeeded checks if a saved JD item contains multiple job descriptions
+// by calling the LLM split task. If it does, it removes the original item and
+// saves each split JD as a separate workspace item.
+func (s *CopilotService) splitJDIfNeeded(ctx context.Context, ws *Workspace, item WorkspaceItem, content string) ([]WorkspaceItem, error) {
+	if strings.TrimSpace(content) == "" {
+		return nil, nil
 	}
-	existingTitles := map[string]bool{}
-	for _, item := range index.Items {
-		if item.Type == WorkspaceTypeJD {
-			existingTitles[item.Title] = true
-		}
+	runner := s.structuredTaskRunner()
+	result, err := runner.RunStructuredTask(ctx, StructuredTaskRequest{
+		TaskName:      "split_jd",
+		PromptVersion: PromptVersionJDSplit,
+		Input:         buildJDSplitPrompt(item.Path, workspaceReadPath(ws, item.Path), content),
+		SourcePaths:   []string{workspaceReadPath(ws, item.Path)},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("LLM JD split: %w", err)
+	}
+	parsed, err := parseJDSplitOutput(result.Output)
+	if err != nil {
+		return nil, fmt.Errorf("parse JD split output: %w", err)
+	}
+	if len(parsed.JobDescriptions) <= 1 {
+		return nil, nil
 	}
 	var created []WorkspaceItem
-	for _, item := range index.Items {
-		if item.Type != WorkspaceTypeJD {
-			continue
+	for _, jd := range parsed.JobDescriptions {
+		body := renderSplitJDMarkdown(jd, item.Path)
+		splitTitle := jd.Title
+		if strings.TrimSpace(jd.Company) != "" {
+			splitTitle = jd.Company + "-" + splitTitle
 		}
-		content := readExcerpt(w, item.Path, 0)
-		if shouldSkipJDSplit(content) {
-			continue
+		splitItem, addErr := ws.AddMaterialFromFile(WorkspaceFileInput{
+			ItemType:           WorkspaceTypeJD,
+			Title:              splitTitle,
+			Text:               body,
+			OriginalName:       item.Title + ".md",
+			Now:                s.now(),
+			Extractor:          "llm_jd_split",
+			MIMEType:           "text/markdown",
+			ExtractStatus:      "ok",
+			ContentFingerprint: ContentFingerprint(body),
+		})
+		if addErr != nil {
+			return created, fmt.Errorf("save split JD %q: %w", jd.Title, addErr)
 		}
-		sections := SplitJDSections(content)
-		if len(sections) <= 1 {
-			continue
-		}
-		for _, section := range sections {
-			title := strings.TrimSpace(section.Title)
-			if title == "" || existingTitles[title] {
-				continue
-			}
-			createdItem, addErr := w.AddMaterial(WorkspaceTypeJD, section.Content, now)
-			if addErr != nil {
-				return created, addErr
-			}
-			existingTitles[createdItem.Title] = true
-			created = append(created, createdItem)
-		}
+		created = append(created, splitItem)
 	}
 	return created, nil
-}
-
-func shouldSkipJDSplit(content string) bool {
-	return strings.Contains(content, "匹配度分析") || strings.Contains(content, "维度 | 匹配项 | 缺口项")
-}
-
-func SplitJDSections(content string) []JDSplitSection {
-	lines := strings.Split(content, "\n")
-	type candidate struct {
-		title string
-		start int
-	}
-	var candidates []candidate
-	for i, line := range lines {
-		clean := strings.TrimSpace(strings.Trim(line, "# 　\t"))
-		if clean == "" || len([]rune(clean)) > 60 {
-			continue
-		}
-		if looksLikeJDSectionTitle(lines, i) {
-			candidates = append(candidates, candidate{title: clean, start: i})
-		}
-	}
-	if len(candidates) <= 1 {
-		return nil
-	}
-	var sections []JDSplitSection
-	for i, c := range candidates {
-		end := len(lines)
-		if i+1 < len(candidates) {
-			end = candidates[i+1].start
-		}
-		body := strings.TrimSpace(strings.Join(lines[c.start:end], "\n"))
-		if body == "" || !containsJDStructure(body) || !isSplitJDBodyComplete(body) {
-			continue
-		}
-		if !strings.HasPrefix(strings.TrimSpace(body), "#") {
-			body = fmt.Sprintf("# %s\n\n%s", c.title, strings.TrimSpace(strings.Join(lines[c.start+1:end], "\n")))
-		}
-		sections = append(sections, JDSplitSection{Title: c.title, Content: body})
-	}
-	if len(sections) <= 1 {
-		return nil
-	}
-	return sections
-}
-
-func looksLikeJDSectionTitle(lines []string, idx int) bool {
-	line := strings.TrimSpace(strings.Trim(lines[idx], "# 　\t"))
-	if line == "" || containsJDMarker(line) || looksLikeJDFragmentTitle(line) {
-		return false
-	}
-	lookaheadEnd := idx + 8
-	if lookaheadEnd > len(lines) {
-		lookaheadEnd = len(lines)
-	}
-	for _, next := range lines[idx+1 : lookaheadEnd] {
-		if containsJDMarker(next) {
-			return true
-		}
-	}
-	return false
-}
-
-func containsJDStructure(content string) bool {
-	return countJDMarkers(content) >= 1
-}
-
-func isSplitJDBodyComplete(content string) bool {
-	return countJDMarkers(content) >= 2
-}
-
-func countJDMarkers(content string) int {
-	count := 0
-	for _, line := range strings.Split(content, "\n") {
-		if containsJDMarker(line) {
-			count++
-		}
-	}
-	return count
-}
-
-func containsJDMarker(line string) bool {
-	markers := []string{"职位描述", "岗位描述", "岗位职责", "工作职责", "职位要求", "岗位要求", "任职要求", "任职资格", "基本要求", "加分项"}
-	for _, marker := range markers {
-		if strings.Contains(line, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func looksLikeJDFragmentTitle(title string) bool {
-	title = strings.TrimSpace(title)
-	if title == "" {
-		return true
-	}
-	if jdSectionPrefixPattern.MatchString(title) {
-		return true
-	}
-	lower := strings.ToLower(title)
-	if lower == "ai" || lower == "jd" || lower == "job description" || lower == "job-description" {
-		return true
-	}
-	rejectSignals := []string{
-		"负责", "熟悉", "关注", "参与", "推动", "完成需求", "优秀的", "具备",
-		"责任心", "沟通能力", "自驱力", "加分项", "任职要求", "岗位职责", "职位要求",
-	}
-	for _, signal := range rejectSignals {
-		if strings.Contains(title, signal) {
-			return true
-		}
-	}
-	return false
 }

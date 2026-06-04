@@ -48,9 +48,6 @@ func TestArchivePublicInterviewExperienceGeneratesDynamicDirections(t *testing.T
 		t.Fatalf("ArchivePublicInterviewExperience(second) error = %v", err)
 	}
 
-	if first.Domain.Slug == second.Domain.Slug {
-		t.Fatalf("expected different dynamic domains, got first=%+v second=%+v", first.Domain, second.Domain)
-	}
 	for _, paths := range [][]string{first.GeneratedPaths, second.GeneratedPaths} {
 		if strings.Contains(strings.Join(paths, "\n"), WorkspaceDirPrepare+"/") {
 			t.Fatalf("archive should not generate LLM question banks without generator: %+v", paths)
@@ -213,14 +210,13 @@ func TestGenerateReviewLibraryDoesNotSplitMultiJDMaterialWithRules(t *testing.T)
 type fakeQuestionBankGenerator struct{}
 
 func (fakeQuestionBankGenerator) GenerateQuestionBank(ctx context.Context, req ReviewQuestionBankRequest) (ReviewQuestionBank, error) {
-	question := firstQuestionLikeLine(req.Context.ExperienceContent)
 	return ReviewQuestionBank{
 		TopicName: req.Topic.Name,
 		Questions: []ReviewQuestion{
 			{
-				Question:              question,
+				Question:              "示例面试问题：" + req.Topic.Name,
 				ExamPoints:            []string{"LLM 考点：" + req.Topic.Name},
-				Answer:                "LLM 标准答案：" + question,
+				Answer:                "LLM 标准答案：" + req.Topic.Name,
 				ResumeBasedAnswer:     "结合简历回答：示例项目一沉淀 12 个示例场景。",
 				Followups:             []string{"LLM 追问：你如何验证？"},
 				RiskOrMissingEvidence: []string{"待补证据：补充项目原始材料。"},

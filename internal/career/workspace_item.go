@@ -269,8 +269,7 @@ func (w *Workspace) isPromotableActiveJD(sourceRel string) bool {
 	if err != nil {
 		return false
 	}
-	content := strings.TrimSpace(string(data))
-	return shouldPromoteActiveJD(inferJDTitle(content), content)
+	return len(strings.TrimSpace(string(data))) > 0
 }
 
 func activePointerName(itemType string) string {
@@ -386,18 +385,7 @@ func inferJDTitle(content string) string {
 }
 
 func shouldPromoteActiveJD(title string, content string) bool {
-	title = strings.TrimSpace(title)
-	content = strings.TrimSpace(content)
-	if title == "" || content == "" {
-		return false
-	}
-	if looksLikeJDFragmentTitle(title) {
-		return false
-	}
-	if len(SplitJDSections(content)) > 1 {
-		return false
-	}
-	return countJDMarkers(content) >= 2
+	return strings.TrimSpace(title) != "" && strings.TrimSpace(content) != ""
 }
 
 func inferMaterialTags(itemType string, content string) []string {
@@ -592,24 +580,15 @@ func renderInterviewExperienceSummary(title string, content string, input Worksp
 	if !strings.Contains(title, "面经") {
 		title += "面经"
 	}
-	questions := inferQuestionsForTopic("", content)
-	if len(questions) == 0 {
-		questions = []string{"请介绍一下这份面经中最核心的问题。"}
-	}
 	var b strings.Builder
 	b.WriteString("# " + title + "\n\n")
 	b.WriteString("## 基础信息\n\n")
 	b.WriteString("- 来源：" + firstNonEmpty(input.OriginalName, "用户导入或手动输入") + "\n")
 	b.WriteString("- 整理时间：" + now.Format("2006-01-02") + "\n\n")
-	b.WriteString("## 原始内容摘要\n\n")
-	b.WriteString(summarizeMaterial(content) + "\n\n")
-	b.WriteString("## 抽取到的面试问题\n\n")
-	for i, question := range questions {
-		b.WriteString(fmt.Sprintf("### Q%d：%s\n\n", i+1, question))
-	}
+	b.WriteString("## 原始内容\n\n")
+	b.WriteString(strings.TrimSpace(content) + "\n\n")
 	b.WriteString("## 说明\n\n")
-	b.WriteString("- 本文件只保存公开面经来源和问题抽取结果，不生成参考答案。\n")
-	b.WriteString("- 需要标准答案、结合简历的回答和追问分析时，必须通过 LLM 生成复习资料库题库。\n")
+	b.WriteString("- 本文件保存公开面经来源。需要标准答案、结合简历的回答和追问分析时，通过 LLM 生成复习资料库题库。\n")
 	return b.String()
 }
 

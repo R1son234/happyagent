@@ -639,7 +639,6 @@ func (s *CopilotService) structuredTaskRunner() StructuredTaskRunner {
 }
 
 func (s *CopilotService) confirmClassifiedInboxItem(ctx context.Context, ws *Workspace, item PendingInboxItem, content string) (PendingInboxItem, GuidedMaterialResult, error) {
-	_ = ctx
 	itemType, ok := workspaceTypeForMaterialType(item.MaterialType)
 	if !ok {
 		item.Status = InboxItemStatusPending
@@ -647,6 +646,24 @@ func (s *CopilotService) confirmClassifiedInboxItem(ctx context.Context, ws *Wor
 		return item, GuidedMaterialResult{}, nil
 	}
 	absSource := filepath.Join(ws.Root, filepath.FromSlash(item.SourcePath))
+
+	// For JD items, try LLM split before saving. If the LLM detects multiple JDs,
+	// save each as a separate workspace item instead of the original bundle.
+	if itemType == WorkspaceTypeJD {
+		splitItems, splitErr := s.splitJDIfNeeded(ctx, ws, WorkspaceItem{
+			ID:    item.ID,
+			Title: strings.TrimSuffix(item.OriginalName, filepath.Ext(item.OriginalName)),
+			Path:  item.SourcePath,
+		}, content)
+		if splitErr == nil && len(splitItems) > 0 {
+			_ = os.Remove(absSource)
+			item.Status = InboxItemStatusConfirmed
+			item.NeedsUserConfirmation = false
+			return item, GuidedMaterialResult{Item: splitItems[0]}, nil
+		}
+		// Fall through to save as single JD if split fails or returns ≤1 result
+	}
+
 	input := WorkspaceFileInput{
 		ItemType:           itemType,
 		Title:              strings.TrimSuffix(item.OriginalName, filepath.Ext(item.OriginalName)),
@@ -1377,8 +1394,8 @@ func detectLegacyPollutedArtifacts(ws *Workspace) ([]string, error) {
 			return nil
 		}
 		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-		if looksLikeJDFragmentTitle(base) {
-			findings = append(findings, "疑似污染岗位文件："+filepath.ToSlash(rel))
+		if len(strings.TrimSpace(base)) < 2 {
+			findings = append(findings, "疑似无效岗位文件（文件名过短）："+filepath.ToSlash(rel))
 		}
 		return nil
 	})

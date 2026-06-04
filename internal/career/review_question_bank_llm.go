@@ -41,6 +41,9 @@ type ReviewQuestionBankSetRequest struct {
 	WorkspaceRoot string
 	SourceItem    WorkspaceItem
 	Context       ReviewLibraryContext
+	// ExistingTopicNames lists topic names already present in the workspace.
+	// The LLM should avoid creating topics with the same or very similar names.
+	ExistingTopicNames []string
 }
 
 func (g *LLMReviewQuestionBankGenerator) GenerateQuestionBankSet(ctx context.Context, req ReviewQuestionBankSetRequest) (ReviewQuestionBankSet, error) {
@@ -99,18 +102,31 @@ func (g *LLMReviewQuestionBankGenerator) repairQuestionBankSet(ctx context.Conte
 
 func BuildReviewQuestionBankSetPrompt(req ReviewQuestionBankSetRequest) string {
 	ctx := req.Context
+	existingTopicsBlock := ""
+	if len(req.ExistingTopicNames) > 0 {
+		existingTopicsBlock = "\n  <existing_topics>\n    以下 topic 已在复习资料库中存在，请避免生成相同或高度相似的 topic_name。如果内容有重叠，请合并到已有 topic 的题库中，不要新建重复目录。\n"
+		for _, name := range req.ExistingTopicNames {
+			existingTopicsBlock += "    - " + xmlEscape(name) + "\n"
+		}
+		existingTopicsBlock += "  </existing_topics>\n"
+	}
 	return fmt.Sprintf(`<review_question_bank_generation>
   <task>基于面经和 JD 生成一套完整的面试复习资料库。</task>
   <product_requirement>
     必须基于真实材料生成，不编造。读取所有声明的源文件后再输出。
   </product_requirement>
   <instructions>
-    1. 读取所有源文件（面经、JD、简历）。
-    2. 确定岗位方向名（如"市场营销新媒体运营"、"后端开发"），不要带"实习生""工程师""岗位"等后缀。
-    3. 把面经和 JD 中的问题归类到 2-3 个主题分类中。每个问题必须出现在某个分类里。
-    4. 每个分类生成一个题库，包含 3-5 个问题。面经中已有的问题必须包含。
-    5. 每个问题必须有：考点、标准答案（可直接背诵）、结合简历的回答、1-2 个追问及追问答案。
-    6. 追问必须给出参考答案，不能只列问题不给答案。
+    1. 读取所有源文件（面经、JD、简历），全面理解材料内容后再输出。
+    2. 确定岗位方向名（如"AI Agent 开发""后端开发"），使用标准技术术语，不要带"实习生""工程师""岗位"等后缀。
+    3. 把面经和 JD 中的问题归类到 3-5 个主题分类中。分类维度建议：基础概念与架构、工程实践与框架、上下文与记忆管理、评测与可观测性、异常处理与边界 case。每个问题必须出现在某个分类里。
+    4. 每个分类生成一个题库，包含 8-15 个问题。面经中已有的问题必须包含，并基于 JD 和面经扩展更多高频问题。
+    5. 每个问题必须有：
+       - 考点：面试官考察的核心能力点
+       - 标准答案：详细、有技术深度、包含实际案例和边界讨论，可直接用于面试准备
+       - 结合简历的回答：结合简历中的真实项目来回答，如无简历则说明缺少证据
+       - 追问：2-3 个追问，每个追问必须附带完整的参考答案
+       - 风险/待补证据：需要补充的材料或可能被 challenge 的点
+    6. answer 必须有足够深度：先给核心结论，再展开技术细节，最后给出实际案例或边界讨论。不能只有一两句话。
     7. 如果有简历，提取 1-2 个关键项目用于回答项目类问题。
   </instructions>
   <source_paths>
@@ -120,7 +136,7 @@ func BuildReviewQuestionBankSetPrompt(req ReviewQuestionBankSetRequest) string {
     <resume_read_path>%s</resume_read_path>
     <jd>%s</jd>
     <jd_read_path>%s</jd_read_path>
-  </source_paths>
+  </source_paths>%s
   <output_contract>
 Return final_answer with valid JSON only, no Markdown fences, with this exact shape:
 {
@@ -132,7 +148,7 @@ Return final_answer with valid JSON only, no Markdown fences, with this exact sh
         {
           "question": "面试问题",
           "exam_points": ["考点1", "考点2"],
-          "answer": "详细标准答案，可直接用于面试准备",
+          "answer": "详细标准答案，可直接用于面试准备，需要有技术深度和实际案例",
           "resume_based_answer": "结合简历的回答，如无简历则说明缺少证据",
           "followups": ["追问1？→ 参考答案", "追问2？→ 参考答案"],
           "risk_or_missing_evidence": ["待补证据说明"],
@@ -151,12 +167,12 @@ Return final_answer with valid JSON only, no Markdown fences, with this exact sh
 }
   </output_contract>
   <constraints>
-    - domain_name 是岗位方向抽象名（如"市场营销新媒体运营"），不要包含"面经_"前缀或"实习生/工程师"等后缀。
-    - topic_name 是宽泛的主题分类（如"内容策划""账号运营""活动运营"），不要照搬面试问题原文。
-    - 必须生成 2-3 个 topics，覆盖面经和 JD 中的主要问题。
-    - 每个 topic 包含 3-5 个 questions。
-    - answer 必须是可直接背诵的面试答案，简洁但完整。
-    - followups 中每个追问必须附带参考答案，格式为"追问问题？→ 参考答案"。
+    - domain_name 是岗位方向抽象名（如"AI Agent 开发"），使用标准技术术语，不要包含"面经_"前缀或"实习生/工程师"等后缀。
+    - topic_name 是宽泛的技术主题分类（如"Agent 架构设计""Tool Calling 与 MCP""上下文与记忆管理"），使用标准技术术语，不要照搬面试问题原文。
+    - 必须生成 3-5 个 topics，全面覆盖面经和 JD 中的主要技术方向。
+    - 每个 topic 包含 8-15 个 questions，确保覆盖面足够广。
+    - answer 必须是可直接用于面试准备的详细答案：先给核心结论，再展开技术细节，最后给出实际案例。每个 answer 至少 3 段。
+    - followups 中每个追问必须附带完整参考答案，格式为"追问问题？→ 参考答案"。
     - resume_based_answer 只能使用简历中已有的事实，不能编造。
     - projects 仅在有简历时提取，无简历返回空数组。
     - 每个 JSON 字符串值放在一行内，不要在引号内换行。
@@ -168,6 +184,7 @@ Return final_answer with valid JSON only, no Markdown fences, with this exact sh
 		xmlEscape(emptyIfBlank(workspaceRootReadPath(req.WorkspaceRoot, ctx.ResumePath))),
 		xmlEscape(emptyIfBlank(ctx.JDPath)),
 		xmlEscape(emptyIfBlank(workspaceRootReadPath(req.WorkspaceRoot, ctx.JDPath))),
+		existingTopicsBlock,
 	)
 }
 

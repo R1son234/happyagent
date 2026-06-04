@@ -309,34 +309,6 @@ func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
 	}
 }
 
-func TestSplitJDSectionsSkipsResponsibilityFragments(t *testing.T) {
-	content := `# JD 汇总
-
-阿里云-无影
-职位描述
-1. 负责 Agent 平台建设。
-职位要求
-1. 熟悉 Go 和系统服务开发。
-
-阿里千问
-岗位描述
-1. 负责 Agent 应用研发。
-岗位要求
-1. 熟悉 RAG。
-
-3、负责项目的核心代码研发，以高标准高质量完成需求
-职位要求
-1、有优秀的逻辑分析能力。
-`
-	sections := SplitJDSections(content)
-	if len(sections) != 2 {
-		t.Fatalf("expected two valid JD sections, got %+v", sections)
-	}
-	if sections[0].Title != "阿里云-无影" || sections[1].Title != "阿里千问" {
-		t.Fatalf("unexpected JD section title: %+v", sections)
-	}
-}
-
 func TestAddMaterialPromotesCompleteSplitJDOverGenericImportedJD(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 25, 13, 32, 49, 0, time.UTC)
@@ -393,28 +365,25 @@ func TestAddMaterialPromotesCompleteSplitJDOverGenericImportedJD(t *testing.T) {
 	}
 }
 
-func TestOpenWorkspaceRepairsFragmentActiveJDPointer(t *testing.T) {
+func TestOpenWorkspaceRepairsMissingActiveJDPointer(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "career")
 	now := time.Date(2026, 5, 25, 14, 0, 0, 0, time.UTC)
 	ws, err := OpenWorkspace(root, now)
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
-	completeJD, err := ws.AddMaterial(WorkspaceTypeJD, "# 阿里云-无影\n\n职位描述\n1. 负责 Agent 平台建设。\n\n职位要求\n1. 熟悉 Go 和系统服务开发。", now)
+	jd, err := ws.AddMaterial(WorkspaceTypeJD, "# 阿里云-无影\n\n职位描述\n1. 负责 Agent 平台建设。\n\n职位要求\n1. 熟悉 Go 和系统服务开发。", now)
 	if err != nil {
-		t.Fatalf("AddMaterial(completeJD) error = %v", err)
-	}
-	fragmentJD, err := ws.AddMaterial(WorkspaceTypeJD, "# 3、负责项目的核心代码研发，以高标准高质量完成需求\n\n职位要求\n1. 有优秀的逻辑分析能力。", now.Add(time.Second))
-	if err != nil {
-		t.Fatalf("AddMaterial(fragmentJD) error = %v", err)
+		t.Fatalf("AddMaterial(jd) error = %v", err)
 	}
 	meta, err := ws.ReadMetadata()
 	if err != nil {
 		t.Fatalf("ReadMetadata() error = %v", err)
 	}
-	meta.ActiveJD = filepath.ToSlash(fragmentJD.Metadata.Source)
+	// Point ActiveJD to a non-existent file to trigger repair
+	meta.ActiveJD = "nonexistent/missing-jd.md"
 	if err := ws.writeJSON(ws.metadataPath(), meta); err != nil {
-		t.Fatalf("write polluted metadata: %v", err)
+		t.Fatalf("write bad metadata: %v", err)
 	}
 
 	reopened, err := OpenWorkspace(root, now.Add(2*time.Second))
@@ -425,8 +394,8 @@ func TestOpenWorkspaceRepairsFragmentActiveJDPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadMetadata() after reopen error = %v", err)
 	}
-	if repairedMeta.ActiveJD != filepath.ToSlash(completeJD.Metadata.Source) {
-		t.Fatalf("expected active_jd repaired to %s, got %s", completeJD.Metadata.Source, repairedMeta.ActiveJD)
+	if repairedMeta.ActiveJD != filepath.ToSlash(jd.Metadata.Source) {
+		t.Fatalf("expected active_jd repaired to %s, got %s", jd.Metadata.Source, repairedMeta.ActiveJD)
 	}
 }
 

@@ -162,8 +162,8 @@ func TestCopilotServiceClassifyInboxAutoConfirmsHighConfidence(t *testing.T) {
 	if len(result.Items) != 1 || result.Items[0].Status != InboxItemStatusConfirmed {
 		t.Fatalf("expected confirmed high confidence item, got %+v", result.Items)
 	}
-	if len(runner.calls) != 1 {
-		t.Fatalf("expected one structured task call, got %d", len(runner.calls))
+	if len(runner.calls) != 2 {
+		t.Fatalf("expected two structured task calls (classify + JD split), got %d", len(runner.calls))
 	}
 	if !sameStrings(runner.calls[0].SourcePaths, []string{"inbox/jd.md"}) {
 		t.Fatalf("source paths = %v, want workspace-relative inbox path", runner.calls[0].SourcePaths)
