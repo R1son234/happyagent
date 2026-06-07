@@ -472,12 +472,16 @@ func (f fakeDesktopCareerApplication) CreateSession(profileName string) (store.S
 
 func (f fakeDesktopCareerApplication) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
 	_ = ctx
+	output := f.output
+	if strings.Contains(req.Input, "<career_user_input_semantic_decision>") {
+		output = `{"intent":"interview_brief","confidence":"high","reason":"test semantic decision","should_scan_inbox":false,"should_save_user_input":false,"user_input_material_type":"unknown","user_input_destination":"","needs_user_confirmation":false,"questions_for_user":[],"referenced_files":[],"requested_outputs":[{"kind":"interview-brief","title":"面试准备材料","reason":"test semantic decision","required_sources":[]}],"required_state":[],"risk_flags":[]}`
+	}
 	return store.RunRecord{
 		ID:        "run-test",
 		SessionID: firstNonEmptyTest(req.SessionID, f.sessionID, "session-test"),
 		Profile:   req.ProfileName,
 		Input:     req.Input,
-		Output:    f.output,
+		Output:    output,
 	}, nil
 }
 

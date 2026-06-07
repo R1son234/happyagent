@@ -12,6 +12,7 @@ import (
 
 	"happyagent/internal/llm"
 	"happyagent/internal/protocol"
+	"happyagent/internal/runlog"
 	"happyagent/internal/tools"
 )
 
@@ -247,6 +248,7 @@ func (r *loopRunner) executeToolCall(ctx context.Context, state *LoopState, inpu
 		state.Todos = todos
 	}
 	rawOutput := result.Output
+	runlog.ToolObservation(stepIndex, action, rawOutput)
 	observation := rawOutput
 	toolCall := ToolCallRecord{ToolName: action.ToolName, Status: protocol.ToolCallStatusSucceeded}
 	if action.ToolName != tools.FinalAnswerToolName {

@@ -116,7 +116,7 @@ career-workspace/
     index.json
 ```
 
-`面试资料库首页.md` is the main review entry point. It links to JD, public interview experience, project preparation, and per-role interview material. `record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library. `metadata.json`, `source.*`, and `extracted.md` are preserved for evidence tracing; the review flow should start from index pages, material packages, question banks, and role pages.
+`面试资料库首页.md` is the main review entry point. The domain directories hold concrete JD files, public interview experience files, generated question banks, project packs, and per-role interview material directly; per-directory summary files are not initialized or refreshed. `record/` stores import logs, generated process artifacts, and unclassified material. It is an operation trail, not the main QA library. `metadata.json`, `source.*`, and `extracted.md` are preserved for evidence tracing.
 
 ## Career Copilot CLI
 
@@ -134,22 +134,20 @@ Start the interactive Career Copilot workspace:
 ./bin/happyagent
 ```
 
-By default the CLI opens `career-workspace/`. The workspace is local and is initialized automatically when missing. Advanced commands are available in the prompt:
+By default the CLI opens `career-workspace/`. The workspace is local and is initialized automatically when missing. Natural-language turns are classified by the LLM into structured actions; code validates paths, state, confidence, and output schema before saving or generating anything. Advanced commands are intentionally limited to deterministic console controls:
 
 - `/status` shows workspace counts and active pointers.
-- `/add <type>` archives material.
-- `/library` refreshes the review-library homepage, overview pages, material packages, and question banks.
-- `/export <kind>` generates Markdown material and saves it back into the relevant workspace area.
+- `/library` refreshes LLM-generated review material packages and question banks.
 - `/help` lists available commands.
 - `/exit` exits the workspace.
 
-Command examples:
+Natural-language examples:
 
 ```text
-/add jd ./examples/career/real-world-anonymized/jd-marketing-growth.md
-/add resume ./examples/career/real-world-anonymized/resume-marketing-anonymized.md
-/add prepare "市场营销项目准备：活动复盘、用户增长案例、内容策略证据口径"
-/export jd-match
+请读取 ./examples/career/real-world-anonymized/jd-marketing-growth.md 作为目标 JD
+请读取 ./examples/career/real-world-anonymized/resume-marketing-anonymized.md 作为我的简历
+这段是项目准备材料：市场营销项目准备、活动复盘、用户增长案例、内容策略证据口径
+基于当前简历和 JD 生成匹配报告
 ```
 
 The workspace also accepts natural-language references to local `.md`, `.txt`, `.docx`, and `.pdf` files. Markdown and text are extracted directly. DOCX and PDF ingestion use the repository's document extraction path and preserve the original file with extracted text in the workspace.

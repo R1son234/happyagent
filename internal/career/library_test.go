@@ -17,9 +17,6 @@ func TestOpenWorkspaceCreatesReviewLibraryEntryPoints(t *testing.T) {
 	}
 	for _, rel := range []string{
 		"面试资料库首页.md",
-		filepath.Join(WorkspaceDirExperiences, "面经总览.md"),
-		filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"),
-		filepath.Join(WorkspaceDirJD, "岗位汇总.md"),
 	} {
 		data, err := os.ReadFile(filepath.Join(ws.Root, rel))
 		if err != nil {
@@ -27,6 +24,15 @@ func TestOpenWorkspaceCreatesReviewLibraryEntryPoints(t *testing.T) {
 		}
 		if strings.HasPrefix(strings.TrimSpace(string(data)), "---") || strings.Contains(string(data), "[[") {
 			t.Fatalf("expected plain markdown in %s:\n%s", rel, data)
+		}
+	}
+	for _, rel := range []string{
+		filepath.Join(WorkspaceDirExperiences, "面经总览.md"),
+		filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"),
+		filepath.Join(WorkspaceDirJD, "岗位汇总.md"),
+	} {
+		if _, err := os.Stat(filepath.Join(ws.Root, rel)); !os.IsNotExist(err) {
+			t.Fatalf("summary file %s should not be initialized, err=%v", rel, err)
 		}
 	}
 }

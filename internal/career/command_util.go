@@ -19,7 +19,7 @@ import (
 	"happyagent/internal/tools"
 )
 
-func runCareerTurn(ctx context.Context, deps Dependencies, sessionID string, prompt string, classification InputClassification) (store.RunRecord, error) {
+func runCareerTurn(ctx context.Context, deps Dependencies, sessionID string, prompt string, decision UserInputSemanticDecision) (store.RunRecord, error) {
 	timeout := time.Duration(deps.Config.Engine.RunTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 60 * time.Second
@@ -43,7 +43,7 @@ func runCareerTurn(ctx context.Context, deps Dependencies, sessionID string, pro
 		Input:         prompt,
 		SystemPrompt:  deps.Config.Engine.SystemPrompt,
 		ApprovedTools: deps.Config.Tools.ApprovedTools,
-		Events:        []observe.Event{classificationEvent(classification)},
+		Events:        []observe.Event{semanticDecisionEvent(decision)},
 		OnStepStart: func(stepIndex int) {
 			spinner.UpdateThinkingMessage(fmt.Sprintf("Thinking... (step %d)", stepIndex))
 		},
@@ -107,34 +107,6 @@ func generateReviewLibraryWithLLM(deps Dependencies, workspace *Workspace, sessi
 	return workspace.GenerateReviewLibraryWithSetGenerator(ctx, now, generator)
 }
 
-func saveMaterial(workspace *Workspace, itemType string, content string) (WorkspaceItem, error) {
-	if strings.ToLower(strings.TrimSpace(itemType)) == WorkspaceTypeExperiences {
-		result, err := workspace.ArchivePublicInterviewExperience(content, time.Now())
-		if err != nil {
-			return WorkspaceItem{}, err
-		}
-		return result.ExperienceItem, nil
-	}
-	guide, err := workspace.LoadGuide()
-	if err != nil {
-		return WorkspaceItem{}, err
-	}
-	classification := ClassifyInputWithGuide(content, guide)
-	classification.Type = itemType
-	classification.RulePath = classificationRulePath(guide, itemType)
-	result, err := workspace.AddGuidedMaterial(GuidedMaterialInput{
-		ItemType:       itemType,
-		Classification: classification,
-		Content:        content,
-		SourceLabel:    "natural_language_input",
-		Now:            time.Now(),
-	})
-	if err != nil {
-		return WorkspaceItem{}, err
-	}
-	return result.Item, nil
-}
-
 func emptyIfBlank(value string) string {
 	if strings.TrimSpace(value) == "" {
 		return "(none)"
@@ -142,16 +114,17 @@ func emptyIfBlank(value string) string {
 	return value
 }
 
-func classificationEvent(classification InputClassification) observe.Event {
+func semanticDecisionEvent(decision UserInputSemanticDecision) observe.Event {
 	return observe.Event{
 		Time:    time.Now(),
-		Type:    "career_input_classified",
-		Message: "career input classified",
+		Type:    "career_semantic_decision",
+		Message: "career semantic decision",
 		Data: map[string]string{
-			"type":        classification.Type,
-			"confidence":  fmt.Sprintf("%.2f", classification.Confidence),
-			"should_save": fmt.Sprintf("%t", classification.ShouldSave),
-			"signals":     strings.Join(classification.Signals, ","),
+			"intent":                  string(decision.Intent),
+			"confidence":              string(decision.Confidence),
+			"should_save_user_input":  fmt.Sprintf("%t", decision.ShouldSaveUserInput),
+			"needs_user_confirmation": fmt.Sprintf("%t", decision.NeedsUserConfirmation),
+			"reason":                  decision.Reason,
 		},
 	}
 }
@@ -174,6 +147,31 @@ func collectedInputPaths(workspaceRoot string, meta WorkspaceMetadata, autoArchi
 		seen[item.Path] = true
 	}
 	return paths
+}
+
+func appendGeneratedPaths(paths UserOutputPaths, extra []string) []string {
+	result := make([]string, 0, 4+len(extra))
+	for _, candidate := range []string{paths.LatestMarkdown, paths.TimestampedMarkdown, paths.LatestJSON, paths.TimestampedJSON} {
+		if strings.TrimSpace(candidate) != "" {
+			result = append(result, filepath.ToSlash(candidate))
+		}
+	}
+	for _, candidate := range extra {
+		candidate = filepath.ToSlash(strings.TrimSpace(candidate))
+		if candidate != "" {
+			result = append(result, candidate)
+		}
+	}
+	return uniqueStrings(result)
+}
+
+func firstString(values []string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func parseAnalyzeOptions(args []string) (AnalyzeOptions, error) {

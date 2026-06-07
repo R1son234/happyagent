@@ -165,11 +165,11 @@ func TestCopilotServiceClassifyInboxAutoConfirmsHighConfidence(t *testing.T) {
 	if len(runner.calls) != 2 {
 		t.Fatalf("expected two structured task calls (classify + JD split), got %d", len(runner.calls))
 	}
-	if !sameStrings(runner.calls[0].SourcePaths, []string{"inbox/jd.md"}) {
-		t.Fatalf("source paths = %v, want workspace-relative inbox path", runner.calls[0].SourcePaths)
+	if len(runner.calls[0].SourcePaths) != 0 || !sameStrings(runner.calls[0].ToolScope, []string{"final_answer"}) {
+		t.Fatalf("classification should use embedded extracted content without file_read, got source_paths=%v tool_scope=%v", runner.calls[0].SourcePaths, runner.calls[0].ToolScope)
 	}
-	if strings.Contains(runner.calls[0].Input, DefaultWorkspaceRoot+"/inbox/jd.md") || !strings.Contains(runner.calls[0].Input, "<read_path>inbox/jd.md</read_path>") {
-		t.Fatalf("classification prompt used wrong read_path:\n%s", runner.calls[0].Input)
+	if strings.Contains(runner.calls[0].Input, DefaultWorkspaceRoot+"/inbox/jd.md") || !strings.Contains(runner.calls[0].Input, "<read_path>inbox/jd.md</read_path>") || !strings.Contains(runner.calls[0].Input, "岗位职责：负责示例系统") {
+		t.Fatalf("classification prompt used wrong read_path or missed extracted content:\n%s", runner.calls[0].Input)
 	}
 	if _, err := os.Stat(filepath.Join(root, sourceRel)); !os.IsNotExist(err) {
 		t.Fatalf("expected inbox source removed after confirmed import, err=%v", err)
@@ -184,6 +184,54 @@ func TestCopilotServiceClassifyInboxAutoConfirmsHighConfidence(t *testing.T) {
 	}
 	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeJD {
 		t.Fatalf("expected one JD item, got %+v", index.Items)
+	}
+}
+
+func TestCopilotServiceClassifyInboxArchivesOriginalWhenJDSplitSucceeds(t *testing.T) {
+	now := time.Date(2026, 6, 5, 9, 0, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	if _, err := OpenWorkspace(root, now); err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	sourceRel := filepath.Join("inbox", "岗位JD_示例.md")
+	if err := os.WriteFile(filepath.Join(root, sourceRel), []byte("# JD 汇总\n\n岗位 A：负责平台。\n岗位 B：负责数据。"), 0o644); err != nil {
+		t.Fatalf("write jd: %v", err)
+	}
+	runner := &fakeStructuredTaskRunner{outputs: []string{
+		`{"files":[{"source_path":"inbox/岗位JD_示例.md","source_hash":"sha256:fake","material_type":"jd","confidence":"high","reason":"包含多个岗位 JD。","source_excerpt":"岗位 A：负责平台。岗位 B：负责数据。","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}`,
+		`{"job_descriptions":[{"title":"平台工程师","company":"示例公司","team":"平台组","role":"工程师","responsibilities":["负责平台"],"requirements":["熟悉 Go"],"keywords":["Go"],"source_excerpt":"岗位 A：负责平台。","confidence":"high"},{"title":"数据工程师","company":"示例公司","team":"数据组","role":"工程师","responsibilities":["负责数据"],"requirements":["熟悉 SQL"],"keywords":["SQL"],"source_excerpt":"岗位 B：负责数据。","confidence":"high"}]}`,
+	}}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
+	result, err := service.ClassifyInbox(context.Background(), ClassifyInboxRequest{})
+	if err != nil {
+		t.Fatalf("ClassifyInbox() error = %v", err)
+	}
+	if len(result.Items) != 1 || result.Items[0].Status != InboxItemStatusConfirmed {
+		t.Fatalf("expected confirmed split JD item, got %+v", result.Items)
+	}
+	if _, err := os.Stat(filepath.Join(root, sourceRel)); !os.IsNotExist(err) {
+		t.Fatalf("expected inbox source removed after split, err=%v", err)
+	}
+	archiveEntries, err := os.ReadDir(filepath.Join(root, WorkspaceDirArchive, "2026-06-05"))
+	if err != nil || len(archiveEntries) != 1 {
+		t.Fatalf("expected original JD archived, entries=%+v err=%v", archiveEntries, err)
+	}
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	_, index, err := ws.Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	jdCount := 0
+	for _, item := range index.Items {
+		if item.Type == WorkspaceTypeJD {
+			jdCount++
+		}
+	}
+	if jdCount != 2 {
+		t.Fatalf("expected two split JD items, got %+v", index.Items)
 	}
 }
 
@@ -371,12 +419,16 @@ func (f fakeCareerApplication) CreateSession(profileName string) (store.SessionR
 
 func (f fakeCareerApplication) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
 	_ = ctx
+	output := f.output
+	if strings.Contains(req.Input, "<career_user_input_semantic_decision>") {
+		output = semanticDecisionJSONForTest(req.Input)
+	}
 	return store.RunRecord{
 		ID:        "run-test",
 		SessionID: firstNonEmpty(req.SessionID, f.sessionID, "fake-session"),
 		Profile:   req.ProfileName,
 		Input:     req.Input,
-		Output:    f.output,
+		Output:    output,
 	}, nil
 }
 
@@ -580,6 +632,31 @@ func TestCopilotServiceGenerateBattlePackEnablesAgentTaskToolScope(t *testing.T)
 	}
 }
 
+func TestCopilotServiceGenerateBattlePackAcceptsMetadataSourcePaths(t *testing.T) {
+	now := time.Date(2026, 5, 25, 11, 45, 0, 0, time.UTC)
+	root := filepath.Join(t.TempDir(), "career")
+	ws, err := OpenWorkspace(root, now)
+	if err != nil {
+		t.Fatalf("OpenWorkspace() error = %v", err)
+	}
+	resume, err := ws.AddMaterial(WorkspaceTypeResume, "# 简历\n\n项目经历。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial(resume) error = %v", err)
+	}
+	jd, err := ws.AddMaterial(WorkspaceTypeJD, "# JD\n\n岗位要求。", now)
+	if err != nil {
+		t.Fatalf("AddMaterial(jd) error = %v", err)
+	}
+	runner := &fakeStructuredTaskRunner{output: `{"title":"示例作战包","primary_document":"我的面试/示例岗位/作战页.md","documents":[{"path":"我的面试/示例岗位/作战页.md","title":"示例作战包","markdown":"# 示例作战包"}],"source_refs":[{"path":"` + resume.Metadata.Source + `","version":"sha256:resume","excerpt":"项目经历","evidence_spans":["项目经历"]},{"path":"` + jd.Metadata.Source + `","version":"sha256:jd","excerpt":"岗位要求","evidence_spans":["岗位要求"]}],"risk_flags":[],"missing_info":[]}`}
+	service := CopilotService{WorkspaceRoot: root, TaskRunner: runner, Now: func() time.Time { return now }}
+	if _, err := service.GenerateBattlePack(context.Background(), GenerateBattlePackRequest{
+		JDPath:      jd.Metadata.Source,
+		SourcePaths: []string{resume.Metadata.Source},
+	}); err != nil {
+		t.Fatalf("GenerateBattlePack() should accept metadata source paths: %v", err)
+	}
+}
+
 func TestCopilotServiceConfirmNewResumeMarksBattlePackStale(t *testing.T) {
 	oldTime := time.Date(2026, 5, 24, 9, 0, 0, 0, time.UTC)
 	newTime := time.Date(2026, 5, 25, 9, 0, 0, 0, time.UTC)
@@ -715,15 +792,15 @@ func TestStructuredTaskRunnerUsesSourceBoundToolPrompt(t *testing.T) {
 	}
 }
 
-func TestCareerBackgroundPromptsReferenceSourcesWithoutEmbeddingContent(t *testing.T) {
-	secret := "示例资料正文-不应进入prompt"
+func TestCareerBackgroundPromptsUseInlineContentOnlyForClassification(t *testing.T) {
+	secret := "示例资料正文-用于分类"
 	classificationPrompt := buildFileClassificationPrompt([]InboxFileForClassification{{
 		SourcePath: "inbox/source.md",
 		SourceHash: "sha256:test",
 		Content:    secret,
 	}})
-	if strings.Contains(classificationPrompt, secret) || strings.Contains(classificationPrompt, "<content>") {
-		t.Fatalf("classification prompt leaked content:\n%s", classificationPrompt)
+	if !strings.Contains(classificationPrompt, secret) || !strings.Contains(classificationPrompt, "<extracted_content>") {
+		t.Fatalf("classification prompt should include extracted content for one-round LLM classification:\n%s", classificationPrompt)
 	}
 	if !strings.Contains(classificationPrompt, "inbox/source.md") || !strings.Contains(classificationPrompt, "sha256:test") {
 		t.Fatalf("classification prompt missing source metadata:\n%s", classificationPrompt)

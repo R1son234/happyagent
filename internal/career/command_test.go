@@ -26,6 +26,9 @@ func (s *stubCareerApp) CreateSession(profileName string) (store.SessionRecord, 
 }
 
 func (s *stubCareerApp) AppendUserTurn(ctx context.Context, req app.AppendTurnRequest) (store.RunRecord, error) {
+	if strings.Contains(req.Input, "<career_user_input_semantic_decision>") {
+		return store.RunRecord{ID: "semantic-run", SessionID: req.SessionID, Output: semanticDecisionJSONForTest(req.Input)}, nil
+	}
 	s.appendRequests = append(s.appendRequests, req)
 	if len(s.runs) == 0 {
 		return store.RunRecord{ID: "run-1", SessionID: req.SessionID, Output: "ok"}, nil
@@ -35,6 +38,108 @@ func (s *stubCareerApp) AppendUserTurn(ctx context.Context, req app.AppendTurnRe
 		index = len(s.runs) - 1
 	}
 	return s.runs[index], nil
+}
+
+func semanticDecisionJSONForTest(prompt string) string {
+	userInput := extractTaggedForTest(prompt, "user_input")
+	candidates := extractCandidateIDsForTest(prompt)
+	intent := string(CareerIntentChat)
+	outputKind := OutputKindChat
+	shouldSave := false
+	shouldScanInbox := false
+	materialType := "unknown"
+	if strings.Contains(userInput, "memory") || strings.Contains(userInput, "记住") {
+		intent = string(CareerIntentMemory)
+	} else if strings.Contains(userInput, "状态") {
+		intent = string(CareerIntentStatus)
+	} else if strings.Contains(strings.ToLower(userInput), "inbox") || strings.Contains(userInput, "识别") || strings.Contains(userInput, "保存") || strings.Contains(userInput, "存下来") || strings.Contains(userInput, "我放好了") {
+		intent = string(CareerIntentIngest)
+		shouldScanInbox = true
+	} else if strings.Contains(userInput, "岗位职责") || strings.Contains(userInput, "任职要求") {
+		intent = string(CareerIntentIngest)
+		shouldSave = true
+		materialType = "jd"
+	} else if strings.Contains(userInput, "简历") && (strings.Contains(userInput, "工作经历") || strings.Contains(userInput, "项目")) {
+		intent = string(CareerIntentIngest)
+		shouldSave = true
+		materialType = "resume"
+	} else if strings.Contains(userInput, "分析") || strings.Contains(userInput, "匹配") {
+		intent = string(CareerIntentAnalyze)
+		outputKind = OutputKindReport
+	} else if strings.Contains(userInput, "优化简历") || strings.Contains(userInput, "给我建议") || strings.Contains(userInput, "看看内容") {
+		intent = string(CareerIntentResumeReview)
+		outputKind = OutputKindResumeReview
+	} else if strings.Contains(userInput, "面试准备") {
+		intent = string(CareerIntentInterviewBrief)
+		outputKind = OutputKindInterviewBrief
+	}
+	referenced := "[]"
+	if len(candidates) > 0 {
+		parts := make([]string, 0, len(candidates))
+		for _, candidate := range candidates {
+			sourcePath := extractCandidateSourceForTest(prompt, candidate)
+			candidateMaterial := "review_note"
+			sourceLower := strings.ToLower(sourcePath)
+			if strings.Contains(sourceLower, "resume") || strings.Contains(sourcePath, "简历") || strings.Contains(sourceLower, "docx") {
+				candidateMaterial = "resume"
+			} else if strings.Contains(sourceLower, "jd") || strings.Contains(sourcePath, "岗位") || strings.Contains(sourceLower, "ai.txt") {
+				candidateMaterial = "jd"
+			} else if strings.Contains(sourcePath, "面经") {
+				candidateMaterial = "public_interview_experience"
+			}
+			parts = append(parts, `{"candidate_id":"`+candidate+`","source_path":"`+sourcePath+`","action":"include","material_type":"`+candidateMaterial+`","destination":"","confidence":"high","reason":"test semantic decision","needs_user_confirmation":false}`)
+		}
+		referenced = "[" + strings.Join(parts, ",") + "]"
+		intent = string(CareerIntentIngest)
+		if strings.Contains(userInput, "分析") || strings.Contains(userInput, "优化") {
+			intent = string(CareerIntentAnalyze)
+			outputKind = OutputKindReport
+		}
+	}
+	requested := `[]`
+	if outputKind != OutputKindChat {
+		requested = `[{"kind":"` + outputKind + `","title":"` + defaultOutputTitle(outputKind) + `","reason":"test semantic decision","required_sources":[]}]`
+	}
+	return `{"intent":"` + intent + `","confidence":"high","reason":"test semantic decision","should_scan_inbox":` + fmtBoolForTest(shouldScanInbox) + `,"should_save_user_input":` + fmtBoolForTest(shouldSave) + `,"user_input_material_type":"` + materialType + `","user_input_destination":"","needs_user_confirmation":false,"questions_for_user":[],"referenced_files":` + referenced + `,"requested_outputs":` + requested + `,"required_state":[],"risk_flags":[]}`
+}
+
+func extractTaggedForTest(input string, tag string) string {
+	startTag := "<" + tag + ">"
+	endTag := "</" + tag + ">"
+	start := strings.Index(input, startTag)
+	end := strings.Index(input, endTag)
+	if start < 0 || end < 0 || end <= start {
+		return ""
+	}
+	return strings.TrimSpace(input[start+len(startTag) : end])
+}
+
+func extractCandidateIDsForTest(prompt string) []string {
+	var ids []string
+	parts := strings.Split(prompt, "<candidate_id>")
+	for _, part := range parts[1:] {
+		end := strings.Index(part, "</candidate_id>")
+		if end > 0 {
+			ids = append(ids, strings.TrimSpace(part[:end]))
+		}
+	}
+	return ids
+}
+
+func extractCandidateSourceForTest(prompt string, candidateID string) string {
+	index := strings.Index(prompt, "<candidate_id>"+candidateID+"</candidate_id>")
+	if index < 0 {
+		return ""
+	}
+	rest := prompt[index:]
+	return extractTaggedForTest(rest, "source_path")
+}
+
+func fmtBoolForTest(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 func TestRunInteractiveCreatesWorkspaceAndHandlesStatus(t *testing.T) {
@@ -140,87 +245,6 @@ func TestRunInteractiveIngestsJDWithoutModelTurn(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveAddJDCommandSupportsMultilineInput(t *testing.T) {
-	app := &stubCareerApp{
-		session: store.SessionRecord{
-			ID:        "session-career",
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	}
-	workspaceRoot := t.TempDir()
-	var stdout bytes.Buffer
-
-	err := RunInteractive(Dependencies{
-		App:    app,
-		Config: config.Default(),
-		Stdin: strings.NewReader(`/add jd
-# Sample Role
-岗位职责：负责项目规划和跨部门协作。
-任职要求：熟悉沟通协调、执行跟踪和复盘。
-.
-/exit
-`),
-		Stdout:        &stdout,
-		Stderr:        &bytes.Buffer{},
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive() error = %v", err)
-	}
-	ws, err := OpenWorkspace(workspaceRoot, time.Now())
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	_, index, err := ws.Status()
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if len(index.Items) != 1 || index.Items[0].Title != "Sample Role" {
-		t.Fatalf("expected multiline jd item, got %+v", index.Items)
-	}
-	if !strings.Contains(stdout.String(), "已添加 JD") {
-		t.Fatalf("missing add confirmation:\n%s", stdout.String())
-	}
-}
-
-func TestRunInteractiveAddResumeCommandArchivesResume(t *testing.T) {
-	app := &stubCareerApp{
-		session: store.SessionRecord{
-			ID:        "session-career",
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	}
-	workspaceRoot := t.TempDir()
-
-	err := RunInteractive(Dependencies{
-		App:           app,
-		Config:        config.Default(),
-		Stdin:         strings.NewReader("/add resume 简历：工作经历 项目协作，项目经历 跨部门项目推进。\n/exit\n"),
-		Stdout:        &bytes.Buffer{},
-		Stderr:        &bytes.Buffer{},
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive() error = %v", err)
-	}
-	ws, err := OpenWorkspace(workspaceRoot, time.Now())
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	meta, index, err := ws.Status()
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if meta.CurrentResume == "" {
-		t.Fatalf("expected current resume to be updated")
-	}
-	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeResume {
-		t.Fatalf("expected one resume item, got %+v", index.Items)
-	}
-}
-
 func TestRunInteractiveLibraryCommandRefreshesReviewLibrary(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
@@ -251,60 +275,6 @@ func TestRunInteractiveLibraryCommandRefreshesReviewLibrary(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspaceRoot, "面试资料库首页.md")); err != nil {
 		t.Fatalf("expected review library home: %v", err)
-	}
-}
-
-func TestRunInteractiveAddJDFileCommandArchivesOriginalFile(t *testing.T) {
-	app := &stubCareerApp{
-		session: store.SessionRecord{
-			ID:        "session-career",
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	}
-	workspaceRoot := t.TempDir()
-	sourcePath := filepath.Join(t.TempDir(), "ai.txt")
-	content := "# Sample Role\n岗位职责：负责项目规划和跨部门协作。\n任职要求：熟悉沟通协调、执行跟踪和复盘。\n"
-	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write source file: %v", err)
-	}
-
-	err := RunInteractive(Dependencies{
-		App:           app,
-		Config:        config.Default(),
-		Stdin:         strings.NewReader("/add jd " + sourcePath + "\n/exit\n"),
-		Stdout:        &bytes.Buffer{},
-		Stderr:        &bytes.Buffer{},
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive() error = %v", err)
-	}
-	ws, err := OpenWorkspace(workspaceRoot, time.Now())
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	_, index, err := ws.Status()
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if len(index.Items) != 1 {
-		t.Fatalf("expected one archived file, got %+v", index.Items)
-	}
-	item := index.Items[0]
-	if item.Type != WorkspaceTypeJD {
-		t.Fatalf("expected jd item, got %+v", item)
-	}
-	if !strings.HasPrefix(item.Path, WorkspaceDirJD+"/") || !strings.HasSuffix(item.Path, ".md") {
-		t.Fatalf("expected visible jd markdown path, got %q", item.Path)
-	}
-	metadataPath := filepath.Join(workspaceRoot, internalItemRelDir(item.ID), "metadata.json")
-	data, err := os.ReadFile(metadataPath)
-	if err != nil {
-		t.Fatalf("read metadata: %v", err)
-	}
-	if !strings.Contains(string(data), `"original":`) || !strings.Contains(string(data), `"source":`) {
-		t.Fatalf("metadata missing original/source paths: %s", data)
 	}
 }
 
@@ -374,7 +344,7 @@ func TestRunInteractiveAnalyzeIntentDoesNotAutoArchiveInbox(t *testing.T) {
 			t.Fatalf("expected no output file %s before confirmation, stat err=%v", rel, err)
 		}
 	}
-	if !strings.Contains(stdout.String(), "不会自动归档") {
+	if !strings.Contains(stdout.String(), "发现 ") {
 		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
@@ -411,7 +381,7 @@ func TestRunInteractiveIdentifyInboxScansInboxWithoutModelGuessing(t *testing.T)
 		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "不会自动归档") {
+	if !strings.Contains(output, "发现 ") {
 		t.Fatalf("expected inbox confirmation warning, got:\n%s", output)
 	}
 }
@@ -447,7 +417,7 @@ func TestRunInteractiveMentionWorkspaceInboxScansInbox(t *testing.T) {
 	if len(app.appendRequests) != 0 {
 		t.Fatalf("expected inbox placement note to avoid model turn, got %d", len(app.appendRequests))
 	}
-	if !strings.Contains(stdout.String(), "不会自动归档") {
+	if !strings.Contains(stdout.String(), "发现 ") {
 		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
@@ -497,7 +467,7 @@ func TestRunInteractiveSaveConfirmationScansInboxWithoutModelTurn(t *testing.T) 
 	if len(index.Items) != 0 {
 		t.Fatalf("expected no indexed items before classification confirmation, got %+v", index.Items)
 	}
-	if !strings.Contains(stdout.String(), "不会自动归档") {
+	if !strings.Contains(stdout.String(), "发现 ") {
 		t.Fatalf("expected inbox confirmation warning, got:\n%s", stdout.String())
 	}
 }
@@ -633,9 +603,6 @@ func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
 	if strings.Contains(output, "无法自动归档") {
 		t.Fatalf("did not expect ingest warning, got:\n%s", output)
 	}
-	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") {
-		t.Fatalf("expected model turn with auto-saved context, got %+v", app.appendRequests)
-	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
@@ -652,7 +619,7 @@ func TestRunInteractiveAutoArchivesChineseDirectoryFilePhrase(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveAutoArchivesThenStillCallsModelForRecordOnlyRequest(t *testing.T) {
+func TestRunInteractiveAutoArchivesRecordOnlyRequestWithoutExtraModelTurn(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
 			ID:        "session-career",
@@ -680,14 +647,11 @@ func TestRunInteractiveAutoArchivesThenStillCallsModelForRecordOnlyRequest(t *te
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 1 {
-		t.Fatalf("expected auto-archive to be followed by a model turn, got %d", len(app.appendRequests))
+	if len(app.appendRequests) != 0 {
+		t.Fatalf("expected archive-only semantic decision to avoid extra model turn, got %d", len(app.appendRequests))
 	}
-	if !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") || !strings.Contains(app.appendRequests[0].Input, sourcePath) {
-		t.Fatalf("expected model prompt to include original input and auto-saved context, got:\n%s", app.appendRequests[0].Input)
-	}
-	if !strings.Contains(stdout.String(), "assistant> 我已经记录") {
-		t.Fatalf("expected model response after auto-archive, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "已自动归档 JD") {
+		t.Fatalf("expected auto-archive confirmation, got:\n%s", stdout.String())
 	}
 }
 
@@ -754,9 +718,6 @@ func TestRunInteractiveAutoArchivesNamedJDAndDiscoveredResumeFromSameDirectory(t
 	}
 	if !hasResume || !hasJD {
 		t.Fatalf("expected archived resume and jd items, got %+v", index.Items)
-	}
-	if len(app.appendRequests) != 1 || !strings.Contains(app.appendRequests[0].Input, "<auto_saved_workspace_assets>") {
-		t.Fatalf("expected one model turn with auto-saved context, got %+v", app.appendRequests)
 	}
 }
 
@@ -844,8 +805,8 @@ func TestRunInteractiveAutoArchivesResumeFromReferencedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunInteractive() error = %v", err)
 	}
-	if len(app.appendRequests) != 0 {
-		t.Fatalf("expected no model turn without JD, got %d", len(app.appendRequests))
+	if len(app.appendRequests) == 0 {
+		t.Fatalf("expected model turn after LLM selected usable directory candidates")
 	}
 	ws, err := OpenWorkspace(workspaceRoot, time.Now())
 	if err != nil {
@@ -878,8 +839,8 @@ func TestRunInteractiveAutoArchivesResumeFromReferencedDirectory(t *testing.T) {
 	if !strings.Contains(stdout.String(), "已自动归档 简历") {
 		t.Fatalf("expected auto-archive confirmation, got:\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "现在还缺少 JD") {
-		t.Fatalf("expected missing JD hint, got:\n%s", stdout.String())
+	if !strings.Contains(stdout.String(), "结果：输出报告/latest-report.md") {
+		t.Fatalf("expected generated report after LLM selected directory candidates, got:\n%s", stdout.String())
 	}
 }
 
@@ -946,76 +907,6 @@ func TestRunInteractiveAutoArchivesResumeAndJDInSameTurn(t *testing.T) {
 	}
 }
 
-func TestRunInteractiveExportCommand(t *testing.T) {
-	app := &stubCareerApp{
-		session: store.SessionRecord{
-			ID:        "session-career",
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	}
-	workspaceRoot := t.TempDir()
-	var stdout bytes.Buffer
-
-	err := RunInteractive(Dependencies{
-		App:           app,
-		Config:        config.Default(),
-		Stdin:         strings.NewReader("/export review-material\n/exit\n"),
-		Stdout:        &stdout,
-		Stderr:        &bytes.Buffer{},
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive() error = %v", err)
-	}
-	output := stdout.String()
-	if !strings.Contains(output, "已生成并保存 Review Material") {
-		t.Fatalf("unexpected output:\n%s", output)
-	}
-	if _, err := os.Stat(filepath.Join(workspaceRoot, WorkspaceDirOutputs, "latest-review-material.md")); err != nil {
-		t.Fatalf("expected latest review material output: %v", err)
-	}
-}
-
-func TestRunInteractiveAddsProjectPackType(t *testing.T) {
-	app := &stubCareerApp{
-		session: store.SessionRecord{
-			ID:        "session-career",
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		},
-	}
-	workspaceRoot := t.TempDir()
-	var stdout bytes.Buffer
-
-	err := RunInteractive(Dependencies{
-		App:           app,
-		Config:        config.Default(),
-		Stdin:         strings.NewReader("/add project 示例项目准备\n/exit\n"),
-		Stdout:        &stdout,
-		Stderr:        &bytes.Buffer{},
-		WorkspaceRoot: workspaceRoot,
-	})
-	if err != nil {
-		t.Fatalf("RunInteractive() error = %v", err)
-	}
-	output := stdout.String()
-	if !strings.Contains(output, "已添加 项目专项") {
-		t.Fatalf("expected project pack archive, got:\n%s", output)
-	}
-	ws, err := OpenWorkspace(workspaceRoot, time.Now())
-	if err != nil {
-		t.Fatalf("OpenWorkspace() error = %v", err)
-	}
-	_, index, err := ws.Status()
-	if err != nil {
-		t.Fatalf("Status() error = %v", err)
-	}
-	if len(index.Items) != 1 || index.Items[0].Type != WorkspaceTypeProject {
-		t.Fatalf("expected project pack material: %+v", index.Items)
-	}
-}
-
 func TestRunInteractiveNaturalLanguageCommandHelpDoesNotCallModel(t *testing.T) {
 	app := &stubCareerApp{
 		session: store.SessionRecord{
@@ -1041,7 +932,7 @@ func TestRunInteractiveNaturalLanguageCommandHelpDoesNotCallModel(t *testing.T) 
 		t.Fatalf("command help should not call model, got %d calls", len(app.appendRequests))
 	}
 	output := stdout.String()
-	for _, expected := range []string{"/help", "/status", "/export", "/add", "/exit"} {
+	for _, expected := range []string{"/help", "/status", "/exit"} {
 		if !strings.Contains(output, expected) {
 			t.Fatalf("help output missing %q:\n%s", expected, output)
 		}
@@ -1052,10 +943,15 @@ func TestRunInteractiveNaturalLanguageCommandHelpDoesNotCallModel(t *testing.T) 
 }
 
 func TestBuildInteractivePromptIncludesFactBoundary(t *testing.T) {
-	prompt := BuildInteractivePrompt("帮我优化简历", ClassifyInput("帮我优化简历"))
+	prompt := BuildInteractivePromptWithDecision("帮我优化简历", UserInputSemanticDecision{
+		Intent:           CareerIntentResumeReview,
+		Confidence:       ConfidenceHigh,
+		Reason:           "用户要求优化简历",
+		RequestedOutputs: []RequestedOutputDecision{{Kind: OutputKindResumeReview}},
+	}, nil, nil, WorkspaceMetadata{}, "", DefaultWorkspaceGuide())
 	for _, expected := range []string{
 		"Career Copilot continuous conversation workspace",
-		"<input_classification>",
+		"<semantic_decision>",
 		"<user_input>",
 		"帮我优化简历",
 		"<delivery_policy>",
@@ -1075,9 +971,14 @@ func TestBuildInteractivePromptIncludesFactBoundary(t *testing.T) {
 }
 
 func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *testing.T) {
-	prompt := BuildInteractivePromptWithAutoSaved(
+	prompt := BuildInteractivePromptWithDecision(
 		"帮我分析一下",
-		ClassifyInput("帮我分析一下简历"),
+		UserInputSemanticDecision{
+			Intent:           CareerIntentAnalyze,
+			Confidence:       ConfidenceHigh,
+			Reason:           "用户要求分析匹配度",
+			RequestedOutputs: []RequestedOutputDecision{{Kind: OutputKindReport}},
+		},
 		[]WorkspaceItem{{
 			Type:  WorkspaceTypeResume,
 			Title: "resume-sample",
@@ -1087,8 +988,8 @@ func TestBuildInteractivePromptWithAutoSavedUsesWorkspaceRootRelativePaths(t *te
 		WorkspaceMetadata{
 			CurrentResume: WorkspaceDirResume + "/resume-sample.md",
 		},
-		true,
 		".happyagent/career",
+		DefaultWorkspaceGuide(),
 	)
 	for _, expected := range []string{
 		".happyagent/career/" + WorkspaceDirResume + "/resume-sample.md",
@@ -1325,12 +1226,11 @@ func TestRunInteractiveMemoryIntentDoesNotScanInbox(t *testing.T) {
 }
 
 func TestBuildInteractivePromptForMemoryIntentPrefersMemoryTools(t *testing.T) {
-	classification := InputClassification{
-		Type:       string(CareerIntentMemory),
-		Confidence: 0.9,
-		Signals:    []string{"更新 memory"},
-	}
-	prompt := BuildInteractivePrompt("更新 memory：以后分析岗位时不要自动重新扫描 inbox", classification)
+	prompt := BuildInteractivePromptWithDecision("更新 memory：以后分析岗位时不要自动重新扫描 inbox", UserInputSemanticDecision{
+		Intent:     CareerIntentMemory,
+		Confidence: ConfidenceHigh,
+		Reason:     "用户要求更新记忆",
+	}, nil, nil, WorkspaceMetadata{}, "", DefaultWorkspaceGuide())
 	if !strings.Contains(prompt, "<memory_priority>") {
 		t.Fatalf("expected memory_priority section:\n%s", prompt)
 	}
@@ -1352,17 +1252,17 @@ func TestBuildInteractivePromptForMemoryIntentPrefersMemoryTools(t *testing.T) {
 }
 
 func TestBuildInteractivePromptRewritesLegacyWorkspacePointers(t *testing.T) {
-	classification := InputClassification{
-		Type:       string(CareerIntentAnalyze),
-		Confidence: 0.95,
-		Signals:    []string{"分析"},
-	}
 	meta := WorkspaceMetadata{
 		CurrentResume: "resume/current.md",
 		ActiveJD:      "jd/aliyun-wuying.md",
 		ActiveProject: "prepare/prepare-aliyun-agent/interview-brief.md",
 	}
-	prompt := BuildInteractivePromptWithAutoSaved("帮我分析一下", classification, nil, nil, meta, true, "career-workspace")
+	prompt := BuildInteractivePromptWithDecision("帮我分析一下", UserInputSemanticDecision{
+		Intent:           CareerIntentAnalyze,
+		Confidence:       ConfidenceHigh,
+		Reason:           "用户要求分析",
+		RequestedOutputs: []RequestedOutputDecision{{Kind: OutputKindReport}},
+	}, nil, nil, meta, "career-workspace", DefaultWorkspaceGuide())
 	for _, expected := range []string{
 		"career-workspace/我的简历/current.md",
 		"career-workspace/岗位明细/aliyun-wuying.md",
@@ -1407,7 +1307,7 @@ func TestRunInteractiveInboxSignalScansInbox(t *testing.T) {
 		t.Fatalf("expected inbox identification to avoid model turn, got %d", len(app.appendRequests))
 	}
 	output := stdout.String()
-	if !strings.Contains(output, "不会自动归档") {
+	if !strings.Contains(output, "发现 ") {
 		t.Fatalf("expected inbox confirmation warning, got:\n%s", output)
 	}
 }

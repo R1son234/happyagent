@@ -549,8 +549,7 @@ func previewKind(ext string) string {
 
 func (s *Server) handleFileImport(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Paths    []string `json:"paths"`
-		HintType string   `json:"hint_type"`
+		Paths []string `json:"paths"`
 	}
 	if err := readJSON(r.Body, &req); err != nil {
 		writeError(w, err)
@@ -1164,15 +1163,11 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 	}
 
 	var (
-		mu             sync.Mutex
-		wg             sync.WaitGroup
 		generatedPaths []string
 		taskResults    []postProcessTaskResult
 		warnings       []string
 	)
 	recordTask := func(result postProcessTaskResult) {
-		mu.Lock()
-		defer mu.Unlock()
 		taskResults = append(taskResults, result)
 		generatedPaths = append(generatedPaths, result.GeneratedPaths...)
 		if result.Status == "failed" || result.Status == "skipped" {
@@ -1180,42 +1175,38 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 		}
 	}
 	runTask := func(taskName string, startMessage string, fn func(context.Context) (postProcessTaskResult, error)) {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if streamID != "" {
-				s.publishRunEvent(streamID, RunEvent{
-					Type:     "subtask_started",
-					TaskName: "organize_inbox",
-					Subtask:  taskName,
-					Status:   "running",
-					Message:  startMessage,
-				})
-			}
-			taskCtx := career.WithProgressReporter(ctx, streamProgressReporter{
-				streamID: streamID,
-				broker:   s.eventBroker,
-				taskName: taskName,
+		if streamID != "" {
+			s.publishRunEvent(streamID, RunEvent{
+				Type:     "subtask_started",
+				TaskName: "organize_inbox",
+				Subtask:  taskName,
+				Status:   "running",
+				Message:  startMessage,
 			})
-			result, taskErr := fn(taskCtx)
-			if taskErr != nil {
-				result = postProcessTaskResult{
-					TaskName: taskName,
-					Status:   "failed",
-					Message:  startMessage + "失败：" + taskErr.Error(),
-				}
+		}
+		taskCtx := career.WithProgressReporter(ctx, streamProgressReporter{
+			streamID: streamID,
+			broker:   s.eventBroker,
+			taskName: taskName,
+		})
+		result, taskErr := fn(taskCtx)
+		if taskErr != nil {
+			result = postProcessTaskResult{
+				TaskName: taskName,
+				Status:   "failed",
+				Message:  startMessage + "失败：" + taskErr.Error(),
 			}
-			recordTask(result)
-			if streamID != "" {
-				s.publishRunEvent(streamID, RunEvent{
-					Type:     "subtask_finished",
-					TaskName: "organize_inbox",
-					Subtask:  taskName,
-					Status:   result.Status,
-					Message:  result.Message,
-				})
-			}
-		}()
+		}
+		recordTask(result)
+		if streamID != "" {
+			s.publishRunEvent(streamID, RunEvent{
+				Type:     "subtask_finished",
+				TaskName: "organize_inbox",
+				Subtask:  taskName,
+				Status:   result.Status,
+				Message:  result.Message,
+			})
+		}
 	}
 
 	if hasExperience {
@@ -1305,8 +1296,6 @@ func (s *Server) postProcessInboxClassification(ctx context.Context, ws *career.
 			s.publishRunEvent(streamID, RunEvent{Type: "subtask_finished", TaskName: "organize_inbox", Subtask: skipped.TaskName, Status: skipped.Status, Message: skipped.Message})
 		}
 	}
-
-	wg.Wait()
 	return uniquePaths(generatedPaths), taskResults, uniquePaths(warnings)
 }
 

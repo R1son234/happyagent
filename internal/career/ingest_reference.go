@@ -137,45 +137,9 @@ func looksLikeDirectoryPhrase(candidate string) bool {
 	return strings.Contains(candidate, "目录") || strings.Contains(candidate, "文件夹")
 }
 
-func discoverFilesInReferencedDirectories(input string) []string {
-	dirs := extractReferencedDirectories(input)
-	if len(dirs) == 0 {
-		return nil
-	}
-	seen := map[string]bool{}
-	discovered := make([]string, 0, len(dirs))
-	hintType := detectWorkspaceTypeHint(input)
-	wantsDocx := strings.Contains(strings.ToLower(input), "docx")
-	wantsPDF := strings.Contains(strings.ToLower(input), "pdf")
-	for _, dir := range dirs {
-		candidates, err := os.ReadDir(dir)
-		if err != nil {
-			continue
-		}
-		bestPath := ""
-		bestScore := 0
-		for _, entry := range candidates {
-			if entry.IsDir() {
-				continue
-			}
-			name := entry.Name()
-			ext := strings.ToLower(filepath.Ext(name))
-			if !isSupportedIngestExt(ext) {
-				continue
-			}
-			score := scoreReferencedDirectoryCandidate(hintType, name, ext, wantsDocx, wantsPDF)
-			if score > bestScore {
-				bestScore = score
-				bestPath = filepath.Join(dir, name)
-			}
-		}
-		if bestScore == 0 || bestPath == "" || seen[bestPath] {
-			continue
-		}
-		seen[bestPath] = true
-		discovered = append(discovered, bestPath)
-	}
-	return discovered
+func isExistingFile(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func isSupportedIngestExt(ext string) bool {
@@ -185,61 +149,4 @@ func isSupportedIngestExt(ext string) bool {
 	default:
 		return false
 	}
-}
-
-func scoreReferencedDirectoryCandidate(hintType string, name string, ext string, wantsDocx bool, wantsPDF bool) int {
-	lowerName := strings.ToLower(name)
-	score := 0
-	switch ext {
-	case ".docx":
-		score += 10
-	case ".pdf":
-		score += 8
-	case ".md", ".txt":
-		score += 4
-	}
-	if wantsDocx && ext == ".docx" {
-		score += 20
-	}
-	if wantsPDF && ext == ".pdf" {
-		score += 20
-	}
-	switch hintType {
-	case WorkspaceTypeResume:
-		if ext == ".docx" || ext == ".pdf" {
-			score += 20
-		}
-		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
-			score += 40
-		}
-	case WorkspaceTypeJD:
-		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
-			score += 40
-		}
-	case WorkspaceTypePrepare:
-		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
-			score += 40
-		}
-	case WorkspaceTypeExperiences:
-		if ext == ".md" || ext == ".txt" {
-			score += 20
-		}
-		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
-			score += 40
-		}
-	case WorkspaceTypeMyInterviews:
-		if ext == ".md" || ext == ".txt" {
-			score += 20
-		}
-		if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(hintType)) {
-			score += 40
-		}
-	}
-	if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(WorkspaceTypeResume)) {
-		score += 25
-	}
-	if matchesAnySignal(lowerName, name, workspaceTypeFilenameSignals(WorkspaceTypeJD)) {
-		score += 25
-	}
-	return score
 }

@@ -249,8 +249,8 @@ func main() {
 		SystemPrompt:    cfg.Engine.SystemPrompt,
 		ApprovedTools:   config.MergeApprovedTools(cfg.Tools.ApprovedTools, approvedToolsCSV),
 		OnStepStart:     spinner.OnStepStart,
-		OnToolCallStart: spinner.OnToolCallStart,
-		OnToolCallEnd:   spinner.OnToolCallEnd,
+		OnToolCallStart: func(toolName string, _ []byte) { spinner.OnToolCallStart(toolName) },
+		OnToolCallEnd:   func(toolName string, _ []byte, succeeded bool) { spinner.OnToolCallEnd(toolName, succeeded) },
 		OnTodosUpdated:  spinner.OnTodosUpdated,
 	})
 	if err != nil {
@@ -390,8 +390,8 @@ func runSingleTurn(application sessionApplication, cfg config.Config, sessionID 
 		SystemPrompt:    cfg.Engine.SystemPrompt,
 		ApprovedTools:   approvedTools,
 		OnStepStart:     spinner.OnStepStart,
-		OnToolCallStart: spinner.OnToolCallStart,
-		OnToolCallEnd:   spinner.OnToolCallEnd,
+		OnToolCallStart: func(toolName string, _ []byte) { spinner.OnToolCallStart(toolName) },
+		OnToolCallEnd:   func(toolName string, _ []byte, succeeded bool) { spinner.OnToolCallEnd(toolName, succeeded) },
 		OnTodosUpdated:  spinner.OnTodosUpdated,
 	})
 	if err != nil {

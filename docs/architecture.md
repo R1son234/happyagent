@@ -133,13 +133,16 @@ This keeps the default retrieval path local, deterministic, and dependency-free 
 The `career` command adds an application layer on top of the runtime:
 
 1. Open or create `.happyagent/career/`.
-2. Classify user input as JD, resume, experiences, prepare, my-interviews, record, or a general request.
-3. Extract referenced local files when possible.
-4. Archive source material and extracted text in the workspace.
-5. Update active pointers such as current resume, active JD, and active project.
-6. Build a prompt that includes workspace status and saved material paths.
-7. Run the `career-copilot` profile through the shared app/runtime stack.
-8. Persist generated artifacts under `record/generated/` or the relevant business directory.
+2. Collect deterministic context: workspace guide, active pointers, inbox state, explicit file candidates, and directory file candidates.
+3. Run the `classify_career_user_input` structured LLM task. The model decides intent, material types, candidate file inclusion, confidence, confirmation needs, and requested outputs.
+4. Validate the model decision against allowed enums, candidate IDs, paths, confidence, and workspace state.
+5. Archive only high-confidence model-selected material and extracted text in the workspace.
+6. Update active pointers such as current resume, active JD, and active project.
+7. Build a prompt that includes the semantic decision, execution results, workspace status, and saved material paths.
+8. Run the `career-copilot` profile through the shared app/runtime stack when the semantic decision requires a chat or generated answer.
+9. Persist generated artifacts under `record/generated/` or the relevant business directory.
+
+Career Copilot does not use code keyword lists to decide natural-language intent, material type, or directory candidate selection. Code is responsible for deterministic boundaries: path extraction, file existence, extraction, schema validation, confidence gates, source-read policy, and filesystem writes.
 
 Career Copilot's background material tasks use a stricter path than ordinary interactive turns. Inbox classification, JD splitting, generated document bundles, and review question-bank generation pass only source metadata in the user prompt. The model must read the declared workspace files with `file_read`; runtime policy rejects undeclared file paths, and final answers are blocked until required source reads have happened. These runs also suppress session history and memory snapshots, so JSON repair turns do not inherit a previous prompt containing source material.
 

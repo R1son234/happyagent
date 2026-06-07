@@ -37,22 +37,6 @@ func TestWorkspaceGuideRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
-func TestClassifyInputWithGuideUsesCustomSignals(t *testing.T) {
-	guide := DefaultWorkspaceGuide()
-	for i := range guide.Directories {
-		if guide.Directories[i].Type == WorkspaceTypeRecord {
-			guide.Directories[i].Signals = append(guide.Directories[i].Signals, "闪卡")
-		}
-	}
-	got := ClassifyInputWithGuide("闪卡：今天复习岗位关键词和追问答案。", guide)
-	if got.Type != WorkspaceTypeRecord {
-		t.Fatalf("expected custom record signal, got %+v", got)
-	}
-	if got.Reason == "" || got.RulePath == "" {
-		t.Fatalf("expected explainable classification, got %+v", got)
-	}
-}
-
 func TestWorkspaceGuidePromptSummaryIncludesDirectoryResponsibilities(t *testing.T) {
 	summary := DefaultWorkspaceGuide().PromptSummary()
 	for _, expected := range []string{"Workspace directory guide", WorkspaceDirJD, WorkspaceDirExperiences, "Required sections", "Sync rules"} {

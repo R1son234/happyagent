@@ -64,6 +64,7 @@ Example:
 - Run logs can contain prompts, tool observations, model output, and user-provided material. Do not commit `logs/`, `.happyagent/`, or local workspace directories.
 - Career Copilot background tasks that classify or generate from saved material pass source paths and hashes in the user prompt, then require the model to read declared files through `file_read`. Those runs suppress session history and memory so a repair turn cannot reintroduce prior material through runtime context.
 - Source-bound background runs allow `file_read` only for the declared source paths and block undeclared paths before tool execution. This preserves evidence traceability while keeping full document bodies out of generated user prompts.
+- Career Copilot natural-language turns use an LLM semantic decision task for business intent, material classification, file candidate selection, and requested outputs. That decision cannot bypass code gates: returned paths must match predeclared candidates, material and output kinds must be known enums, low-confidence or confirmation-required decisions are not auto-executed, and generated reports still require source reads from declared files.
 
 ## Dangerous Tool Policy
 

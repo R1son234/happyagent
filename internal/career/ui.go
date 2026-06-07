@@ -57,10 +57,7 @@ func printCareerHelp(output io.Writer) {
 	fmt.Fprintln(output, "高级命令：")
 	fmt.Fprintln(output, "  /help     查看帮助")
 	fmt.Fprintln(output, "  /status   查看当前工作区状态")
-	fmt.Fprintln(output, "  /library  刷新可复习资料库首页、总览、资料包和题库")
-	fmt.Fprintln(output, "  /export   生成 review-library、jd-match、resume-review、project-pitch、interview-review、review-material")
-	fmt.Fprintln(output, "  /add jd   添加 JD；多行内容用单独一行 . 结束")
-	fmt.Fprintln(output, "  /add resume | prepare | experiences | my-interviews | record")
+	fmt.Fprintln(output, "  /library  刷新可复习资料包和题库")
 	fmt.Fprintln(output, "  /exit     退出")
 }
 

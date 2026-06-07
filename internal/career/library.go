@@ -176,10 +176,7 @@ func (w *Workspace) EnsureReviewLibrarySkeleton(now time.Time) error {
 		now = time.Now()
 	}
 	files := map[string]string{
-		"面试资料库首页.md":                                      renderHomeIndex(now),
-		filepath.Join(WorkspaceDirExperiences, "面经总览.md"): renderExperienceIndex(now),
-		filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"):   renderPrepareIndex(now),
-		filepath.Join(WorkspaceDirJD, "岗位汇总.md"):          renderJDIndex(now),
+		"面试资料库首页.md": renderHomeIndex(now),
 	}
 	for rel, content := range files {
 		if err := w.writeWorkspaceTextIfMissing(rel, content); err != nil {
@@ -329,22 +326,6 @@ func (w *Workspace) writeExperienceReviewLibraryFromSet(runCtx context.Context, 
 			paths = append(paths, filepath.ToSlash(projectRel))
 		}
 
-		domain := ReviewDomain{Slug: domainSlug, Name: set.DomainName, Confidence: "high"}
-		var topics []ReviewTopic
-		for _, bank := range set.Topics {
-			topics = append(topics, ReviewTopic{Name: bank.TopicName, Slug: slugForPath(bank.TopicName)})
-		}
-		if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
-			return nil, err
-		}
-		if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
-			return nil, err
-		}
-		paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
-		if err := w.refreshJDIndex(ctx, now); err != nil {
-			return nil, err
-		}
-		paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
 		return paths, nil
 	})
 }
@@ -398,17 +379,6 @@ func (w *Workspace) writeExperienceReviewLibrary(runCtx context.Context, ctx Rev
 		}
 		paths = append(paths, filepath.ToSlash(questionBankRel))
 	}
-	if err := w.refreshExperienceIndex(domain, topics, now); err != nil {
-		return nil, err
-	}
-	if err := w.refreshPrepareIndexFromWorkspace(now); err != nil {
-		return nil, err
-	}
-	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md")))
-	if err := w.refreshJDIndex(ctx, now); err != nil {
-		return nil, err
-	}
-	paths = append(paths, filepath.ToSlash(filepath.Join(WorkspaceDirJD, "岗位汇总.md")))
 	return paths, nil
 }
 
@@ -417,10 +387,7 @@ func (w *Workspace) writeExperienceSourceOnly(ctx ReviewLibraryContext, sourceIt
 	if err != nil {
 		return nil, err
 	}
-	if err := w.refreshExperienceIndex(ctx.Domain, ctx.Topics, now); err != nil {
-		return nil, err
-	}
-	return []string{sourceRel, filepath.ToSlash(filepath.Join(WorkspaceDirExperiences, "面经总览.md"))}, nil
+	return []string{sourceRel}, nil
 }
 
 func (w *Workspace) writeExperienceSource(domain ReviewDomain, sourceItem WorkspaceItem, content string, now time.Time) (string, error) {
@@ -439,28 +406,14 @@ func (w *Workspace) writeExperienceSource(domain ReviewDomain, sourceItem Worksp
 	return filepath.ToSlash(rel), nil
 }
 
-func (w *Workspace) refreshExperienceIndex(domain ReviewDomain, topics []ReviewTopic, now time.Time) error {
-	var b strings.Builder
-	b.WriteString("# 面经总览\n\n")
-	b.WriteString("## 来源入口\n\n")
-	b.WriteString("- 公开面经原文保存在本目录顶层；扩展题库写入复习资料库。\n")
-	if len(topics) > 0 {
-		b.WriteString("\n## 扩展题库\n\n")
-		for _, topic := range topics {
-			b.WriteString(fmt.Sprintf("- %s题库：%s\n", topic.Name, filepath.ToSlash(filepath.Join(WorkspaceDirPrepare, domain.Slug, topic.Name+"题库.md"))))
-		}
-	}
-	return w.writeWorkspaceText(filepath.Join(WorkspaceDirExperiences, "面经总览.md"), b.String())
-}
-
 func renderHomeIndex(now time.Time) string {
 	return `# 面试资料库首页
 
 ## 核心入口
 
-- 岗位明细/岗位汇总.md
-- 面经汇总/面经总览.md
-- 复习资料库/复习资料总览.md
+- 岗位明细/
+- 面经汇总/
+- 复习资料库/
 
 ## 资料分层
 
@@ -472,18 +425,6 @@ func renderHomeIndex(now time.Time) string {
 | 我的面试 | ` + "`我的面试/`" + ` | 单个岗位的临阵材料、真实复盘 |
 | 已归档 | ` + "`已归档/`" + ` | 已处理的原始材料 |
 `
-}
-
-func renderExperienceIndex(now time.Time) string {
-	return "# 面经总览\n\n## 方向入口\n\n- 暂无方向资料。导入公开面经或运行 `/library` 后会自动更新。\n"
-}
-
-func renderPrepareIndex(now time.Time) string {
-	return "# 复习资料总览\n\n## 资料入口\n\n- 暂无复习资料。导入项目材料、知识点或补充资料后会自动更新。\n"
-}
-
-func renderJDIndex(now time.Time) string {
-	return "# 岗位汇总\n\n## 岗位入口\n\n- 暂无岗位明细。导入 JD 后会自动更新。\n"
 }
 
 func renderDomainPackage(domain ReviewDomain, topics []ReviewTopic, sourceRel string, now time.Time) string {
@@ -778,51 +719,6 @@ func renderSourceMaterial(sourceItem WorkspaceItem, content string, now time.Tim
 	b.WriteString("\n")
 	return b.String()
 }
-
-func (w *Workspace) refreshPrepareIndexFromWorkspace(now time.Time) error {
-	root := filepath.Join(w.Root, WorkspaceDirPrepare)
-	var entries []string
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		rel, relErr := filepath.Rel(root, path)
-		if relErr != nil {
-			return nil
-		}
-		if filepath.Base(rel) == "复习资料总览.md" || filepath.Ext(rel) != ".md" {
-			return nil
-		}
-		entries = append(entries, filepath.ToSlash(rel))
-		return nil
-	})
-	sort.Strings(entries)
-	var b strings.Builder
-	b.WriteString("# 复习资料总览\n\n")
-	if len(entries) == 0 {
-		b.WriteString("## 资料入口\n\n- 暂无复习资料。导入项目材料、知识点或补充资料后会自动更新。\n")
-		return w.writeWorkspaceText(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"), b.String())
-	}
-	b.WriteString("## 资料入口\n\n")
-	for _, entry := range entries {
-		title := strings.TrimSuffix(filepath.Base(entry), filepath.Ext(entry))
-		b.WriteString(fmt.Sprintf("- %s：%s\n", title, entry))
-	}
-	return w.writeWorkspaceText(filepath.Join(WorkspaceDirPrepare, "复习资料总览.md"), b.String())
-}
-
-func (w *Workspace) refreshJDIndex(ctx ReviewLibraryContext, now time.Time) error {
-	var b strings.Builder
-	b.WriteString("# 岗位汇总\n\n")
-	b.WriteString("## 当前 JD\n\n")
-	if strings.TrimSpace(ctx.JDPath) != "" {
-		b.WriteString(fmt.Sprintf("- 源资料：`%s`\n", ctx.JDPath))
-	} else {
-		b.WriteString("- 暂无明确目标 JD。选择或导入单个 JD 后再生成具体岗位作战材料。\n")
-	}
-	return w.writeWorkspaceText(filepath.Join(WorkspaceDirJD, "岗位汇总.md"), b.String())
-}
-
 
 func latestItemOfType(index WorkspaceIndex, itemType string) WorkspaceItem {
 	var latest WorkspaceItem

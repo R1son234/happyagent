@@ -26,17 +26,8 @@ func BuildReportRepairPrompt(output string, parseErr error) string {
 </career_report_repair>`, parseErr, output)
 }
 
-func BuildInteractivePrompt(input string, classification InputClassification) string {
-	return BuildInteractivePromptWithAutoSaved(input, classification, nil, nil, WorkspaceMetadata{}, false, "")
-}
-
-func BuildInteractivePromptWithAutoSaved(input string, classification InputClassification, autoSaved []WorkspaceItem, ingestErrors []string, meta WorkspaceMetadata, analysisRequested bool, workspaceRoot string) string {
-	return BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoSaved, ingestErrors, meta, analysisRequested, workspaceRoot, DefaultWorkspaceGuide())
-}
-
-func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification InputClassification, autoSaved []WorkspaceItem, ingestErrors []string, meta WorkspaceMetadata, analysisRequested bool, workspaceRoot string, guide WorkspaceGuide) string {
-	isMemory := classification.Type == string(CareerIntentMemory)
-
+func BuildInteractivePromptWithDecision(input string, decision UserInputSemanticDecision, autoSaved []WorkspaceItem, ingestErrors []string, meta WorkspaceMetadata, workspaceRoot string, guide WorkspaceGuide) string {
+	isMemory := decision.Intent == CareerIntentMemory
 	autoSavedSection := ""
 	if len(autoSaved) > 0 {
 		var lines []string
@@ -55,7 +46,7 @@ func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification In
 		workspaceSection = fmt.Sprintf("\n  <workspace_pointers>\n- current_resume: %s\n- active_jd: %s\n- active_project: %s\n  </workspace_pointers>", emptyIfBlank(promptWorkspacePath(workspaceRoot, meta.CurrentResume)), emptyIfBlank(promptWorkspacePath(workspaceRoot, meta.ActiveJD)), emptyIfBlank(promptWorkspacePath(workspaceRoot, meta.ActiveProject)))
 	}
 	analysisSection := ""
-	if analysisRequested && !isMemory {
+	if len(executableOutputs(decision)) > 0 && !isMemory {
 		analysisSection = "\n  <analysis_priority>\n- Use the newly saved resume and active JD for matching analysis when both exist.\n- Read all listed stored_path and current workspace pointer files directly, preferably in one multi-tool step when more than one file is needed.\n- Do not call file_list or file_search to rediscover files that are already listed in this prompt.\n- Do not inspect record directories just to verify saving; the application layer saves generated analysis artifacts after the model response.\n- If auto-saved workspace assets already exist, do not ask the user to choose storage paths, extraction tools, or workflow options.\n- Treat DOCX/PDF extraction as already handled by the application layer unless an explicit ingest warning says extraction failed.\n- If memory or prior conversation mentions legacy paths such as prepare/, resume/, jd/, my-interviews/, or outputs/, treat them as migrated aliases and prefer the current workspace pointers in this prompt.\n- Keep user-provided facts separate from suggestions.\n  </analysis_priority>"
 	}
 	deliverySection := "\n  <delivery_policy>\n- If the user asks to save, write, generate, or place a document in the workspace, only say it was saved after the relevant write tool succeeds.\n- If a write tool fails or is unavailable, say the file was not written and include the full recoverable content or exact next recovery step.\n- Do not describe a failed write as a permissions problem unless the tool error explicitly says permission was denied.\n  </delivery_policy>"
@@ -68,17 +59,31 @@ func BuildInteractivePromptWithAutoSavedAndGuide(input string, classification In
 	if isMemory {
 		memorySection = "\n  <memory_priority>\n- THIS TURN IS A MEMORY MANAGEMENT REQUEST. DO NOT DO CAREER ANALYSIS.\n- Call memory_save, memory_delete, or memory_recall as your primary action.\n- Do NOT read JD, resume, or inbox files.\n- Do NOT generate career reports, match analysis, or interview materials.\n- If the user says '记住' or '以后按', save their preference with memory_save and confirm.\n  </memory_priority>"
 	}
+	semanticSection := fmt.Sprintf(`
+  <semantic_decision>
+    <intent>%s</intent>
+    <confidence>%s</confidence>
+    <reason>%s</reason>
+    <should_save_user_input>%t</should_save_user_input>
+    <requested_outputs>%s</requested_outputs>
+    <risk_flags>%s</risk_flags>
+  </semantic_decision>`, xmlEscape(string(decision.Intent)), xmlEscape(string(decision.Confidence)), xmlEscape(decision.Reason), decision.ShouldSaveUserInput, xmlEscape(joinOutputKinds(decision.RequestedOutputs)), xmlEscape(strings.Join(decision.RiskFlags, ", ")))
 	return fmt.Sprintf(`<career_turn>
   <workspace>Career Copilot continuous conversation workspace</workspace>
-  <input_classification>
-    <type>%s</type>
-    <confidence>%.2f</confidence>
-    <signals>%s</signals>
-  </input_classification>
   <user_input>
 %s
-  </user_input>%s%s%s%s%s%s%s%s
-</career_turn>`, classification.Type, classification.Confidence, strings.Join(classification.Signals, ", "), input, memorySection, guideSection, autoSavedSection, ingestErrorSection, workspaceSection, analysisSection, deliverySection, groundingSection)
+  </user_input>%s%s%s%s%s%s%s%s%s
+</career_turn>`, input, semanticSection, memorySection, guideSection, autoSavedSection, ingestErrorSection, workspaceSection, analysisSection, deliverySection, groundingSection)
+}
+
+func joinOutputKinds(outputs []RequestedOutputDecision) string {
+	values := make([]string, 0, len(outputs))
+	for _, output := range outputs {
+		if strings.TrimSpace(output.Kind) != "" {
+			values = append(values, output.Kind)
+		}
+	}
+	return strings.Join(values, ", ")
 }
 
 func promptWorkspacePath(workspaceRoot string, storedPath string) string {

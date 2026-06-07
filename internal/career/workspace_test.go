@@ -302,7 +302,7 @@ func TestAddGuidedMaterialWritesClassificationRecord(t *testing.T) {
 		t.Fatalf("read classification record: %v", err)
 	}
 	record := string(data)
-	for _, expected := range []string{"classified_type: jd", "confidence: 0.90", "matched_signals: 岗位职责, 任职要求", "destination:", "active_pointer_updated: active_jd"} {
+	for _, expected := range []string{"classified_type: jd", "confidence: 0.90", "destination:", "active_pointer_updated: active_jd"} {
 		if !strings.Contains(record, expected) {
 			t.Fatalf("classification record missing %q:\n%s", expected, record)
 		}

@@ -10,10 +10,11 @@ import (
 )
 
 type IngestRequest struct {
-	Path      string
-	HintType  string
-	UserInput string
-	Now       time.Time
+	Path                 string
+	Decision             ReferencedFileDecision
+	ExplicitMaterialType string
+	UserInput            string
+	Now                  time.Time
 }
 
 type IngestResult struct {
@@ -56,8 +57,10 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 	if err != nil {
 		ext := strings.ToLower(filepath.Ext(absPath))
 		extractor, mimeType := extractorInfoForExt(ext)
-		classification := inferIngestClassification(guide, req.HintType, absPath, req.UserInput, "")
-		itemType := classification.Type
+		classification, itemType, classifyErr := ingestClassificationFromRequest(guide, req)
+		if classifyErr != nil {
+			return IngestResult{}, classifyErr
+		}
 		if !IsSupportedWorkspaceType(itemType) {
 			itemType = WorkspaceTypeRecord
 		}
@@ -86,10 +89,9 @@ func IngestFile(ctx context.Context, ws *Workspace, req IngestRequest) (IngestRe
 			ItemType:    result.Item.Type,
 		}, err
 	}
-	classification := inferIngestClassification(guide, req.HintType, absPath, req.UserInput, extracted.Text)
-	itemType := classification.Type
-	if !IsSupportedWorkspaceType(itemType) {
-		return IngestResult{}, fmt.Errorf("unable to classify referenced file %q", absPath)
+	classification, itemType, classifyErr := ingestClassificationFromRequest(guide, req)
+	if classifyErr != nil {
+		return IngestResult{}, classifyErr
 	}
 	if itemType == WorkspaceTypeGeneral || !classification.ShouldSave {
 		itemType = WorkspaceTypeRecord
@@ -170,9 +172,10 @@ func IngestInbox(ctx context.Context, workspace *Workspace, now time.Time) (Inbo
 	result := InboxIngestResult{}
 	for _, path := range paths {
 		ingested, ingestErr := IngestFile(ctx, workspace, IngestRequest{
-			Path:      path,
-			UserInput: filepath.Base(path),
-			Now:       now,
+			Path:                 path,
+			ExplicitMaterialType: WorkspaceTypeRecord,
+			UserInput:            filepath.Base(path),
+			Now:                  now,
 		})
 		if ingestErr != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %v", path, ingestErr))
@@ -201,21 +204,32 @@ func (w *Workspace) ArchiveOriginalFile(path string, now time.Time) (string, err
 	return filepath.ToSlash(rel), nil
 }
 
-func inferIngestItemType(hintType string, path string, userInput string, content string) string {
-	classification := inferIngestClassification(DefaultWorkspaceGuide(), hintType, path, userInput, content)
-	if IsSupportedWorkspaceType(classification.Type) {
-		return classification.Type
+func ingestClassificationFromRequest(guide WorkspaceGuide, req IngestRequest) (InputClassification, string, error) {
+	if strings.TrimSpace(req.Decision.MaterialType) != "" {
+		itemType, ok := workspaceTypeForDecisionMaterial(req.Decision.MaterialType)
+		if !ok {
+			return InputClassification{}, "", fmt.Errorf("LLM material_type %q is not supported", req.Decision.MaterialType)
+		}
+		return InputClassification{
+			Type:       itemType,
+			Confidence: confidenceFloat(req.Decision.Confidence),
+			ShouldSave: req.Decision.Confidence == ConfidenceHigh && !req.Decision.NeedsUserConfirmation,
+			Reason:     firstNonEmpty(req.Decision.Reason, "LLM file semantic decision"),
+			RulePath:   classificationRulePath(guide, itemType),
+		}, itemType, nil
 	}
-	return ""
-}
-
-func inferIngestClassification(guide WorkspaceGuide, hintType string, path string, userInput string, content string) InputClassification {
-	nearHint := ""
-	if hinted := detectWorkspaceTypeHintNearPathWithGuide(userInput, path, guide); hinted != "" {
-		nearHint = hinted
+	itemType := strings.ToLower(strings.TrimSpace(req.ExplicitMaterialType))
+	if itemType == "" {
+		return InputClassification{}, "", fmt.Errorf("ingest requires LLM decision or explicit material type")
 	}
-	if nearHint != "" && strings.TrimSpace(hintType) == "" {
-		hintType = nearHint
+	if !IsSupportedWorkspaceType(itemType) || itemType == WorkspaceTypeGeneral {
+		return InputClassification{}, "", fmt.Errorf("explicit material type %q is not supported", req.ExplicitMaterialType)
 	}
-	return ClassifyInputWithSignals(content, guide, filepath.Base(path), hintType, "")
+	return InputClassification{
+		Type:       itemType,
+		Confidence: 1,
+		ShouldSave: true,
+		Reason:     "explicit material type",
+		RulePath:   classificationRulePath(guide, itemType),
+	}, itemType, nil
 }

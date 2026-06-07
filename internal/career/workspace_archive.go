@@ -94,8 +94,14 @@ func (w *Workspace) writeClassificationRecord(item WorkspaceItem, classification
 	if classification.RulePath != "" {
 		b.WriteString(fmt.Sprintf("- rule_path: %s\n", classification.RulePath))
 	}
-	if len(classification.Signals) > 0 {
-		b.WriteString(fmt.Sprintf("- matched_signals: %s\n", strings.Join(classification.Signals, ", ")))
+	if strings.TrimSpace(classification.Meta.PromptVersion) != "" {
+		b.WriteString(fmt.Sprintf("- prompt_version: %s\n", classification.Meta.PromptVersion))
+	}
+	if strings.TrimSpace(classification.Meta.Model) != "" {
+		b.WriteString(fmt.Sprintf("- model: %s\n", classification.Meta.Model))
+	}
+	if !classification.Meta.GeneratedAt.IsZero() {
+		b.WriteString(fmt.Sprintf("- llm_generated_at: %s\n", classification.Meta.GeneratedAt.Format(time.RFC3339)))
 	}
 	b.WriteString(fmt.Sprintf("- destination: %s\n", item.Path))
 	if item.Metadata.Original != "" {

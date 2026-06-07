@@ -214,7 +214,7 @@ func (s *CopilotService) ClassifyInbox(ctx context.Context, req ClassifyInboxReq
 		TaskName:      "classify_inbox",
 		PromptVersion: PromptVersionFileClassification,
 		Input:         buildFileClassificationPrompt(targets),
-		SourcePaths:   inboxClassificationReadPaths(targets),
+		ToolScope:     []string{"final_answer"},
 	})
 	if err != nil {
 		return ClassifyInboxResult{}, err
@@ -656,6 +656,9 @@ func (s *CopilotService) confirmClassifiedInboxItem(ctx context.Context, ws *Wor
 			Path:  item.SourcePath,
 		}, content)
 		if splitErr == nil && len(splitItems) > 0 {
+			if _, archiveErr := ws.ArchiveOriginalFile(absSource, s.now()); archiveErr != nil {
+				return PendingInboxItem{}, GuidedMaterialResult{}, archiveErr
+			}
 			_ = os.Remove(absSource)
 			item.Status = InboxItemStatusConfirmed
 			item.NeedsUserConfirmation = false
@@ -1090,6 +1093,9 @@ func ensureRequiredSourceTypes(ws *Workspace, sources []SourceRef, required []st
 	typeByPath := map[string]string{}
 	for _, item := range index.Items {
 		typeByPath[filepath.ToSlash(item.Path)] = item.Type
+		if sourceRel, ok := ws.sourceRelForItem(item); ok {
+			typeByPath[filepath.ToSlash(sourceRel)] = item.Type
+		}
 	}
 	have := map[string]bool{}
 	for _, ref := range sources {
@@ -1119,14 +1125,6 @@ func sourceRefReadPaths(refs []SourceRef) []string {
 	paths := make([]string, 0, len(refs))
 	for _, ref := range refs {
 		paths = append(paths, firstNonEmpty(ref.ReadPath, ref.Path))
-	}
-	return paths
-}
-
-func inboxClassificationReadPaths(files []InboxFileForClassification) []string {
-	paths := make([]string, 0, len(files))
-	for _, file := range files {
-		paths = append(paths, firstNonEmpty(file.ReadPath, file.SourcePath))
 	}
 	return paths
 }

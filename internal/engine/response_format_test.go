@@ -96,6 +96,38 @@ func TestRunnerContinuesAfterTruncatedJSONAction(t *testing.T) {
 	}
 }
 
+func TestRunnerExtractsTrailingActionJSONWithoutRetry(t *testing.T) {
+	client := &stubClient{
+		responses: []llm.ChatResponse{
+			{
+				Message: llm.Message{
+					Role:    protocol.RoleAssistant,
+					Content: "<think>brief reasoning</think>\n{\"type\":\"final_answer\",\"content\":\"done\"}",
+				},
+				FinishReason: "stop",
+			},
+		},
+	}
+
+	runner := NewRunner(client, tools.NewRegistry(), 4)
+	result, err := runner.Run(context.Background(), RunInput{
+		Input:        "finish",
+		SystemPrompt: "reply with JSON action",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if result.Output != "done" {
+		t.Fatalf("unexpected output: %q", result.Output)
+	}
+	if len(result.Steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(result.Steps))
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("expected no recovery retry, got %d requests", len(client.requests))
+	}
+}
+
 func TestRunnerCompletesWhenModelUsesFinalAnswerTool(t *testing.T) {
 	client := &stubClient{
 		responses: []llm.ChatResponse{

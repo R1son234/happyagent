@@ -4,9 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
+
+	"happyagent/internal/store"
 )
 
 type NaturalLanguageResult struct {
@@ -23,65 +27,151 @@ func handleNaturalLanguageInput(deps Dependencies, workspace *Workspace, session
 }
 
 func executeNaturalLanguageInput(ctx context.Context, deps Dependencies, workspace *Workspace, sessionID string, input string) (NaturalLanguageResult, error) {
-	intent := ClassifyIntent(input)
-
-	// Memory intent: skip inbox scan and archive, route directly to model with memory-focused prompt.
-	if isMemoryIntent(intent) {
-		classification := ClassifyInputWithGuide(input, WorkspaceGuide{})
-		classification.Type = string(CareerIntentMemory)
-		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, nil, nil)
-	}
-
-	guide, err := workspace.LoadGuide()
+	decision, candidates, err := decideNaturalLanguageInput(ctx, deps, workspace, input)
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
-	classification := ClassifyInputWithGuide(input, guide)
-	autoArchived, ingestErrors, err := autoArchiveReferencedFiles(ctx, deps.Stdout, workspace, input)
+	if decision.Intent == CareerIntentStatus {
+		return NaturalLanguageResult{}, printWorkspaceStatus(deps.Stdout, workspace)
+	}
+	if decision.NeedsUserConfirmation || decision.Confidence != ConfidenceHigh {
+		message := confirmationMessage(decision)
+		fmt.Fprintln(deps.Stdout, "assistant> "+message)
+		return NaturalLanguageResult{Output: message}, nil
+	}
+
+	autoArchived, ingestErrors, err := executeSemanticMaterialActions(ctx, deps.Stdout, workspace, input, decision, candidates)
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
-	if shouldScanInbox(intent) {
+	if decision.ShouldScanInbox {
 		paths, inboxErr := DiscoverInboxFiles(workspace)
 		if inboxErr != nil {
 			return NaturalLanguageResult{}, inboxErr
 		}
 		if len(paths) > 0 {
-			ingestErrors = append(ingestErrors, fmt.Sprintf("发现 %d 个 inbox 文件；当前版本不会自动归档，后续需要通过分类确认流程整理。", len(paths)))
-			if intent.Intent == CareerIntentIngest || intent.Intent == CareerIntentAnalyze {
-				return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
-			}
+			ingestErrors = append(ingestErrors, fmt.Sprintf("发现 %d 个 inbox 文件；请在桌面端或 inbox 分类流程中确认整理。", len(paths)))
 		}
 	}
-	if classification.ShouldSave && len(autoArchived) == 0 {
-		item, err := saveMaterial(workspace, classification.Type, input)
-		if err != nil {
-			return NaturalLanguageResult{}, err
-		}
-		autoArchived = append(autoArchived, item)
-		fmt.Fprintf(deps.Stdout, "assistant> 已识别并归档为 %s：%s\n", displayWorkspaceType(item.Type), item.Path)
-		if intent.Intent == CareerIntentChat || intent.Intent == CareerIntentIngest {
-			return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
-		}
-	}
-	switch intent.Intent {
-	case CareerIntentStatus:
-		return NaturalLanguageResult{}, printWorkspaceStatus(deps.Stdout, workspace)
-	case CareerIntentIngest:
+	if decision.Intent == CareerIntentIngest && len(decision.RequestedOutputs) == 0 {
 		return NaturalLanguageResult{}, printIngestSummary(deps.Stdout, workspace, autoArchived, ingestErrors)
-	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
-		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
-	default:
-		return handleIntentWithModelTurn(ctx, deps, workspace, sessionID, input, intent, classification, autoArchived, ingestErrors)
 	}
+	return handleDecisionWithModelTurn(ctx, deps, workspace, sessionID, input, decision, autoArchived, ingestErrors)
 }
 
-func handleIntentWithModelTurn(ctx context.Context, deps Dependencies, workspace *Workspace, sessionID string, input string, intent IntentClassification, classification InputClassification, autoArchived []WorkspaceItem, ingestErrors []string) (NaturalLanguageResult, error) {
+func decideNaturalLanguageInput(ctx context.Context, deps Dependencies, workspace *Workspace, input string) (UserInputSemanticDecision, []SemanticFileCandidate, error) {
+	guide, err := workspace.LoadGuide()
+	if err != nil {
+		return UserInputSemanticDecision{}, nil, err
+	}
+	meta, err := workspace.ReadMetadata()
+	if err != nil {
+		return UserInputSemanticDecision{}, nil, err
+	}
+	inbox, err := workspaceInboxView(workspace)
+	if err != nil {
+		return UserInputSemanticDecision{}, nil, err
+	}
+	candidates, warnings := collectSemanticFileCandidates(ctx, workspace, input)
+	if len(warnings) > 0 {
+		fmt.Fprintln(deps.Stderr, strings.Join(warnings, "\n"))
+	}
+	runner := &appStructuredTaskRunner{
+		App:       deps.App,
+		Config:    deps.Config,
+		SessionID: "",
+	}
+	decision, err := ClassifyUserInputWithLLM(ctx, runner, SemanticDecisionRequest{
+		Input:         input,
+		Guide:         guide,
+		Metadata:      meta,
+		InboxCounts:   inbox.Counts,
+		PendingItems:  inbox.PendingItems,
+		Candidates:    candidates,
+		WorkspaceRoot: workspace.Root,
+	})
+	if err != nil {
+		return UserInputSemanticDecision{}, nil, fmt.Errorf("classify user input with LLM: %w", err)
+	}
+	return decision, candidates, nil
+}
+
+func workspaceInboxView(workspace *Workspace) (InboxView, error) {
+	state, err := workspace.ReadInboxState()
+	if err != nil {
+		return InboxView{}, err
+	}
+	counts := map[string]int{}
+	for _, item := range state.Items {
+		counts[item.Status]++
+	}
+	paths, err := DiscoverInboxFiles(workspace)
+	if err != nil {
+		return InboxView{}, err
+	}
+	counts[InboxItemStatusUnclassified] += len(paths)
+	return InboxView{PendingItems: state.Items, Counts: counts}, nil
+}
+
+func executeSemanticMaterialActions(ctx context.Context, output anyWriter, workspace *Workspace, input string, decision UserInputSemanticDecision, candidates []SemanticFileCandidate) ([]WorkspaceItem, []string, error) {
+	var archived []WorkspaceItem
+	var warnings []string
+	if decision.ShouldSaveUserInput {
+		itemType, ok := workspaceTypeForDecisionMaterial(decision.UserInputMaterialType)
+		if !ok || itemType == WorkspaceTypeRecord {
+			warnings = append(warnings, "用户输入材料类型不明确，未自动保存。")
+		} else {
+			item, err := saveMaterialFromDecision(workspace, itemType, input, decision)
+			if err != nil {
+				return archived, warnings, err
+			}
+			archived = append(archived, item)
+			fmt.Fprintf(output, "assistant> 已识别并归档为 %s：%s\n", displayWorkspaceType(item.Type), item.Path)
+		}
+	}
+	candidatesByID := map[string]SemanticFileCandidate{}
+	for _, candidate := range candidates {
+		candidatesByID[candidate.ID] = candidate
+	}
+	for _, fileDecision := range decision.ReferencedFiles {
+		if fileDecision.Action != SemanticFileActionInclude {
+			continue
+		}
+		if fileDecision.NeedsUserConfirmation || fileDecision.Confidence != ConfidenceHigh {
+			warnings = append(warnings, fmt.Sprintf("%s 需要确认后归档：%s", fileDecision.SourcePath, fileDecision.Reason))
+			continue
+		}
+		candidate, ok := candidatesByID[fileDecision.CandidateID]
+		if !ok {
+			warnings = append(warnings, fmt.Sprintf("%s 不是有效候选文件，已跳过。", fileDecision.SourcePath))
+			continue
+		}
+		result, err := IngestFile(ctx, workspace, IngestRequest{
+			Path:      firstNonEmpty(candidate.ReadPath, candidate.SourcePath),
+			Decision:  fileDecision,
+			UserInput: input,
+			Now:       time.Now(),
+		})
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %s", fileDecision.SourcePath, err.Error()))
+			continue
+		}
+		archived = append(archived, result.Item)
+		fmt.Fprintf(output, "assistant> 已自动归档 %s：%s -> %s\n", displayWorkspaceType(result.ItemType), fileDecision.SourcePath, result.Item.Path)
+	}
+	return archived, warnings, nil
+}
+
+type anyWriter interface {
+	Write(p []byte) (n int, err error)
+}
+
+func handleDecisionWithModelTurn(ctx context.Context, deps Dependencies, workspace *Workspace, sessionID string, input string, decision UserInputSemanticDecision, autoArchived []WorkspaceItem, ingestErrors []string) (NaturalLanguageResult, error) {
 	meta, err := workspace.ReadMetadata()
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
-	if message := readinessMessage(workspace, meta, intent.Intent); message != "" {
+	if message := readinessMessageForDecision(workspace, meta, decision); message != "" {
 		fmt.Fprintln(deps.Stdout, message)
 		return NaturalLanguageResult{Output: strings.TrimPrefix(message, "assistant> ")}, nil
 	}
@@ -89,7 +179,7 @@ func handleIntentWithModelTurn(ctx context.Context, deps Dependencies, workspace
 	if err != nil {
 		return NaturalLanguageResult{}, err
 	}
-	record, err := runCareerTurn(ctx, deps, sessionID, BuildInteractivePromptWithAutoSavedAndGuide(input, classification, autoArchived, ingestErrors, meta, shouldGenerateOutput(intent.Intent), workspace.Root, guide), classification)
+	record, err := runCareerTurn(ctx, deps, sessionID, BuildInteractivePromptWithDecision(input, decision, autoArchived, ingestErrors, meta, workspace.Root, guide), decision)
 	if err != nil {
 		if record.ID != "" {
 			fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
@@ -98,186 +188,230 @@ func handleIntentWithModelTurn(ctx context.Context, deps Dependencies, workspace
 	}
 	fmt.Fprintf(deps.Stderr, "run_id=%s session_id=%s\n", record.ID, record.SessionID)
 	fmt.Fprintf(deps.Stdout, "assistant> %s\n", record.Output)
-	if !shouldGenerateOutput(intent.Intent) {
+
+	outputs := executableOutputs(decision)
+	if len(outputs) == 0 {
 		return NaturalLanguageResult{Output: record.Output}, nil
 	}
+	return persistDecisionOutputs(deps, workspace, sessionID, decision, outputs, record, meta, autoArchived)
+}
+
+func persistDecisionOutputs(deps Dependencies, workspace *Workspace, sessionID string, decision UserInputSemanticDecision, outputs []RequestedOutputDecision, record store.RunRecord, meta WorkspaceMetadata, autoArchived []WorkspaceItem) (NaturalLanguageResult, error) {
 	now := time.Now()
-	jsonContent := []byte(nil)
-	if intent.Intent == CareerIntentAnalyze {
-		payload := map[string]string{
-			"run_id":         record.ID,
-			"session_id":     record.SessionID,
-			"intent":         string(intent.Intent),
-			"output":         record.Output,
-			"current_jd":     meta.ActiveJD,
-			"current_resume": meta.CurrentResume,
+	var generatedPaths []string
+	var primaryPath string
+	var outputPaths UserOutputPaths
+	for _, requested := range outputs {
+		switch requested.Kind {
+		case OutputKindReviewLibrary:
+			result, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, now)
+			if err != nil {
+				return NaturalLanguageResult{}, err
+			}
+			generatedPaths = append(generatedPaths, result.Paths...)
+			primaryPath = firstNonEmpty(primaryPath, firstString(result.Paths))
+		case OutputKindProjectPack, OutputKindBattlePack:
+			generated, err := runServiceGeneratedOutput(context.Background(), deps, workspace, requested)
+			if err != nil {
+				return NaturalLanguageResult{}, err
+			}
+			generatedPaths = append(generatedPaths, generated.GeneratedPaths...)
+			primaryPath = firstNonEmpty(primaryPath, generated.PrimaryPath, generated.Path)
+		case OutputKindReport, OutputKindResumeReview, OutputKindInterviewBrief, OutputKindGapPlan, OutputKindInterviewReview:
+			jsonContent := []byte(nil)
+			if requested.Kind == OutputKindReport {
+				payload := map[string]string{
+					"run_id":         recordID(record),
+					"session_id":     recordSessionID(record),
+					"intent":         string(decision.Intent),
+					"output":         record.Output,
+					"current_jd":     meta.ActiveJD,
+					"current_resume": meta.CurrentResume,
+				}
+				data, marshalErr := json.MarshalIndent(payload, "", "  ")
+				if marshalErr == nil {
+					jsonContent = data
+				}
+			}
+			title := firstNonEmpty(requested.Title, defaultOutputTitle(requested.Kind))
+			paths, err := workspace.WriteUserOutput(requested.Kind, title, record.Output, jsonContent, now)
+			if err != nil {
+				return NaturalLanguageResult{}, err
+			}
+			outputPaths = paths
+			generatedPaths = appendGeneratedPaths(paths, generatedPaths)
+			primaryPath = firstNonEmpty(primaryPath, paths.LatestMarkdown)
+			printCompletionSummary(deps.Stdout, title, collectedInputPaths(workspace.Root, meta, autoArchived), paths)
 		}
-		data, marshalErr := json.MarshalIndent(payload, "", "  ")
-		if marshalErr == nil {
-			jsonContent = data
-		}
 	}
-	outputKind, outputTitle := outputSpec(intent.Intent)
-	paths, err := workspace.WriteUserOutput(outputKind, outputTitle, record.Output, jsonContent, now)
-	if err != nil {
-		return NaturalLanguageResult{}, err
-	}
-	reviewLibrary, err := generateReviewLibraryWithLLM(deps, workspace, sessionID, now)
-	if err != nil {
-		return NaturalLanguageResult{}, err
-	}
-	printCompletionSummary(deps.Stdout, outputTitle, collectedInputPaths(workspace.Root, meta, autoArchived), paths)
-	generatedPaths := appendGeneratedPaths(paths, reviewLibrary.Paths)
+	generatedPaths = uniqueStrings(generatedPaths)
 	runSummaryPath, _ := workspace.WriteRunSummary(RunSummaryRecord{
-		TaskName:    string(intent.Intent),
+		TaskName:    string(decision.Intent),
 		Status:      RunSummaryStatusSuccess,
 		CreatedAt:   now,
 		InputPaths:  collectedInputPaths(workspace.Root, meta, autoArchived),
 		Generated:   generatedPaths,
-		PrimaryPath: firstNonEmpty(paths.LatestMarkdown, firstString(reviewLibrary.Paths)),
-		NextActions: []string{"检查输出报告和新增题库", "如已锁定岗位，可生成项目专项或面试作战包"},
+		PrimaryPath: primaryPath,
+		NextActions: []string{"检查输出报告和新增资料", "如资料不足，可继续补充简历、JD、面经或面试复盘"},
 	})
 	generatedPaths = uniqueStrings(append(generatedPaths, runSummaryPath))
 	return NaturalLanguageResult{
 		Output:         record.Output,
 		GeneratedPaths: generatedPaths,
-		PrimaryPath:    firstNonEmpty(runSummaryPath, paths.LatestMarkdown, firstString(reviewLibrary.Paths)),
-		OutputPaths:    paths,
+		PrimaryPath:    firstNonEmpty(runSummaryPath, primaryPath),
+		OutputPaths:    outputPaths,
 		RunSummaryPath: runSummaryPath,
 	}, nil
 }
 
-func appendGeneratedPaths(paths UserOutputPaths, extra []string) []string {
-	result := make([]string, 0, 4+len(extra))
-	for _, candidate := range []string{paths.LatestMarkdown, paths.TimestampedMarkdown, paths.LatestJSON, paths.TimestampedJSON} {
-		if strings.TrimSpace(candidate) != "" {
-			result = append(result, filepath.ToSlash(candidate))
-		}
-	}
-	for _, candidate := range extra {
-		candidate = filepath.ToSlash(strings.TrimSpace(candidate))
-		if candidate != "" {
-			result = append(result, candidate)
-		}
-	}
-	return uniqueStrings(result)
+func recordID(record store.RunRecord) string {
+	return record.ID
 }
 
-func firstString(values []string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return value
+func recordSessionID(record store.RunRecord) string {
+	return record.SessionID
+}
+
+func executableOutputs(decision UserInputSemanticDecision) []RequestedOutputDecision {
+	var outputs []RequestedOutputDecision
+	for _, output := range decision.RequestedOutputs {
+		if output.Kind == OutputKindChat || strings.TrimSpace(output.Kind) == "" {
+			continue
 		}
+		outputs = append(outputs, output)
+	}
+	return outputs
+}
+
+func runServiceGeneratedOutput(ctx context.Context, deps Dependencies, workspace *Workspace, requested RequestedOutputDecision) (GeneratedDocumentResult, error) {
+	service := &CopilotService{WorkspaceRoot: workspace.Root, App: deps.App, Config: deps.Config}
+	switch requested.Kind {
+	case OutputKindProjectPack:
+		return service.GenerateProjectPack(ctx, GenerateProjectPackRequest{})
+	case OutputKindBattlePack:
+		meta, err := workspace.ReadMetadata()
+		if err != nil {
+			return GeneratedDocumentResult{}, err
+		}
+		return service.GenerateBattlePack(ctx, GenerateBattlePackRequest{JDPath: meta.ActiveJD, SourcePaths: []string{meta.CurrentResume}})
+	default:
+		return GeneratedDocumentResult{}, fmt.Errorf("unsupported generated output kind %q", requested.Kind)
+	}
+}
+
+func saveMaterialFromDecision(workspace *Workspace, itemType string, content string, decision UserInputSemanticDecision) (WorkspaceItem, error) {
+	if itemType == WorkspaceTypeExperiences {
+		result, err := workspace.ArchivePublicInterviewExperience(content, time.Now())
+		if err != nil {
+			return WorkspaceItem{}, err
+		}
+		return result.ExperienceItem, nil
+	}
+	guide, err := workspace.LoadGuide()
+	if err != nil {
+		return WorkspaceItem{}, err
+	}
+	classification := InputClassification{
+		Type:       itemType,
+		Confidence: confidenceFloat(decision.Confidence),
+		ShouldSave: true,
+		Reason:     decision.Reason,
+		RulePath:   classificationRulePath(guide, itemType),
+		Meta:       decision.Meta,
+	}
+	result, err := workspace.AddGuidedMaterial(GuidedMaterialInput{
+		ItemType:       itemType,
+		Classification: classification,
+		Content:        content,
+		SourceLabel:    "natural_language_input",
+		Now:            time.Now(),
+	})
+	if err != nil {
+		return WorkspaceItem{}, err
+	}
+	return result.Item, nil
+}
+
+func readinessMessageForDecision(workspace *Workspace, meta WorkspaceMetadata, decision UserInputSemanticDecision) string {
+	required := map[string]bool{}
+	for _, value := range decision.RequiredState {
+		required[strings.TrimSpace(value)] = true
+	}
+	for _, output := range decision.RequestedOutputs {
+		switch output.Kind {
+		case OutputKindReport:
+			required["current_resume"] = true
+			required["active_jd"] = true
+		case OutputKindResumeReview:
+			required["current_resume"] = true
+		case OutputKindInterviewBrief, OutputKindGapPlan, OutputKindBattlePack:
+			required["active_jd"] = true
+		case OutputKindProjectPack:
+			required["current_resume"] = true
+		}
+	}
+	inbox := filepath.ToSlash(filepath.Join(workspace.Root, "inbox"))
+	if required["current_resume"] && strings.TrimSpace(meta.CurrentResume) == "" && required["active_jd"] && strings.TrimSpace(meta.ActiveJD) == "" {
+		return fmt.Sprintf("assistant> 现在还缺少简历和 JD。请把资料放到 %s，然后直接说你希望我怎么整理或分析。", inbox)
+	}
+	if required["current_resume"] && strings.TrimSpace(meta.CurrentResume) == "" {
+		return fmt.Sprintf("assistant> 现在还缺少简历。请把资料放到 %s，然后直接说你希望我怎么整理或分析。", inbox)
+	}
+	if required["active_jd"] && strings.TrimSpace(meta.ActiveJD) == "" {
+		return fmt.Sprintf("assistant> 现在还缺少 JD。请把资料放到 %s，然后直接说你希望我怎么整理或分析。", inbox)
 	}
 	return ""
 }
 
-func detectWorkspaceTypeHint(input string) string {
-	return detectWorkspaceTypeBySignals(input)
+func confirmationMessage(decision UserInputSemanticDecision) string {
+	if len(decision.QuestionsForUser) > 0 {
+		return strings.Join(decision.QuestionsForUser, " ")
+	}
+	if strings.TrimSpace(decision.Reason) != "" {
+		return "我还需要你确认一下：" + decision.Reason
+	}
+	return "我还需要你确认材料类型或下一步动作。"
 }
 
-func detectWorkspaceTypeHintNearPath(input string, path string) string {
-	return detectWorkspaceTypeHintNearPathWithGuide(input, path, DefaultWorkspaceGuide())
+func workspaceTypeForDecisionMaterial(materialType string) (string, bool) {
+	if itemType, ok := workspaceTypeForMaterialType(materialType); ok {
+		return itemType, true
+	}
+	itemType := strings.ToLower(strings.TrimSpace(materialType))
+	if IsSupportedWorkspaceType(itemType) && itemType != WorkspaceTypeGeneral {
+		return itemType, true
+	}
+	return "", false
 }
 
-func detectWorkspaceTypeHintNearPathWithGuide(input string, path string, guide WorkspaceGuide) string {
-	if strings.TrimSpace(path) == "" {
-		return detectWorkspaceTypeBySignalsWithGuide(input, guide)
-	}
-	index := strings.Index(input, path)
-	if index < 0 {
-		base := filepath.Base(path)
-		if base == "." || base == string(filepath.Separator) || base == path {
-			return ""
-		}
-		index = strings.Index(input, base)
-		if index < 0 {
-			return ""
-		}
-		path = base
-	}
-	start := index - 24
-	if start < 0 {
-		start = 0
-	}
-	end := index + len(path) + 24
-	if end > len(input) {
-		end = len(input)
-	}
-	window := input[start:end]
-	if hinted := detectWorkspaceTypeBySignalsWithGuide(window, guide); hinted != "" {
-		return hinted
-	}
-	return detectWorkspaceTypeBySignalsWithGuide(input, guide)
-}
-
-func shouldScanInbox(intent IntentClassification) bool {
-	if intent.Intent == CareerIntentIngest {
-		return true
-	}
-	// Also scan when the input explicitly mentions inbox/import signals,
-	// even if the classified intent is analyze or another type.
-	for _, signal := range intent.Signals {
-		switch strings.ToLower(signal) {
-		case "inbox", "放进 inbox", "放进来了", "导入", "扫描", "scan", "记录下来", "存下来", "保存":
-			return true
-		}
-	}
-	return false
-}
-
-func shouldGenerateOutput(intent CareerIntent) bool {
-	switch intent {
-	case CareerIntentAnalyze, CareerIntentResumeReview, CareerIntentInterviewBrief, CareerIntentGapPlan, CareerIntentInterviewReview:
-		return true
+func defaultOutputTitle(kind string) string {
+	switch kind {
+	case OutputKindReport:
+		return "完整匹配报告"
+	case OutputKindResumeReview:
+		return "简历优化建议"
+	case OutputKindInterviewBrief:
+		return "面试准备材料"
+	case OutputKindGapPlan:
+		return "能力差距计划"
+	case OutputKindInterviewReview:
+		return "面试复盘"
 	default:
-		return false
+		return "求职助手输出"
 	}
 }
 
-func isMemoryIntent(intent IntentClassification) bool {
-	return intent.Intent == CareerIntentMemory
-}
-
-func outputSpec(intent CareerIntent) (string, string) {
-	switch intent {
-	case CareerIntentAnalyze:
-		return "report", "完整匹配报告"
-	case CareerIntentResumeReview:
-		return "resume-review", "简历优化建议"
-	case CareerIntentInterviewBrief:
-		return "interview-brief", "面试准备材料"
-	case CareerIntentGapPlan:
-		return "gap-plan", "能力差距计划"
-	case CareerIntentInterviewReview:
-		return "interview-review", "面试复盘"
+func confidenceFloat(confidence ConfidenceLevel) float64 {
+	switch confidence {
+	case ConfidenceHigh:
+		return 0.95
+	case ConfidenceMedium:
+		return 0.65
+	case ConfidenceLow:
+		return 0.35
 	default:
-		return "career-note", "求职助手输出"
+		return 0
 	}
-}
-
-func readinessMessage(workspace *Workspace, meta WorkspaceMetadata, intent CareerIntent) string {
-	switch intent {
-	case CareerIntentAnalyze:
-		if meta.CurrentResume == "" && meta.ActiveJD == "" {
-			return fmt.Sprintf("assistant> 现在还缺少简历和 JD。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
-		}
-		if meta.CurrentResume == "" {
-			return fmt.Sprintf("assistant> 现在还缺少简历。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
-		}
-		if meta.ActiveJD == "" {
-			return fmt.Sprintf("assistant> 现在还缺少 JD。请把你准备好的内容放到 %s，然后直接说：我放好了，帮我分析。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
-		}
-	case CareerIntentResumeReview:
-		if meta.CurrentResume == "" {
-			return fmt.Sprintf("assistant> 现在还缺少简历。请把你准备好的内容放到 %s，然后直接说：帮我优化简历。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
-		}
-	case CareerIntentInterviewBrief, CareerIntentGapPlan:
-		if meta.ActiveJD == "" {
-			return fmt.Sprintf("assistant> 现在还缺少 JD。请把你准备好的内容放到 %s，然后直接说：帮我生成面试准备材料。", filepath.ToSlash(filepath.Join(workspace.Root, "inbox")))
-		}
-	}
-	return ""
 }
 
 func normalizeWorkspaceType(value string) string {
@@ -286,4 +420,124 @@ func normalizeWorkspaceType(value string) string {
 
 func displayWorkspaceType(itemType string) string {
 	return workspaceTypeDisplayName(itemType)
+}
+
+func collectSemanticFileCandidates(ctx context.Context, workspace *Workspace, input string) ([]SemanticFileCandidate, []string) {
+	_ = ctx
+	seen := map[string]bool{}
+	var candidates []SemanticFileCandidate
+	var warnings []string
+	addPath := func(path string) {
+		path = strings.TrimSpace(path)
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		candidate, err := buildSemanticFileCandidate(len(candidates)+1, path)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", path, err))
+			return
+		}
+		candidates = append(candidates, candidate)
+	}
+	for _, path := range extractReferencedFiles(input) {
+		addPath(path)
+	}
+	for _, dir := range extractReferencedDirectories(input) {
+		paths, err := listDirectoryCandidateFiles(dir, 30)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", dir, err))
+			continue
+		}
+		for _, path := range paths {
+			addPath(path)
+		}
+	}
+	return candidates, warnings
+}
+
+func listDirectoryCandidateFiles(dir string, limit int) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	type fileEntry struct {
+		path    string
+		modTime time.Time
+	}
+	var files []fileEntry
+	for _, entry := range entries {
+		if entry.IsDir() || strings.HasPrefix(entry.Name(), ".") {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if !isSupportedIngestExt(ext) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		files = append(files, fileEntry{path: filepath.Join(dir, entry.Name()), modTime: info.ModTime()})
+	}
+	sort.SliceStable(files, func(i, j int) bool {
+		return files[i].modTime.After(files[j].modTime)
+	})
+	if limit > 0 && len(files) > limit {
+		files = files[:limit]
+	}
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		paths = append(paths, file.path)
+	}
+	return paths, nil
+}
+
+func buildSemanticFileCandidate(index int, path string) (SemanticFileCandidate, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return SemanticFileCandidate{}, err
+	}
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return SemanticFileCandidate{}, err
+	}
+	if info.IsDir() {
+		return SemanticFileCandidate{}, fmt.Errorf("directory is not a file")
+	}
+	extracted, extractErr := extractDocument(context.Background(), absPath)
+	excerpt := ""
+	extractStatus := "ok"
+	extractError := ""
+	hash := ""
+	if extractErr != nil {
+		extractStatus = "failed"
+		extractError = extractErr.Error()
+	} else {
+		excerpt = limitSemanticExcerpt(extracted.Text)
+		hash = "sha256:" + ContentFingerprint(extracted.Text)
+	}
+	return SemanticFileCandidate{
+		ID:            fmt.Sprintf("file-%d", index),
+		SourcePath:    filepath.ToSlash(path),
+		ReadPath:      filepath.ToSlash(absPath),
+		SourceHash:    hash,
+		Name:          filepath.Base(path),
+		Ext:           strings.ToLower(filepath.Ext(path)),
+		Size:          info.Size(),
+		ModifiedUnix:  info.ModTime().Unix(),
+		ExtractStatus: extractStatus,
+		ExtractError:  extractError,
+		Excerpt:       excerpt,
+	}, nil
+}
+
+func limitSemanticExcerpt(content string) string {
+	content = strings.TrimSpace(content)
+	const maxRunes = 1200
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return content
+	}
+	return string(runes[:maxRunes]) + "\n...[truncated]"
 }

@@ -132,6 +132,14 @@ func Step(index int, actions []protocol.Action, observation string) {
 	write(fmt.Sprintf("## Step %d\n\n%s\n", index, builder.String()))
 }
 
+func ToolObservation(stepIndex int, action protocol.Action, output string) {
+	title := fmt.Sprintf("Step %d tool %s observation", stepIndex, strings.TrimSpace(action.ToolName))
+	if strings.TrimSpace(action.ToolCallID) != "" {
+		title += " " + strings.TrimSpace(action.ToolCallID)
+	}
+	CodeBlock(title, "text", output)
+}
+
 func write(content string) {
 	content = sanitize(content)
 	mu.Lock()

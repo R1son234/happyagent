@@ -15,12 +15,13 @@ import (
 )
 
 const (
-	PromptVersionFileClassification = "career-file-classification-v1"
-	PromptVersionJDSplit            = "career-jd-split-v1"
-	PromptVersionProjectPack        = "career-project-pack-v1"
-	PromptVersionBattlePack         = "career-battle-pack-v1"
-	PromptVersionInterviewReview    = "career-interview-review-v1"
-	PromptVersionReviewLibrary      = "career-review-library-v1"
+	PromptVersionFileClassification        = "career-file-classification-v1"
+	PromptVersionUserInputSemanticDecision = "career-user-input-semantic-decision-v1"
+	PromptVersionJDSplit                   = "career-jd-split-v1"
+	PromptVersionProjectPack               = "career-project-pack-v1"
+	PromptVersionBattlePack                = "career-battle-pack-v1"
+	PromptVersionInterviewReview           = "career-interview-review-v1"
+	PromptVersionReviewLibrary             = "career-review-library-v1"
 )
 
 type StructuredTaskRunner interface {
@@ -205,12 +206,17 @@ func buildFileClassificationPrompt(files []InboxFileForClassification) string {
 		b.WriteString("      <source_hash>" + xmlEscape(file.SourceHash) + "</source_hash>\n")
 		b.WriteString("      <file_name>" + xmlEscape(filepath.Base(file.SourcePath)) + "</file_name>\n")
 		b.WriteString("      <required>true</required>\n")
+		b.WriteString("      <extracted_content><![CDATA[" + cdataEscape(limitFileClassificationContent(file.Content)) + "]]></extracted_content>\n")
 		b.WriteString("    </file>\n")
 	}
 	b.WriteString("  </files>\n")
 	b.WriteString(`  <output_contract>{"files":[{"source_path":"inbox/example.md","source_hash":"sha256:...","material_type":"jd","confidence":"high","reason":"...","source_excerpt":"...","destination":"岗位明细","needs_user_confirmation":false,"questions_for_user":[]}]}</output_contract>` + "\n")
 	b.WriteString("</career_file_classification>")
 	return b.String()
+}
+
+func cdataEscape(value string) string {
+	return strings.ReplaceAll(value, "]]>", "]]]]><![CDATA[>")
 }
 
 func limitFileClassificationContent(content string) string {

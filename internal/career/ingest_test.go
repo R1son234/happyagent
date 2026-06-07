@@ -53,61 +53,19 @@ func TestExtractReferencedFilesDeduplicatesParenthesizedFileInDirectory(t *testi
 	}
 }
 
-func TestDiscoverFilesInReferencedDirectoriesPrefersResumeDocx(t *testing.T) {
-	testDir, err := filepath.Abs("testdata")
-	if err != nil {
-		t.Fatalf("filepath.Abs() error = %v", err)
-	}
-	files := discoverFilesInReferencedDirectories("我在 " + testDir + "目录里存了我的简历,一个docx文件,你帮我分析一下")
-	if len(files) != 1 {
-		t.Fatalf("expected 1 discovered file, got %+v", files)
-	}
-	expected := filepath.Join(testDir, "resume-sample.docx")
-	if files[0] != expected {
-		t.Fatalf("expected %q, got %+v", expected, files)
-	}
-}
-
-func TestDiscoverFilesInReferencedDirectoriesPrefersInterviewExperience(t *testing.T) {
-	testDir, err := os.MkdirTemp(".", "careerexp")
-	if err != nil {
-		t.Fatalf("create fixture dir: %v", err)
-	}
-	defer os.RemoveAll(testDir)
-	resumePath := filepath.Join(testDir, "resume-base-optimized-v2.docx")
-	if err := os.WriteFile(resumePath, []byte("not a real docx"), 0o644); err != nil {
-		t.Fatalf("write resume fixture: %v", err)
-	}
-	experiencePath := filepath.Join(testDir, "示例公司-示例岗位-面经.md")
-	if err := os.WriteFile(experiencePath, []byte("# 示例公司 示例岗位 面经"), 0o644); err != nil {
-		t.Fatalf("write experience fixture: %v", err)
-	}
-
-	input := "我在 " + testDir + "目录里存了一份面经,你帮我记录一下"
-	dirs := extractReferencedDirectories(input)
-	if len(dirs) != 1 {
-		t.Fatalf("expected 1 referenced dir from %q, got %+v", input, dirs)
-	}
-	if dirs[0] != testDir {
-		t.Fatalf("expected referenced dir %q, got %+v", testDir, dirs)
-	}
-	files := discoverFilesInReferencedDirectories(input)
-	if len(files) != 1 {
-		t.Fatalf("expected 1 discovered file, got %+v", files)
-	}
-	if files[0] != experiencePath {
-		t.Fatalf("expected %q, got %+v", experiencePath, files)
-	}
-}
-
 func TestIngestFileExtractsDOCXResume(t *testing.T) {
 	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
 	}
 	result, err := IngestFile(context.Background(), ws, IngestRequest{
-		Path:      filepath.Join("testdata", "resume-sample.docx"),
-		HintType:  WorkspaceTypeResume,
+		Path: filepath.Join("testdata", "resume-sample.docx"),
+		Decision: ReferencedFileDecision{
+			MaterialType:          "resume",
+			Confidence:            ConfidenceHigh,
+			Reason:                "LLM classified as resume",
+			NeedsUserConfirmation: false,
+		},
 		UserInput: "这是我的简历，帮我看看",
 		Now:       time.Now(),
 	})
@@ -132,7 +90,7 @@ func TestIngestFileExtractsDOCXResume(t *testing.T) {
 	}
 }
 
-func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
+func TestIngestFileRequiresSemanticDecision(t *testing.T) {
 	ws, err := OpenWorkspace(filepath.Join(t.TempDir(), "career"), time.Now())
 	if err != nil {
 		t.Fatalf("OpenWorkspace() error = %v", err)
@@ -142,16 +100,13 @@ func TestIngestFileUsesContentSignalsWhenHintMissing(t *testing.T) {
 	if err := os.WriteFile(sourcePath, []byte(content), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	result, err := IngestFile(context.Background(), ws, IngestRequest{
+	_, err = IngestFile(context.Background(), ws, IngestRequest{
 		Path:      sourcePath,
 		UserInput: "帮我记录一下这个岗位",
 		Now:       time.Now(),
 	})
-	if err != nil {
-		t.Fatalf("IngestFile() error = %v", err)
-	}
-	if result.ItemType != WorkspaceTypeJD {
-		t.Fatalf("expected jd type, got %+v", result)
+	if err == nil || !strings.Contains(err.Error(), "requires LLM decision") {
+		t.Fatalf("expected LLM decision error, got %v", err)
 	}
 }
 

@@ -139,18 +139,6 @@ func RunInteractive(deps Dependencies) error {
 			printCareerHelp(deps.Stdout)
 			continue
 		}
-		if strings.HasPrefix(input, "/export") {
-			if err := handleExportCommand(deps, workspace, session.ID, input); err != nil {
-				return err
-			}
-			continue
-		}
-		if strings.HasPrefix(input, "/add") {
-			if err := handleAddCommand(deps.Stdout, lineReader, workspace, input); err != nil {
-				return err
-			}
-			continue
-		}
 		if err := handleNaturalLanguageInput(deps, workspace, session.ID, input); err != nil {
 			return err
 		}

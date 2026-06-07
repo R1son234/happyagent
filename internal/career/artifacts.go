@@ -14,7 +14,7 @@ func RenderWorkspaceArtifact(workspace *Workspace, kind string) (string, string,
 	}
 	switch kind {
 	case "review-library", "interview-library":
-		return "", "", fmt.Errorf("review-library export requires LLM generation; use /library or /export review-library")
+		return "", "", fmt.Errorf("review-library export requires LLM generation; use /library or a natural-language generation request")
 	case "jd-match":
 		return "JD Match Report", renderJDMatch(workspace, index), nil
 	case "resume-review":
